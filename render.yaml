@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: learnquest-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install && npm run build --workspace=backend
+    startCommand: npm run start --workspace=backend
+    envVars:
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://learnquest.vercel.app
+      - key: CACHE_TTL_SEC
+        value: '600'
+      - key: RATE_LIMIT_PER_MIN
+        value: '30'

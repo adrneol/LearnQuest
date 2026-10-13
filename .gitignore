@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env
+.env.local
+!.env.example
+coverage/
+.vite/
+vite.config.ts.timestamp-*

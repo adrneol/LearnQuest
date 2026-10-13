@@ -1,0 +1,15 @@
+export type Tab =
+  | 'dash'
+  | 'learn'
+  | 'player'
+  | 'analytics'
+  | 'modules'
+  | 'goals'
+  | 'checks'
+  | 'focus'
+  | 'efficiency'
+  | 'competition'
+  | 'revise'
+  | 'history'
+  | 'reports'
+  | 'settings';
