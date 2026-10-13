@@ -3,7 +3,7 @@ import { Plus, Pause, Play, Trash2, Trophy } from 'lucide-react';
 import { goalProgress, validateGoal, formatGoalTarget } from '../../domain/index.js';
 import type { GoalMetric } from '../../domain/index.js';
 import { useStore, goalCurrentValue } from '../../app/store.js';
-import { dateKeyInTimezone } from '../../domain/index.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { Card, Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 
@@ -17,7 +17,7 @@ const METRICS: { id: GoalMetric; label: string; unit: string }[] = [
 
 export function Goals() {
   const s = useStore();
-  const today = dateKeyInTimezone(new Date(), s.prefs.timezone);
+  const today = useDayTick(s.prefs.timezone);
   const [metric, setMetric] = useState<GoalMetric>('video-count');
   const [amount, setAmount] = useState('5');
   const [pid, setPid] = useState<string>('');

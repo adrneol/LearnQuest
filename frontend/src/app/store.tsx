@@ -12,7 +12,7 @@ import {
   xpForFocusSession,
   dateKeyInTimezone,
   computeStreak,
-  distinctDayKeys,
+  activeFocusDayKeys,
   formatSecondsHHMMSS,
   summarizeSegments,
   completionFromCoverage,
@@ -328,7 +328,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const snap = playlists[activeId];
     const prog = computePlaylistProgress(snap, progress);
     const focusedSec = sessions.reduce((a, s) => a + s.activeSec, 0);
-    const days = distinctDayKeys(sessions).size;
+    // Distinct active days from interval attribution (cross-midnight aware),
+    // not stored labels — a session split across midnight counts both days.
+    const days = activeFocusDayKeys(sessions, prefs.timezone).size;
     const cpsDone = checkpoints.filter((c) => c.playlistId === activeId && c.completedAt).length;
     const revDone = Object.values(progress).filter((p) => p.playlistId === activeId && (p as any).revisionDoneAt).length;
     const newly = evaluateAchievements({

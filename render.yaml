@@ -12,5 +12,7 @@ services:
         value: https://learnquest.vercel.app
       - key: CACHE_TTL_SEC
         value: '600'
+      - key: CACHE_MAX_ENTRIES
+        value: '50'
       - key: RATE_LIMIT_PER_MIN
         value: '30'

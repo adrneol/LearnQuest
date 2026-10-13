@@ -8,7 +8,7 @@ import { errorHandler, notFound } from './middleware/errors.js';
 import { createMemoryCache } from './cache/memoryCache.js';
 
 export function createApp() {
-  const cache = createMemoryCache(() => env.cacheTtlSec);
+  const cache = createMemoryCache(() => env.cacheTtlSec, { maxEntries: () => env.cacheMaxEntries });
   const app = express();
   app.use(helmet());
   app.use(express.json({ limit: '1mb' }));

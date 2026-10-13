@@ -2,9 +2,10 @@ import { useMemo } from 'react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from 'recharts';
 import {
   computePlaylistProgress, snapshotCompleteness, sumEntries, formatSecondsHHMMSS, formatHuman,
-  buildInsights, dateKeyInTimezone, splitIntervalByDay,
+  buildInsights, dateKeyInTimezone, calendarWindowDates,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { Card, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { CumulativeChart } from '../../components/charts/CumulativeChart.js';
 import { ProgressDonut } from '../../components/charts/ProgressDonut.js';
@@ -14,8 +15,7 @@ export function Analytics() {
   const s = useStore();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const pid = snap?.playlistId;
-  const today = dateKeyInTimezone(new Date(), s.prefs.timezone);
-  const dayMs = 86400000;
+  const today = useDayTick(s.prefs.timezone);
 
   const data = useMemo(() => {
     if (!snap || !pid) return null;
@@ -29,15 +29,10 @@ export function Analytics() {
     const dist = snap.entries.filter((e) => e.durationSec !== null).map((e) => ({ pos: e.position, min: +((e.durationSec! / 60).toFixed(1)) }));
     const verified = Object.values(s.progress).filter((p) => p.playlistId === pid && p.source === 'verified' && p.completedAt).length;
     const manual = Object.values(s.progress).filter((p) => p.playlistId === pid && p.source !== 'verified' && p.completedAt).length;
-    // week windows in tz
-    const keyOf = (t: number) => dateKeyInTimezone(new Date(t), s.prefs.timezone);
-    const wk = (agoDays: number, len: number) => {
-      const out: string[] = [];
-      for (let i = agoDays + len - 1; i >= agoDays; i--) out.push(keyOf(Date.now() - i * dayMs));
-      return new Set(out);
-    };
-    const thisWk = wk(0, 7);
-    const lastWk = wk(7, 7);
+    // week windows: DST-safe calendar arithmetic in tz (current partial day included)
+    const thisWk = new Set(calendarWindowDates(7, s.prefs.timezone));
+    const lastWkKeys = calendarWindowDates(14, s.prefs.timezone).slice(0, 7);
+    const lastWk = new Set(lastWkKeys);
     const inWk = (iso: string, set: Set<string>) => set.has(dateKeyInTimezone(new Date(iso), s.prefs.timezone));
     const segIn = (ms: number, set: Set<string>) => set.has(dateKeyInTimezone(new Date(ms), s.prefs.timezone));
     const twContent = s.segments.filter((x) => x.playlistId === pid && segIn(x.wallStartMs, thisWk)).reduce((a, x) => a + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0);

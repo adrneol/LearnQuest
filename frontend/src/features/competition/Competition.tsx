@@ -6,9 +6,10 @@ import {
   type Tier,
 } from '../../domain/index.js';
 import { initialsOf } from '../../domain/competition/aliases.js';
-import { summarizeSegments, eligibleDailyEfficiencies, dateKeyInTimezone, splitIntervalByDay } from '../../domain/index.js';
+import { summarizeSegments, eligibleDailyEfficiencies, dateKeyInTimezone, attributeFocusByDay } from '../../domain/index.js';
 import type { PlaybackSegment } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { confirmDialog } from '../../components/ui/dialog.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { Card, Btn, Field, inputCls, Empty } from '../../components/ui/ui.js';
@@ -28,9 +29,11 @@ export function Competition() {
   // Challenge-window calendar identities (oldest → newest) in the display
   // timezone. Shared by the user table and the simulator so both sides align;
   // the window slides when the calendar advances and is stable on refresh.
+  // todayTick refreshes the window after midnight / sleep / timezone change.
+  const todayTick = useDayTick(s.prefs.timezone);
   const windowDates = useMemo(
     () => challengeWindowDates(cfg.windowDays, s.prefs.timezone),
-    [cfg.windowDays, s.prefs.timezone],
+    [cfg.windowDays, s.prefs.timezone, todayTick],
   );
   const windowDatesKey = windowDates.join(',');
   const windowName = windowLabel(windowDates);
@@ -55,16 +58,12 @@ export function Competition() {
       }
       let unique = 0;
       for (const arr of byKey.values()) unique += summarizeSegments(arr).uniqueSec;
-      // focus attributed by wall-interval splitting (pauses already excluded at record time)
-      let focus = 0;
-      for (const sess of s.sessions.filter((x) => x.playlistId === pid && x.finishedAt)) {
-        const start = new Date(sess.startedAt).getTime();
-        const end = new Date(sess.finishedAt as string).getTime();
-        const wall = Math.max(1, Math.round((end - start) / 1000));
-        for (const sl of splitIntervalByDay(start, end, tz)) {
-          if (sl.dateKey === dateKey) focus += Math.round((sess.activeSec * sl.seconds) / wall);
-        }
-      }
+      // focus attributed by the authoritative interval splitter (cross-midnight
+      // sessions contribute to both days; pauses excluded at record time)
+      const focus = attributeFocusByDay(
+        s.sessions.filter((x) => x.playlistId === pid),
+        tz,
+      ).get(dateKey) ?? 0;
       return { dateKey, uniqueSec: Math.round(unique), focusSec: focus };
     });
     const dailyEffs = eligibleDailyEfficiencies(table);

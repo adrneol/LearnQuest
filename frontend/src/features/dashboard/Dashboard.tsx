@@ -2,10 +2,11 @@ import { CalendarDays, Flame, Trophy, CheckCircle2, Play } from 'lucide-react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
 import {
   formatSecondsHHMMSS, formatHuman, computePlaylistProgress, computeRangeProgress,
-  snapshotCompleteness, sumEntries, rangeDuration, dateKeyInTimezone, computeStreak,
-  distinctDayKeys, ACHIEVEMENTS,
+  snapshotCompleteness, sumEntries, rangeDuration, computeStreak,
+  activeFocusDayKeys, attributeFocusByDay, calendarWindowDates, ACHIEVEMENTS,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { Card, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { CumulativeChart } from '../../components/charts/CumulativeChart.js';
 import { TICK, GRID_STROKE, TOOLTIP_STYLE } from '../../components/charts/theme.js';
@@ -16,10 +17,13 @@ export function Dashboard() {
   if (!snap) return <Empty title="No active playlist" hint="Add a playlist to see your learning journey." />;
   const prog = computePlaylistProgress(snap, s.progress);
   const comp = snapshotCompleteness(snap);
-  const todayKey = dateKeyInTimezone(new Date(), s.prefs.timezone);
+  const todayKey = useDayTick(s.prefs.timezone);
   const goal = s.goals[todayKey];
-  const todaySec = s.sessions.filter((x) => x.dateKey === todayKey).reduce((a, x) => a + x.activeSec, 0);
-  const streak = computeStreak(distinctDayKeys(s.sessions), todayKey);
+  // Interval-attributed focus: cross-midnight sessions split at tz boundaries
+  // (stored dateKey labels alone would strand the after-midnight share).
+  const focusByDay = attributeFocusByDay(s.sessions, s.prefs.timezone);
+  const todaySec = focusByDay.get(todayKey) ?? 0;
+  const streak = computeStreak(activeFocusDayKeys(s.sessions, s.prefs.timezone), todayKey);
   const nextCp = s.checkpoints
     .filter((c) => c.playlistId === snap.playlistId && !c.completedAt && c.status !== 'needsReview')
     .sort((a, b) => a.end - b.end)[0];
@@ -29,14 +33,12 @@ export function Dashboard() {
     .slice(0, 5);
   const titleOf = (pos: number) => snap.entries.find((e) => e.position === pos)?.title ?? `#${pos}`;
 
-  // weekly trend (last 7 days)
-  const days: { day: string; min: number }[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000);
-    const k = dateKeyInTimezone(d, s.prefs.timezone);
-    const sec = s.sessions.filter((x) => x.dateKey === k).reduce((a, x) => a + x.activeSec, 0);
-    days.push({ day: k.slice(5), min: Math.round(sec / 60) });
-  }
+  // weekly trend (last 7 calendar days in tz, DST-safe)
+  const weekKeys = calendarWindowDates(7, s.prefs.timezone);
+  const days: { day: string; min: number }[] = weekKeys.map((k) => ({
+    day: k.slice(5),
+    min: Math.round((focusByDay.get(k) ?? 0) / 60),
+  }));
   // cumulative content curve — one record per position, resolved durations only
   let acc = 0;
   const cum = snap.entries.map((e) => {

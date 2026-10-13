@@ -8,7 +8,8 @@ export function createApiRouter(cache: MemoryCache) {
   router.get('/health', getHealth);
   router.get('/playlist', getPlaylist);
   router.get('/cache', (_req, res) => {
-    res.json({ ok: true });
+    // Ops visibility only: counts + approx bytes, never playlist contents or keys.
+    res.json({ ok: true, ...cache.stats() });
   });
   return router;
 }

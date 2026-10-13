@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
-import { dateKeyInTimezone, splitIntervalByDay, formatSecondsHHMMSS, formatHuman, summarizeSegments } from '../../domain/index.js';
+import { dateKeyInTimezone, splitIntervalByDay, formatSecondsHHMMSS, formatHuman, summarizeSegments, addDaysToDateKey } from '../../domain/index.js';
 import type { PlaybackSegment } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { Card, Btn, Field, inputCls, Empty } from '../../components/ui/ui.js';
 
@@ -11,7 +12,7 @@ type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'all' | 'custom';
 export function HistoryView() {
   const s = useStore();
   const tz = s.prefs.timezone === 'local' ? Intl.DateTimeFormat().resolvedOptions().timeZone : s.prefs.timezone;
-  const today = dateKeyInTimezone(new Date(), s.prefs.timezone);
+  const today = useDayTick(s.prefs.timezone);
   const [preset, setPreset] = useState<Preset>('week');
   const [customA, setCustomA] = useState(today);
   const [customB, setCustomB] = useState(today);
@@ -20,14 +21,12 @@ export function HistoryView() {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const range = useMemo(() => {
-    const d = (k: string) => new Date(k + 'T00:00:00Z').getTime();
-    const fmt = (t: number) => new Date(t).toISOString().slice(0, 10);
     if (preset === 'today') return { from: today, to: today };
     if (preset === 'yesterday') {
-      const y = fmt(d(today) - 86400000);
+      const y = addDaysToDateKey(today, -1);
       return { from: y, to: y };
     }
-    if (preset === 'week') return { from: fmt(d(today) - 6 * 86400000), to: today };
+    if (preset === 'week') return { from: addDaysToDateKey(today, -6), to: today };
     if (preset === 'month') return { from: today.slice(0, 7) + '-01', to: today };
     if (preset === 'custom') return { from: customA <= customB ? customA : customB, to: customA <= customB ? customB : customA };
     return { from: '0000-00-00', to: '9999-99-99' };

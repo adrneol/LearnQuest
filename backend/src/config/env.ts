@@ -11,6 +11,9 @@ export const env = {
   get cacheTtlSec(): number {
     return Number(process.env.CACHE_TTL_SEC ?? 600);
   },
+  get cacheMaxEntries(): number {
+    return Number(process.env.CACHE_MAX_ENTRIES ?? 50);
+  },
   get rateLimitPerMin(): number {
     return Number(process.env.RATE_LIMIT_PER_MIN ?? 30);
   },

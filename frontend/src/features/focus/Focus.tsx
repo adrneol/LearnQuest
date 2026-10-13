@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Play, CheckCircle2, Trash2, Timer as TimerIcon } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { formatHuman, computePlaylistProgress, sessionsNeeded, dateKeyInTimezone } from '../../domain/index.js';
+import { formatHuman, computePlaylistProgress, sessionsNeeded, dateKeyInTimezone, calendarWindowDates, attributeFocusByDay } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { notify } from '../../services/notifications/notify.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
@@ -10,14 +11,14 @@ import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
 export function Focus() {
   const s = useStore();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
-  const todayKey = dateKeyInTimezone(new Date(), s.prefs.timezone);
+  const todayKey = useDayTick(s.prefs.timezone);
   const [targetMin, setTargetMin] = useState(30);
   const [minViable, setMinViable] = useState(s.prefs.minViableMin);
   const [note, setNote] = useState('');
   // timer state (timestamp-based, survives throttling)
   const [runningSince, setRunningSince] = useState<number | null>(null);
   const [accumSec, setAccumSec] = useState(0);
-  const [elapsedBase] = useState(Date.now());
+  const [elapsedBase, setElapsedBase] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
   const [manualMin, setManualMin] = useState('');
   useEffect(() => {
@@ -28,16 +29,27 @@ export function Focus() {
   void tick;
   const activeSec = accumSec + (runningSince ? Math.floor((Date.now() - runningSince) / 1000) : 0);
 
-  const start = () => setRunningSince(Date.now());
+  const start = () => {
+    if (runningSince !== null) return; // idempotent: repeated Start never double-counts
+    if (accumSec === 0) setElapsedBase(Date.now());
+    setRunningSince(Date.now());
+  };
   const pause = () => {
     if (runningSince) {
       setAccumSec((a) => a + Math.floor((Date.now() - runningSince) / 1000));
       setRunningSince(null);
     }
   };
+  const resume = () => {
+    if (runningSince === null && (accumSec > 0 || elapsedBase !== null)) setRunningSince(Date.now());
+  };
   const finish = () => {
-    pause();
-    const finalSec = activeSec;
+    if (runningSince) {
+      const extra = Math.floor((Date.now() - runningSince) / 1000);
+      setAccumSec((a) => a + extra);
+    }
+    setRunningSince(null);
+    const finalSec = runningSince ? activeSec : accumSec;
     if (finalSec < 10) {
       notify('Session under 10s — not recorded. Study a little more.');
       setAccumSec(0);
@@ -48,10 +60,11 @@ export function Focus() {
       startedAt: new Date(Date.now() - finalSec * 1000).toISOString(),
       finishedAt: new Date().toISOString(),
       activeSec: finalSec,
-      elapsedSec: Math.floor((Date.now() - elapsedBase) / 1000),
+      elapsedSec: elapsedBase ? Math.floor((Date.now() - elapsedBase) / 1000) : finalSec,
       note: note || undefined,
     });
     setAccumSec(0);
+    setElapsedBase(null);
     setNote('');
     notify(`Focus session recorded.`);
   };
@@ -60,9 +73,10 @@ export function Focus() {
     s.setGoal({ dateKey: todayKey, targetFocusSec: targetMin * 60, minViableSec: minViable * 60 });
   };
 
-  const week = last7(s.sessions, s.prefs.timezone);
+  const focusByDay = attributeFocusByDay(s.sessions, s.prefs.timezone);
+  const week = last7(focusByDay, s.prefs.timezone);
   const planned = (s.goals[todayKey]?.targetFocusSec ?? 0) / 60;
-  const actual = s.sessions.filter((x) => x.dateKey === todayKey).reduce((a, x) => a + x.activeSec, 0) / 60;
+  const actual = (focusByDay.get(todayKey) ?? 0) / 60;
 
   return (
     <div className="space-y-4">
@@ -71,10 +85,9 @@ export function Focus() {
         <p className="mt-1 font-mono text-5xl font-bold tabular-nums">{fmtClock(activeSec)}</p>
         <p className="text-xs text-slate-400">Elapsed includes pauses; only active time is recorded. Finishing never auto-marks videos complete.</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          {runningSince === null ? <Btn variant="primary" onClick={start}><Play size={14} /> Start</Btn> : <Btn onClick={pause}>Pause</Btn>}
-          {runningSince !== null && <Btn onClick={() => { pause(); }} >Resume state saved</Btn>}
+          {runningSince === null ? <Btn variant="primary" onClick={accumSec > 0 ? resume : start}><Play size={14} /> {accumSec > 0 ? 'Resume' : 'Start'}</Btn> : <Btn onClick={pause}>Pause</Btn>}
           <Btn variant="primary" onClick={finish} disabled={activeSec < 1}><CheckCircle2 size={14} /> Finish & record</Btn>
-          <Btn onClick={() => { setRunningSince(null); setAccumSec(0); }}>Reset</Btn>
+          <Btn onClick={() => { setRunningSince(null); setAccumSec(0); setElapsedBase(null); }}>Reset</Btn>
         </div>
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <Field label="Session note"><input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What did you work on?" /></Field>
@@ -173,28 +186,36 @@ function fmtClock(sec: number) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-function last7(sessions: { dateKey: string; activeSec: number }[], tz: string) {
-  const out: { day: string; sec: number }[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const k = dateKeyInTimezone(new Date(Date.now() - i * 86400000), tz);
-    out.push({ day: k.slice(5), sec: sessions.filter((x) => x.dateKey === k).reduce((a, x) => a + x.activeSec, 0) });
+function last7(focusByDay: Map<string, number>, tz: string) {
+  const out: { day: string; sec: number; key: string }[] = [];
+  for (const k of calendarWindowDates(7, tz)) {
+    out.push({ day: k.slice(5), sec: focusByDay.get(k) ?? 0, key: k });
   }
   return out;
 }
 
-function WeeklyReview({ days }: { days: { day: string; sec: number }[] }) {
+function WeeklyReview({ days }: { days: { day: string; sec: number; key: string }[] }) {
   const s = useStore();
   const total = days.reduce((a, d) => a + d.sec, 0);
-  const weekStart = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
-  const vids = Object.values(s.progress).filter((p) => (p.completedAt ?? '') >= weekStart).length;
-  const cps = s.checkpoints.filter((c) => (c.completedAt ?? '') >= weekStart).length;
+  // Calendar-correct week start in the display timezone (not a UTC slice).
+  const weekKeys = new Set(days.map((d) => d.key));
+  const inWeek = (iso: string | null | undefined) => {
+    if (!iso) return false;
+    try {
+      return weekKeys.has(dateKeyInTimezone(new Date(iso), s.prefs.timezone));
+    } catch {
+      return false;
+    }
+  };
+  const vids = Object.values(s.progress).filter((p) => inWeek(p.completedAt)).length;
+  const cps = s.checkpoints.filter((c) => inWeek(c.completedAt)).length;
   if (total === 0 && vids === 0) return <p className="text-xs text-slate-500">Insufficient data — finish a video or a focus session to generate a review.</p>;
   return (
     <div className="text-sm">
       <p>{formatHuman(total)} focused · {vids} videos completed · {cps} checkpoints.</p>
       <div className="mt-2 flex gap-1" role="img" aria-label="Study calendar, last 7 days">
         {days.map((d) => (
-          <div key={d.day} title={`${d.day}: ${formatHuman(d.sec)}`} className={`h-8 flex-1 rounded ${d.sec === 0 ? 'bg-white/5' : d.sec < 900 ? 'bg-emerald-900' : d.sec < 3600 ? 'bg-emerald-600' : 'bg-emerald-400'}`} />
+          <div key={d.key} title={`${d.key}: ${formatHuman(d.sec)}`} className={`h-8 flex-1 rounded ${d.sec === 0 ? 'bg-white/5' : d.sec < 900 ? 'bg-emerald-900' : d.sec < 3600 ? 'bg-emerald-600' : 'bg-emerald-400'}`} />
         ))}
       </div>
       <p className="mt-1 text-xs text-slate-400">Next week: aim for one more active day than this week. Missed days? Welcome back — progress is preserved.</p>

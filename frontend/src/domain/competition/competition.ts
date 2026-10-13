@@ -91,16 +91,12 @@ export function hashStringToUint32(s: string): number {
 
 /**
  * Challenge-window calendar identities, oldest → newest, in the display
- * timezone. Same construction the Arena uses for the user's daily table, so
- * simulated dates and user dates align by construction. Stable within a
- * calendar day; sliding forward when the rolling window advances.
+ * timezone. DST-safe calendar arithmetic (see `calendarWindowDates`): the
+ * current partial day is included. Stable within a calendar day; sliding
+ * forward when the rolling window advances.
  */
 export function challengeWindowDates(windowDays: number, timeZone: string, nowMs = Date.now()): string[] {
-  const out: string[] = [];
-  for (let i = windowDays - 1; i >= 0; i--) {
-    out.push(dateKeyInTimezone(new Date(nowMs - i * 86400000), timeZone));
-  }
-  return out;
+  return calendarWindowDates(windowDays, timeZone, nowMs);
 }
 
 /** Human window label, e.g. "Oct 5 – Oct 18, 2026". Falls back to ISO keys. */
@@ -119,7 +115,7 @@ export function windowLabel(dates: string[]): string {
 }
 
 import { generateAlias, initialsOf } from './aliases.js';
-import { dateKeyInTimezone } from '../time/time.js';
+import { calendarWindowDates } from '../time/time.js';
 
 /**
  * Tier EFFICIENCY BANDS (simulation-design assumptions, not population

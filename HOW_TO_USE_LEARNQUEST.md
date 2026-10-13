@@ -191,15 +191,18 @@ Step-by-step (example with N=139, videos 1–84):
 - `playbackUtilization% = activePlaybackWallSeconds ÷ eligibleFocusedStudySeconds × 100` (capped at 100; impossible inputs rejected, not clipped silently)
 - **Overall = aggregate totals ratio, never the mean of daily percentages** (a 5-minute day must not weigh like a 3-hour day).
 - Zero focused time → **`n/a`**, never `NaN`, infinity, or a fake score. >100% is normal above 1× speed and is *not* “better”; heavy practice days score lower and that is fine. Real measurements are never clamped to 110% (that ceiling bounds only fictional Ultra rivals).
+- Daily focus comes from the same interval attribution as every other screen (cross-midnight sessions split; timezone changes recompute from UTC), so daily figures always agree with History.
 - The **Evidence** filter separates verified playback from self-reported history; the overall figure always uses the aggregate ratio over the current selection. Worked examples live in the Efficiency screen's “What exactly am I looking at?” box.
 - Supporting evidence (exercises, code reproduced, revisions, confidence) is shown separately in Analytics — never folded into one mystery “mastery %”.
 
 ## L. Timezones and daily analysis
 
 - All events are stored as **UTC instants**. **Settings → Display timezone** (custom searchable picker: city, region, or alias like `kolkata`/`ist`, with live `UTC±HH:MM` offsets) only changes aggregation and display.
-- Cross-midnight sessions are **split at local-day boundaries** — each day gets its own elapsed share. Verified example: `2026-10-12T18:00Z → 19:00Z` attributes 30 min to Oct 12 and 30 min to Oct 13 in `Asia/Kolkata`, one day in `America/New_York`. Same UTC total under every timezone.
+- Cross-midnight sessions are **split at local-day boundaries** — each day gets its own elapsed share (one shared interval attribution used by History, Dashboard, Efficiency, Focus, streaks, and Arena). Verified example: `2026-10-12T18:00Z → 19:00Z` attributes 30 min to Oct 12 and 30 min to Oct 13 in `Asia/Kolkata`, one day in `America/New_York`. Same UTC total under every timezone. Fall-back 25-hour days (e.g. New York Nov 1) total 90,000s; spring-forward 23-hour days 82,800s.
+- Calendar windows (Arena, weekly reviews, Efficiency trend) use **calendar-day arithmetic in the selected timezone**, never fixed 24h chains — DST transitions keep exactly one entry per date. The current partial day is included.
+- Open tabs refresh after midnight, device sleep, tab-visibility return, and timezone changes (lightweight day-tick + focus/visibility listeners); stored UTC history is never rewritten.
 - History offers today/yesterday/week/month/all/custom ranges plus per-playlist filtering; changing timezone recomputes instantly without refetching.
-- Streaks count distinct active days in the selected timezone; missed days cost nothing but the streak count.
+- Streaks count distinct active days in the selected timezone (split sessions count both days); missed days cost nothing but the streak count.
 
 ## M. Arena and simulated competitors
 
@@ -214,7 +217,7 @@ Step-by-step (example with N=139, videos 1–84):
 - **Eligible days:** windows ≥ 3 days need ≥ 3 eligible active days; shorter windows need one per day. Below that you see **Provisional — complete N more eligible study days**, your recorded dailies, and a next action — never a bottom rank, never a fabricated score.
 - **Rank X of N** (rank 1 is best; ties share a rank: 1, 2, 2, 4). **“Ranked above Y%”** = share of the cohort ranked *strictly below you* (rank 1 ≈ 100%, last place = 0%). The gap line (e.g. `2.4 percentage points behind NeonRonin`) is the true difference to the rival directly above you — never a duration mislabelled as a gap.
 - **Leaderboard:** average daily efficiency front and center with eligible-day counts, exact window dates (e.g. `Oct 5 – Oct 18, 2026`) plus period labels (`· last 14 days`), 25/50/100 rows per page (default 50), Top/​Near-me views, alias search, **My rank** jump, prev/next with page counts. Secondary totals carry explicit period/unit labels and are context only.
-- **Seed:** the number that starts the deterministic generator. Same seed + settings + window dates = same rivals and ranks across reloads (each rival day is seeded by its calendar date, so refreshing today reproduces today). **Generate new fictional cohort** picks a fresh seed; bigger cohorts append rivals; changing the window re-simulates the period, and when the rolling window advances to new calendar dates the simulation slides with it (ranks may move without new study — the window itself changed). **Reset sim** clears only simulated snapshots. None of this touches real records, and the seed measures nothing about you.
+- **Seed:** the number that starts the deterministic generator. Same seed + settings + window dates = same rivals and ranks across reloads (each rival day is seeded by its calendar date, so refreshing today reproduces today). The window shows exact dates (e.g. `Oct 5 – Oct 18, 2026`) and refreshes at local midnight and on tab focus; when the rolling window advances to new calendar dates the simulation slides with it (ranks may move without new study — the window itself changed). **Generate new fictional cohort** picks a fresh seed; bigger cohorts append rivals; changing the window re-simulates the period. **Reset sim** clears only simulated snapshots. None of this touches real records, and the seed measures nothing about you.
 - **Why Arena and Efficiency differ:** the Efficiency page shows the **aggregate ratio** (total unique ÷ total focused); Arena shows the **mean of daily percentages** (equal weight per day). Same records, different questions — both correct, and the screens say so.
 
 ## N. Testing completion without corrupting real progress
@@ -232,7 +235,9 @@ Step-by-step (example with N=139, videos 1–84):
 - **Reports → Exports:** **Backup JSON** (everything, versioned — v2 restores v1), **Videos CSV**, **Sessions CSV**, **Checkpoints CSV**. Restore/import validates before touching stored data and reports row-level problems.
 - **Playlists card:** compact searchable table (name, N, done count, refresh date, status dot; archived hidden unless toggled) with a per-row **⋯ menu**: rename (local label), archive/unarchive, remove (confirmed, per-playlist only). Refresh stays next to Add. The list scrolls internally past a few entries instead of stretching the page.
 - **Danger zone:** *Clear cached metadata (keep progress)* vs *Clear ALL data* (two-step confirm). Export a backup first.
-- Storage is **this browser only** (`learnquest-db`, IndexedDB). No sync exists — copy the JSON backup to your own storage.
+- Storage is **this browser only** (`learnquest-db`, IndexedDB v2, single key-value store). Measured sizes: a 1000-video playlist ≈ 124 KB, a year of daily focus sessions ≈ 62 KB, 1000 playback segments ≈ 216 KB — personal histories stay well under a few MB. No account, no sync, no backend database: the backend keeps only a bounded ephemeral metadata cache (TTL + 50-playlist LRU), which is spin-down safe. Copy the JSON backup to your own storage.
+- **Large playlists (verified to N=1000 by test):** sums, search/filter, numeric sort (unresolved last), 25-per-page tables, full-range charts with first+last tick labels, modules/checkpoints, and CSV export all operate on the full collection. The backend accepts up to 1000 entries per playlist.
+- **Known limitations (see `TIME_AND_ANALYTICS_AUDIT.md` / `STORAGE_AND_SCALE_AUDIT.md`):** overnight open-tab refresh and system-clock changes are implemented but lack live browser tests here; storage-quota exhaustion and 2000+-entry stress are documented but not executed; multi-tab concurrent editing is last-writer-wins.
 
 ## P. Troubleshooting
 

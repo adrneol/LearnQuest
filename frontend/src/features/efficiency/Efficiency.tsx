@@ -2,10 +2,12 @@ import { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import {
   contentEfficiency, playbackUtilization, compareWindows,
-  dateKeyInTimezone, formatHuman, summarizeSegments,
+  dateKeyInTimezone, formatHuman, summarizeSegments, calendarWindowDates,
+  attributeFocusByDay,
 } from '../../domain/index.js';
 import type { PlaybackSegment } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { Card, Empty } from '../../components/ui/ui.js';
 
@@ -15,6 +17,7 @@ export function Efficiency() {
   const [scope, setScope] = useState<string>('all');
   const [src, setSrc] = useState<'all' | 'verified' | 'manual'>('all');
   const tz = s.prefs.timezone;
+  const todayTick = useDayTick(tz);
 
   const model = useMemo(() => {
     // One consistent definition everywhere on this screen: unique coverage is
@@ -42,10 +45,13 @@ export function Efficiency() {
     const focus = s.sessions.filter((x) => scope === 'all' || x.playlistId === scope).reduce((a, x) => a + x.activeSec, 0);
     const eff = contentEfficiency({ uniqueContentSec: Math.round(unique), focusedSec: focus });
     const util = playbackUtilization(Math.round(active), focus);
-    // daily series (last 14 days) in tz — per-day unions for the trend view
+    // daily series (last 14 calendar days) in tz — per-day unions for the trend view.
+    // Focus uses interval attribution (cross-midnight split), so timezone
+    // changes recompute history from UTC instead of trusting stored labels.
+    const scopedSessions = s.sessions.filter((x) => scope === 'all' || x.playlistId === scope);
+    const focusByDay = attributeFocusByDay(scopedSessions, tz);
     const days: { day: string; eff: number | null; uniqueMin: number; focusMin: number }[] = [];
-    for (let i = 13; i >= 0; i--) {
-      const dk = dateKeyInTimezone(new Date(Date.now() - i * 86400000), tz);
+    for (const dk of calendarWindowDates(14, tz)) {
       const dSegs = segs.filter((x) => dateKeyInTimezone(new Date(x.wallStartMs), tz) === dk);
       const uBy = new Map<string, PlaybackSegment[]>();
       for (const x of dSegs) {
@@ -56,9 +62,7 @@ export function Efficiency() {
       }
       let du = 0;
       for (const arr of uBy.values()) du += summarizeSegments(arr).uniqueSec;
-      const df = s.sessions.filter((x) => (scope === 'all' || x.playlistId === scope) && x.dateKey === dk).reduce((a, x) => a + x.activeSec, 0);
-      // NOTE: dateKey stored at record time uses the same tz setting; changing tz later
-      // re-derives segment days from UTC but legacy focus dateKeys stay as recorded.
+      const df = focusByDay.get(dk) ?? 0;
       const de = contentEfficiency({ uniqueContentSec: Math.round(du), focusedSec: df });
       days.push({ day: dk.slice(5), eff: de !== null ? +de.toFixed(1) : null, uniqueMin: Math.round(du / 60), focusMin: Math.round(df / 60) });
     }
@@ -82,7 +86,7 @@ export function Efficiency() {
       return { id, title: s.playlists[id].title.slice(0, 28), eff: contentEfficiency({ uniqueContentSec: Math.round(u), focusedSec: f }) };
     });
     return { unique: Math.round(unique), content: Math.round(content), active: Math.round(active), focus, eff, util, days, overall, trend, perPl };
-  }, [s.segments, s.sessions, s.playlists, scope, src, tz]);
+  }, [s.segments, s.sessions, s.playlists, scope, src, tz, todayTick]);
 
   if (!snap && scope !== 'all') return <Empty title="No active playlist" hint="Efficiency needs recorded playback and focus sessions." />;
 
@@ -124,7 +128,7 @@ export function Efficiency() {
         <p className="mt-2 text-xs text-slate-400">
           contentEfficiency = unique content ÷ focused study × 100. Over 100% is normal above 1× speed; lower is not worse — notes, coding and practice take real time.
           Overall is the aggregate ratio over the same selection, never the average of daily percentages. Zero-time days show n/a, never a fabricated score.
-          Daily playback days derive from UTC timestamps; legacy focus day-labels stay as recorded when the timezone changes.
+          Daily playback and focus days both derive from UTC timestamps split at the selected timezone's day boundaries (cross-midnight sessions count on both days); changing the timezone recomputes every day from the same stored instants.
         </p>
         <details className="mt-2 rounded-xl bg-white/5 p-3 text-xs text-slate-300">
           <summary className="cursor-pointer font-semibold text-slate-200">What exactly am I looking at?</summary>
