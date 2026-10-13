@@ -52,13 +52,28 @@ function toClientSnapshot(s: ServerSnapshot): PlaylistSnapshot {
   };
 }
 
-const BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? '';
+/**
+ * Backend origin prefix. Production contract (see .env.example): the Render
+ * service origin WITHOUT trailing slash and WITHOUT an `/api` suffix, e.g.
+ * `https://YOUR-RENDER-SERVICE.onrender.com`. Trailing slashes are stripped
+ * here so a `...onrender.com/` value cannot produce `//api/...` (404).
+ * Empty = same-origin `/api` (local dev proxy handles it).
+ */
+export function getApiBase(): string {
+  const raw = import.meta.env?.VITE_API_BASE_URL ?? '';
+  return String(raw).replace(/\/+$/, '');
+}
+
+/** Join one `/api/...` path onto the configured base. Exported for tests. */
+export function apiUrl(path: string): string {
+  return `${getApiBase()}/api${path.startsWith('/') ? path : `/${path}`}`;
+}
 
 export async function fetchPlaylistFromServer(
   input: string,
   opts?: { refresh?: boolean },
 ): Promise<{ snapshot: PlaylistSnapshot; cached: boolean }> {
-  const url = `${BASE}/api/playlist?url=${encodeURIComponent(input)}${opts?.refresh ? '&refresh=1' : ''}`;
+  const url = `${apiUrl('/playlist')}?url=${encodeURIComponent(input)}${opts?.refresh ? '&refresh=1' : ''}`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json' },
   });
@@ -69,7 +84,7 @@ export async function fetchPlaylistFromServer(
 
 export async function checkApiHealth(): Promise<{ ok: boolean; hasKey: boolean }> {
   try {
-    const res = await fetch(`${BASE}/api/health`);
+    const res = await fetch(apiUrl('/health'));
     if (!res.ok) return { ok: false, hasKey: false };
     return (await res.json()) as { ok: boolean; hasKey: boolean };
   } catch {

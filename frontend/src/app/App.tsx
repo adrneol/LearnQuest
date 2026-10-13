@@ -87,6 +87,26 @@ export default function App() {
     checkApiHealth().then(setHealth);
   }, []);
 
+  // While the backend is unreachable, retry the cheap health check whenever
+  // the tab regains focus/visibility (cold-start wake, outage recovery) so
+  // the status pill recovers without a page reload. Silent while healthy:
+  // zero extra traffic once connected.
+  useEffect(() => {
+    if (health.ok) return;
+    const recheck = () => {
+      checkApiHealth().then(setHealth);
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'visible') recheck();
+    };
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [health.ok]);
+
   // hash routing: back/forward buttons work
   useEffect(() => {
     const onHash = () => setTab(tabFromHash());

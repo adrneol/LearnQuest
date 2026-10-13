@@ -57,6 +57,8 @@ Open **http://localhost:5173**. A successful launch shows the sidebar
 
 Never put the key in a `VITE_` variable, the frontend, chat, or Git.
 `backend/.env` is git-ignored; only `.env.example` files are committed.
+If a key is ever exposed in a screenshot or message, revoke/rotate it in
+Google Cloud immediately and update the replacement in Render.
 
 ### Import a playlist
 1. Copy a YouTube playlist URL (contains `?list=PL…`) or just the `PL…` ID.
@@ -285,7 +287,7 @@ network, no real leaderboard.
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |
 | API key missing/invalid/restricted | Re-check key + restrictions in Google Cloud; restart backend; Recheck in Settings |
 | Quota exhausted | Wait for the daily reset; use JSON import meanwhile (~5 units per 100-video import, ~21 per 500) |
-| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle); check `PORT`/`CORS_ORIGIN` and both dev servers |
+| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production: `VITE_API_BASE_URL` must be the exact Render origin on the Vercel **Production** env (no trailing slash, no `/api` suffix) followed by a redeploy; `CORS_ORIGIN` on Render must exactly match the Vercel origin |
 | Refresh fails | Retry Refresh active — failures never poison the cache or delete progress |
 | Unresolved videos | Expected for deleted/private/region-blocked items; totals stay incomplete-labeled |
 | Focus session lost to reload/sleep | By design only finished sessions persist; record a History self-reported entry for the real study |

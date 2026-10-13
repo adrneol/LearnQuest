@@ -102,6 +102,13 @@ Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`)
 |---|---|---|
 | `VITE_API_BASE_URL` | API origin prefix; empty = same-origin `/api` (dev proxy handles it) | _(empty)_ |
 
+Production on Vercel: set `VITE_API_BASE_URL` to the Render backend origin
+with **no trailing slash and no `/api` suffix**
+(e.g. `https://YOUR-RENDER-SERVICE.onrender.com` — your real hostname from
+the Render dashboard), on the **Production** environment, then **redeploy**
+(Vite embeds it at build time). The app also tolerates a trailing slash,
+and the status pill re-checks on tab focus after an outage or cold start.
+
 Order of operations: copy `backend/.env.example` → `backend/.env`, paste the
 key, restart the backend, then confirm **Settings → Backend connection**
 reads "● Connected — API key configured" (or `GET /api/health` shows
@@ -169,7 +176,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Player won't embed (101/150) | Use Open on YouTube; log a self-reported History entry |
 | Totals look wrong | Confirm range endpoints and unresolved flags; content duration ≠ study time |
 | Port conflict (`EADDRINUSE`) | Stop the other process or change `PORT` in `backend/.env` |
-| Frontend can't reach backend | Check `VITE_API_BASE_URL`, `CORS_ORIGIN`, and that both dev servers run |
+| Frontend can't reach backend | Check `VITE_API_BASE_URL` (Production env, exact Render origin, no trailing slash or `/api` suffix, then redeploy), `CORS_ORIGIN` (exact Vercel origin), and that both dev servers run |
 
 ## Documentation
 
