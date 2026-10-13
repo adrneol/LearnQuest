@@ -127,6 +127,66 @@ In the Render Dashboard for service `learnquest-api`:
 6. After deploy, open `<service-url>/api/health` and expect
    `{"ok":true,"hasKey":...}` with no `MODULE_NOT_FOUND` in logs.
 
-## Verdict
+## Verdict (V8.1)
 
 `PARTIALLY FIXED — DASHBOARD ACTION REQUIRED`
+
+---
+
+## V8.2 follow-up: failure persists — push state and lifecycle re-verified
+
+### Push proof (rules out "fix never deployed" as a repo-side gap)
+
+- Branch `main` is the only branch; remote HEAD = `origin/main` =
+  `0850079` = local HEAD (verified via `git fetch` + `git rev-parse`).
+  The V8.1 fix **is committed and pushed**.
+- `render.yaml`, backend scripts (`build: tsc -p tsconfig.json`,
+  `start: node dist/server.js`), tsconfig (`outDir: dist`,
+  `rootDir: src`), and `backend/package-lock.json` (lockfileVersion 3 —
+  compatible with any Render Node/npm) confirmed present at `origin/main`.
+- `backend/dist/` confirmed untracked at HEAD: the file can only appear via
+  the build step, so its live absence proves the build step did not run (or
+  not in `backend/`) on the failing deploy — not a wrong path in the repo.
+
+### Lifecycle re-verification (this pass, from `backend/`, pushed-code state)
+
+| Check | Result |
+|---|---|
+| Clean `npm ci` (dist removed first) | success |
+| `npm run build` | success; `dist/server.js` exists (13 emitted files, flat — no `dist/src/`) |
+| Exact configured command `npm run start` (PORT=3004) | boots; `/api/health {ok:true,hasKey:true}` |
+| `npm test` / `npm run typecheck` | 18/18 pass; clean |
+
+No repo changes were required or made for the lifecycle itself: build
+output, start script, and execution directory already agree exactly.
+
+### Narrowed cause and what I still cannot see
+
+With the pushed commit proven correct, the remaining possible causes are
+all dashboard-side: manual Build/Start commands overriding the Blueprint,
+Blueprint auto-sync off (or wrong Blueprint linked), a pinned/stale deploy,
+or a poisoned build cache. I have no Render dashboard/API access from this
+environment, so I cannot read the effective settings or the Build Logs —
+**this limitation is explicit, not assumed.**
+
+### To resolve, provide ONE of the following
+
+1. The service's **Build Logs** of the failing deploy (commit hash shown at
+   top, effective root directory, exact build command echoed, `npm ci` and
+   `tsc` output, and whether `dist/server.js` was listed); or
+2. A screenshot (or copy) of Dashboard → service → **Settings** showing
+   Root Directory, Build Command, Start Command, Branch, and whether
+   Blueprint auto-sync is on; or
+3. Confirmation after performing §7 steps 1–6 above (especially **clearing
+   the build cache** and redeploying `0850079`), plus the new deploy's
+   health-check result.
+
+### What NOT to do
+
+Do not commit `dist/`, add placeholder files, or rewire the start script:
+the configuration is already correct, and workarounds would hide a
+dashboard-sync problem while creating a second deployment truth.
+
+## Verdict (V8.2)
+
+`DASHBOARD CONFIGURATION CHANGE REQUIRED`
