@@ -3,7 +3,7 @@ services:
     name: learnquest-api
     runtime: node
     rootDir: backend
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm run start
     envVars:
       - key: YOUTUBE_API_KEY

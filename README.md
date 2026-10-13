@@ -123,7 +123,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Production deployment
 
 - **Backend → Render** via `render.yaml`: service root `backend/`,
-  build `npm install && npm run build`, start `npm run start`. Set
+  build `npm ci && npm run build`, start `npm run start`. Set
   `YOUTUBE_API_KEY` (secret, not synced), `CORS_ORIGIN` (your frontend
   origin), and the cache/rate-limit vars. Free-tier footprint is small
   (measured ~17 MB heap / ~77 MB RSS with four cached playlists); the
