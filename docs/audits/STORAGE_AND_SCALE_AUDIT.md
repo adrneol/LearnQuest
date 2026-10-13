@@ -111,7 +111,7 @@ cited headless-Chromium checks with tooling not present in this repo).
 6. RAM at 500/1000 entries? +0.3 MB heap total in-test; RSS flat.
 7. Concurrent/refresh behavior? Dedup tested; cache-hit refresh avoids refetch.
 8. Frontend cost at 500 entries? Interpolated from N=1000 figures: <5ms per op.
-9. Daily/time correctness? See `TIME_AND_ANALYTICS_AUDIT.md` (2 fixed, rest pass/partial).
+9. Daily/time correctness? See [TIME_AND_ANALYTICS_AUDIT.md](./TIME_AND_ANALYTICS_AUDIT.md) (2 fixed, rest pass/partial).
 10. Charts at large N? Verified to 1000 by test.
 11. Separate database required? **No.** No accounts, no cross-device sync, no
     server-side user history, no durable server need; cache is ephemeral by

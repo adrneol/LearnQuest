@@ -14,10 +14,11 @@ import { TICK, GRID_STROKE, TOOLTIP_STYLE } from '../../components/charts/theme.
 export function Dashboard() {
   const s = useStore();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
+  // Hook first: must run on every render (before the no-playlist return).
+  const todayKey = useDayTick(s.prefs.timezone);
   if (!snap) return <Empty title="No active playlist" hint="Add a playlist to see your learning journey." />;
   const prog = computePlaylistProgress(snap, s.progress);
   const comp = snapshotCompleteness(snap);
-  const todayKey = useDayTick(s.prefs.timezone);
   const goal = s.goals[todayKey];
   // Interval-attributed focus: cross-midnight sessions split at tz boundaries
   // (stored dateKey labels alone would strand the after-midnight share).

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { createPlaylistController } from '../controllers/playlistController.js';
+import { getApiStats } from '../diagnostics/apiStats.js';
 import type { MemoryCache } from '../cache/memoryCache.js';
 
 export function createApiRouter(cache: MemoryCache) {
@@ -8,8 +9,9 @@ export function createApiRouter(cache: MemoryCache) {
   router.get('/health', getHealth);
   router.get('/playlist', getPlaylist);
   router.get('/cache', (_req, res) => {
-    // Ops visibility only: counts + approx bytes, never playlist contents or keys.
-    res.json({ ok: true, ...cache.stats() });
+    // Ops visibility only: counts + approx bytes, never playlist contents,
+    // keys, URLs, or user data.
+    res.json({ ok: true, ...cache.stats(), api: getApiStats() });
   });
   return router;
 }

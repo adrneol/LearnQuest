@@ -71,6 +71,7 @@ export function TimezonePicker({ value, onChange, label = 'Display timezone' }: 
       <button
         type="button"
         aria-haspopup="listbox"
+        aria-label={label}
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-left text-sm text-slate-100 hover:border-white/20"

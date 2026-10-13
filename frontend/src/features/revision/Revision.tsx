@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useStore } from '../../app/store.js';
+import { useDayTick } from '../../app/dayTick.js';
+import { revisionFilterStatus } from '../../domain/index.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { notify } from '../../services/notifications/notify.js';
 import { Card, Btn, Field, inputCls, Empty } from '../../components/ui/ui.js';
@@ -10,23 +12,21 @@ export function Revision() {
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const [f, setF] = useState<'all' | 'low' | 'todo-ex' | 'questions' | 'overdue'>('all');
   const [flagPos, setFlagPos] = useState('');
+  // Display-timezone calendar day (not a UTC slice): overdue status follows
+  // the same day the rest of the app reports, and refreshes at midnight.
+  // Hook first: must run unconditionally (before the no-playlist return).
+  const today = useDayTick(s.prefs.timezone);
   if (!snap) return <Empty title="No active playlist" hint="Add one to track learning quality." />;
-  const today = new Date().toISOString().slice(0, 10);
 
   const items = snap.entries.map((e) => ({ e, r: s.progress[`${snap.playlistId}::${e.position}`] })).filter(({ r }) => r && (r.completedAt || r.confidence || r.needsRevision || r.questions || r.notes));
-  const filtered = items.filter(({ r }) => {
-    if (!r) return false;
-    if (f === 'low') return (r.confidence ?? 5) <= 2;
-    if (f === 'todo-ex') return r.needsRevision || !r.exerciseDone;
-    if (f === 'questions') return !!(r.questions && r.questions.trim());
-    if (f === 'overdue') return !!r.revisionDate && r.revisionDate < today;
-    return true;
-  });
+  const filtered = items.filter(({ r }) => revisionFilterStatus(r, f, today));
 
   const markRevised = (pk: string) => {
     s.updateRecord(pk, { needsRevision: false, revisionDate: null } as any);
     (s as any).updateRecord(pk, { revisionDoneAt: new Date().toISOString() } as any);
-    s.awardXp('revision', 4, `rev:${pk}:${Date.now()}`);
+    // One revision reward per lesson per calendar day: repeated clicks do not
+    // double-award (XP ledger dedupes on this key).
+    s.awardXp('revision', 4, `rev:${pk}:${today}`);
   };
 
   return (

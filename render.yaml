@@ -3,8 +3,8 @@ services:
     name: learnquest-api
     runtime: node
     rootDir: backend
-    buildCommand: npm install && npm run build --workspace=backend
-    startCommand: npm run start --workspace=backend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: YOUTUBE_API_KEY
         sync: false

@@ -28,6 +28,7 @@ import type {
   PlaySession, AppSettings,
 } from '../domain/index.js';
 import { kvGet, kvSet, kvDump, kvClearAll } from '../services/persistence/db.js';
+import { notify } from '../services/notifications/notify.js';
 
 export interface Module {
   id: string;
@@ -287,31 +288,54 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // debounced persist
+  // debounced persist. Writes are best-effort per key: a quota failure on
+  // one key must not break the session, and the user gets one actionable
+  // notice (backup first) instead of an unhandled rejection. Last writer wins
+  // across tabs (documented limitation — single-tab personal use).
+  const persistWarned = useRef(false);
   useEffect(() => {
     if (!ready) return;
     clearTimeout(saveT.current);
     saveT.current = setTimeout(() => {
-      kvSet('playlists', playlists);
-      kvSet('meta', meta);
-      kvSet('activeId', activeId);
-      kvSet('progress', progress);
-      kvSet('ranges', ranges);
-      kvSet('checkpoints', checkpoints);
-      kvSet('modules', modules);
-      kvSet('sessions', sessions);
-      kvSet('goals', goals);
-      kvSet('xp', xp);
-      kvSet('achievements', achievements);
-      kvSet('prefs', prefs);
-      kvSet('segments', segments);
-      kvSet('playSessions', playSessions);
-      kvSet('queue', queue);
-      kvSet('flexGoals', flexGoals);
-      kvSet('challenge', challenge);
-      kvSet('challengeEnabled', challengeEnabled);
-      kvSet('rankHistory', rankHistory);
-      kvSet('settings', settings);
+      const writes: [string, unknown][] = [
+        ['playlists', playlists],
+        ['meta', meta],
+        ['activeId', activeId],
+        ['progress', progress],
+        ['ranges', ranges],
+        ['checkpoints', checkpoints],
+        ['modules', modules],
+        ['sessions', sessions],
+        ['goals', goals],
+        ['xp', xp],
+        ['achievements', achievements],
+        ['prefs', prefs],
+        ['segments', segments],
+        ['playSessions', playSessions],
+        ['queue', queue],
+        ['flexGoals', flexGoals],
+        ['challenge', challenge],
+        ['challengeEnabled', challengeEnabled],
+        ['rankHistory', rankHistory],
+        ['settings', settings],
+      ];
+      void (async () => {
+        for (const [k, v] of writes) {
+          try {
+            await kvSet(k, v);
+          } catch {
+            if (!persistWarned.current) {
+              persistWarned.current = true;
+              try {
+                notify('Storage write failed — the browser may be out of space. Export a JSON backup from Reports now.');
+              } catch {
+                /* notifications unavailable; data stays in memory for this session */
+              }
+            }
+            break;
+          }
+        }
+      })();
     }, 300);
   }, [ready, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
 

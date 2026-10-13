@@ -1,4 +1,5 @@
 import type { NormalizedSnapshot } from '../types/index.js';
+import { recordEviction } from '../diagnostics/apiStats.js';
 
 export interface MemoryCache {
   get(key: string): NormalizedSnapshot | null;
@@ -49,6 +50,7 @@ export function createMemoryCache(
         const oldest = store.keys().next();
         if (oldest.done) break;
         store.delete(oldest.value);
+        recordEviction();
       }
     },
     size(): number {

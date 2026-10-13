@@ -143,11 +143,11 @@ export default function App() {
   const statusText = health.ok ? (health.hasKey ? '● API ready' : '● API key missing') : '○ API offline';
 
   const navList = (compact: boolean, onNavigate?: () => void) => (
-    <nav aria-label="Sections" className="flex-1 space-y-4 overflow-y-auto px-2 py-3">
+    <nav aria-label="Sections" className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-2">
       {GROUPS.map((g) => (
         <div key={g.title}>
           {!compact && (
-            <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">{g.title}</p>
+            <p className="px-3 pb-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">{g.title}</p>
           )}
           <ul className="space-y-0.5">
             {g.items.map((t) => {
@@ -161,7 +161,7 @@ export default function App() {
                     }}
                     aria-current={active ? 'page' : undefined}
                     title={compact ? t.label : undefined}
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-1.5 text-sm transition ${
                       active ? 'bg-violet-600 font-semibold text-white shadow-lg shadow-violet-900/40' : 'text-slate-300 hover:bg-white/10'
                     } ${compact ? 'justify-center px-0' : ''}`}
                   >

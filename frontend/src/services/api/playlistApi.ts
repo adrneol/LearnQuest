@@ -54,8 +54,12 @@ function toClientSnapshot(s: ServerSnapshot): PlaylistSnapshot {
 
 const BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? '';
 
-export async function fetchPlaylistFromServer(input: string): Promise<{ snapshot: PlaylistSnapshot; cached: boolean }> {
-  const res = await fetch(`${BASE}/api/playlist?url=${encodeURIComponent(input)}`, {
+export async function fetchPlaylistFromServer(
+  input: string,
+  opts?: { refresh?: boolean },
+): Promise<{ snapshot: PlaylistSnapshot; cached: boolean }> {
+  const url = `${BASE}/api/playlist?url=${encodeURIComponent(input)}${opts?.refresh ? '&refresh=1' : ''}`;
+  const res = await fetch(url, {
     headers: { Accept: 'application/json' },
   });
   const body = await res.json().catch(() => ({}));

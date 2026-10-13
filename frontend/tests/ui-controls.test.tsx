@@ -94,7 +94,10 @@ describe('timezone picker', () => {
   it('searches, shows live computed offsets, and selects via keyboard', async () => {
     let picked = '';
     render(<TimezonePicker value="UTC" onChange={(tz) => (picked = tz)} />);
-    fireEvent.click(screen.getByRole('button', { name: /UTC/i }));
+    // Stable accessible name (independent of the currently selected zone).
+    const trigger = screen.getByRole('button', { name: 'Display timezone' });
+    expect(trigger.textContent).toMatch(/UTC/i);
+    fireEvent.click(trigger);
     const search = await screen.findByLabelText('Search timezones');
     fireEvent.change(search, { target: { value: 'kolkata' } });
     const option = await screen.findByRole('option', { name: /Kolkata/ });
@@ -107,7 +110,7 @@ describe('timezone picker', () => {
   it('Escape closes without selecting', async () => {
     let picked = 'UNCHANGED';
     render(<TimezonePicker value="UTC" onChange={(tz) => (picked = tz)} />);
-    fireEvent.click(screen.getByRole('button', { name: /UTC/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Display timezone' }));
     await screen.findByLabelText('Search timezones');
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByLabelText('Search timezones')).toBeNull());

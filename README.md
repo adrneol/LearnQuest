@@ -1,109 +1,180 @@
-# LearnQuest — Course Analytics, Playback Tracking, Efficiency & Simulated Arena
+# LearnQuest — YouTube Course Analytics & Learning Tracker
 
-Turn any public YouTube playlist into a measurable learning journey: exact per-video duration math (never averages), an embedded player with verified-coverage telemetry, flexible goals, timezone-correct history, a documented efficiency engine, and an optional fictional study arena — all local-first.
+Turn any public YouTube playlist into a measurable learning journey: exact
+per-video duration math (never averages), an embedded player with
+verified-coverage tracking, focus sessions, modules, checkpoints, goals,
+revision scheduling, efficiency analytics, and an optional fictional Arena —
+all local-first, with your data staying in your browser.
 
-> **New user? Start with the complete manual: [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md)** — setup, every screen, formulas, troubleshooting, and a full walkthrough. This README covers what the project is, how to run it, and where things live.
+> **New here?** Start the app in minutes below, then read the full user manual:
+> [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md).
 
-## Layout
+## What it does
 
+- **Playlist analysis** — import a public YouTube playlist; every entry keeps
+  its real duration and totals are computed with integer-second arithmetic.
+- **Learning tracking** — mark videos complete by hand (manual) or earn
+  **verified** completion through watched coverage in the embedded player.
+- **Focus sessions** — a study timer with pause/resume, notes, and manual
+  correction; only active seconds are recorded.
+- **Organization** — modules (your own chapters), checkpoints (range
+  milestones), saved ranges, and a revision queue with confidence ratings.
+- **Goals & motivation** — daily and flexible goals, streaks, XP, achievements.
+- **Efficiency analytics** — unique content ÷ focused study time, with
+  aggregate-vs-daily semantics documented in the UI.
+- **Arena (optional, off by default)** — a clearly labeled fictional
+  simulation that ranks average daily efficiency; never real people.
+- **Reports** — versioned JSON backups, CSV exports, validated restore.
+
+## How it works
+
+```text
+progressGameTracker/
+├── frontend/    # React + Vite + TS UI; owns ALL learning data (IndexedDB)
+├── backend/     # Node + Express proxy: YouTube Data API v3 → normalized metadata
+├── docs/audits/ # verification reports (acceptance + analytics + storage)
+├── render.yaml  # backend deploy config (rootDir: backend)
+├── README.md / HOW_TO_USE_LEARNQUEST.md
 ```
-frontend/            # React + Vite + TS + Tailwind + Recharts + idb
-  src/app/           # shell (sidebar/drawer nav, hash routing), tabs, store
-  src/components/    # ui (cards, buttons, Dropdown, TimezonePicker, dialogs, popups),
-                     # layout (Notifier), charts (theme, DurationBars, CumulativeLine, CumulativeChart)
-  src/features/      # dashboard, playlists (library), player, analytics, modules,
-                     # goals, checkpoints, focus, efficiency, competition,
-                     # revision, history, reports, settings
-  src/domain/        # THE single calculation engine:
-                     # duration, playlist, progress, playback, efficiency,
-                     # goals, competition, time, analytics
-  src/services/      # api (typed backend contract), persistence (IndexedDB),
-                     # exports (CSV/import validation), notifications
-  src/types/         # shared records (UTC instants; tz is presentation-only)
-  tests/             # vitest suites
-backend/             # Node + TS + Express — YouTube Data API v3 proxy
-  src/config/        # env (getters; secrets never leave the server)
-  src/routes/        # /api/health, /api/playlist, /api/cache
-  src/controllers/   # request handling + cache wiring
-  src/services/youtube/  # pagination + 50-ID batching + normalization
-  src/middleware/    # per-app rate limit, secret-safe error handler
-  src/schemas/       # request validation (input checks, not learning math)
-  src/cache/         # per-app TTL memory cache
-  src/types/         # NormalizedSnapshot contract (ISO durations!)
-  src/utils/         # playlist-ID parsing
-  tests/             # supertest + contract tests
-```
 
-**One engine rule:** the backend returns normalized metadata with the *original ISO 8601 durations* (`durationIso`). Only `frontend/src/domain` parses durations and computes totals, percentages, goals, efficiency, and simulated scores. Verified by grep: no `parseISO`/`durationSec` computation in `backend/src`, no `apps/` or `packages/` references anywhere.
+- The **backend** only fetches and normalizes public playlist metadata
+  (original ISO 8601 durations). It keeps a bounded ephemeral cache
+  (TTL + 50-playlist LRU) and stores no user data.
+- The **frontend** parses durations and computes every total, percentage,
+  goal, efficiency figure, and simulated score in one domain engine
+  (`frontend/src/domain`). Learning records persist in IndexedDB
+  (`learnquest-db`) in your browser.
+- The secret API key lives server-side only (`backend/.env`, never committed).
 
-## Quick start
+## Technology
 
-Requirements: Node 20+, npm 9+.
+Frontend: React 18, Vite 6, TypeScript, Tailwind CSS, Recharts, `idb`.
+Backend: Node.js, Express, `express-rate-limit`, `helmet`, `cors`, `dotenv`.
+Tests: Vitest, Supertest, Testing Library, fake-indexeddb.
+
+## Requirements
+
+- **Node.js 20+** and **npm 9+** (`node --version`, `npm --version`).
+- A **YouTube Data API v3 key** for live playlist imports (or use JSON
+  snapshot import, which works fully offline).
+
+## Local setup
+
+Each app installs independently — there is no root install step.
 
 ```powershell
+# 1. Install dependencies (run once per app)
+cd frontend
 npm install
-npm run dev          # backend :3001 + frontend :5173 together (two-terminal: npm run dev:backend / dev:frontend)
-npm test             # backend 6 + frontend 101
-npm run typecheck
-npm run build
+cd ..\backend
+npm install
+
+# 2. Configure the backend key (see Configuration below)
+
+# 3. Start both servers (two terminals)
+# Terminal A:
+cd backend
+npm run dev      # API on http://localhost:3001
+# Terminal B:
+cd frontend
+npm run dev      # App on http://localhost:5173
 ```
 
-Open http://localhost:5173. Without a backend key, playlist-URL fetching reports the missing integration; JSON import (Reports) works fully offline.
+Open **http://localhost:5173**. Without a backend key, playlist-URL fetching
+reports the missing integration; JSON import (Reports) works fully offline.
 
-## YouTube API key
+## Configuration
 
-Live playlist fetching needs a **YouTube Data API v3 key** in `backend/.env`:
+Backend (`backend/.env` — create from `backend/.env.example`, never commit):
 
-```
-YOUTUBE_API_KEY=…
-```
-
-(If yours is missing: Google Cloud → enable YouTube Data API v3 → create a key restricted to that API + your backend host → paste into `backend/.env` → restart the backend. Never put it in a `VITE_` variable, `frontend/`, chat, or Git — `backend/.env` is git-ignored.)
-
-Confirm: **Settings → Backend connection** reads “● Connected — API key configured”, or `GET /api/health` shows `"hasKey":true`. Without a key, URL fetching reports the gap and JSON snapshot import (Reports) works fully offline. Full steps + troubleshooting: [HOW_TO_USE_LEARNQUEST.md §D](./HOW_TO_USE_LEARNQUEST.md#d-youtube-api-setup).
-
-## Environment variables
-
-| File | Var | Purpose |
+| Variable | Purpose | Default |
 |---|---|---|
-| `backend/.env` | `YOUTUBE_API_KEY` | **Secret.** Server-side only. Never `VITE_`, never committed |
-| `backend/.env` | `PORT` / `CORS_ORIGIN` / `CACHE_TTL_SEC` / `RATE_LIMIT_PER_MIN` | Port, allowed origins, cache TTL, per-IP limit |
-| `frontend/.env.local` | `VITE_API_BASE_URL` | Optional; empty = same-origin `/api` (dev proxy handles it) |
+| `YOUTUBE_API_KEY` | **Secret.** Server-side only | _(required for live imports)_ |
+| `PORT` | API port | `3001` |
+| `CORS_ORIGIN` | Allowed frontend origin(s) | `http://localhost:5173` |
+| `CACHE_TTL_SEC` | Metadata cache TTL | `600` |
+| `CACHE_MAX_ENTRIES` | Metadata cache size cap | `50` |
+| `RATE_LIMIT_PER_MIN` | Per-IP request limit | `30` |
 
-`.gitignore` covers `.env` / `.env.local`; only `.env.example` files are versioned.
+Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`):
 
-## API contract
+| Variable | Purpose | Default |
+|---|---|---|
+| `VITE_API_BASE_URL` | API origin prefix; empty = same-origin `/api` (dev proxy handles it) | _(empty)_ |
 
-- `GET /api/health` → `{ ok, hasKey, version, time }` (no secret).
-- `GET /api/playlist?url=<URL-or-ID>` → `{ snapshot, cached }`; snapshot entries carry `durationIso: string | null` + best-effort `unresolvedReason`. Frontend parses ISO → seconds; missing durations mark totals `INCOMPLETE`.
+Order of operations: copy `backend/.env.example` → `backend/.env`, paste the
+key, restart the backend, then confirm **Settings → Backend connection**
+reads "● Connected — API key configured" (or `GET /api/health` shows
+`"hasKey":true`).
 
-## Feature notes & measurement rules
+## Development commands
 
-- **Player:** official YouTube IFrame API; position polled ~2×/s (documented resolution). Seeks never credit skipped spans; buffering never counts; duplicate events deduped by segment id; refresh ends verification (no background credit). Completion states: not started / in progress / **verified** (≥ threshold unique coverage, default 90%, Settings 50–100%) / **manual** (checkbox/override, always labelled) / needs revision / unavailable. Embed-disabled videos fall back to Open-on-YouTube (unverifiable there).
-- **Coverage quantities** kept separate: unique seconds (interval union), total playback content (incl. repeats), active wall seconds, focused study seconds.
-- **History:** focus + playback sessions with cross-midnight splitting at the selected timezone's date boundaries (one authoritative interval attribution shared by History, Dashboard, Efficiency, Focus, streaks, and Arena); per-video drill-down; self-reported entries explicitly labelled (never verified).
-- **Goals:** video-count, unique-content, focus-time, playback-time, checkpoint; daily or open-ended; achieved only when the condition holds (deduped); missed/paused states honest; day status refreshes at local midnight and on tab visibility/focus.
-- **Timezone:** custom searchable picker (city/region/alias, live computed UTC offsets, full IANA catalogue with curated fallback, legacy-name resolution for older ICU builds); local + UTC + worldwide zones; events stored as UTC instants; changing display tz recomputes reports without refetching. Calendar windows use DST-safe calendar arithmetic (23h/25h days handled); rolling views refresh after midnight, sleep, and timezone changes. Full matrix: `TIME_AND_ANALYTICS_AUDIT.md`.
-- **Library range explorer:** start/end inputs bound to `1–N`, Full/First/Middle/Final presets, Save; chart selector with **Video duration** (bars only) and **Cumulative duration** (line only) views sharing one data pipeline — never mixed; every entry plotted with adaptive tick labels; incomplete-data warnings. Dashboard/analytics cumulative charts stay line-only.
-- **Navigation:** grouped sidebar collapsing to a 68px icon rail (compact status dot with accessible label, tooltips, content reflow) + mobile drawer (Escape/backdrop close, focus restore), hash routing so back/forward works, compact API status linking to Settings. Tasteful thin scrollbars for the app's own scroll regions; page scrolling stays native. Charts and grids use `min-w-0` cells so labels never widen the page.
-- **Library sorting:** playlist order, longest/shortest first (numeric `durationSec`), title A–Z/Z–A via one tested `sortEntries` utility; unresolved always last, ties by position, stored order never mutated; sort changes reset to page 1 and pages clamp after filtering.
-- **Dropdowns:** shared portal-based listbox (no card can clip it; flips upward when tight; keyboard + screen-reader semantics) used for playlist switching, filters, sorting, goals, arena, history, and preferences. Timezone picker adds search + live offsets.
-- **Efficiency:** `uniqueContent ÷ focusedStudy × 100` (null when denominator is 0 — never NaN); utilization capped at 100 with inconsistency rejection; overall is the **aggregate ratio over the current evidence selection, never the mean of dailies**; Evidence filter separates verified vs self-reported; real measurements never clamped (worked examples + definitions in the screen's help box); >100% possible above 1× speed and is not “better”.
-- **Arena (optional, off by default):** FIXED basis — average daily content efficiency (volume/XP/tier never ranked). Cohorts 10–2000; rival daily cap 1–12 h default 6 h (rivals only); tier distribution (sums to 100) separate from tier **efficiency bands** (Ultra 100–110% … Below Average 20–39.9%) with per-tier daily variation; coherent per-day histories (focus → daily eff → content, capped by remaining playlist) seeded per calendar date — same seed + settings + window dates = same rivals across refreshes; DST-safe calendar windows slide to new dates as days advance (views also refresh at midnight / on tab focus). Gamer aliases; eligibility gates with constructive provisional UX (never ranked last for thin data); shared-rank ties; strictly-below percentiles; percentage-point gaps; exact-date window label + period-labelled paginated leaderboard (25/50/100, Top/Near-me, search, jump). Every surface labelled fictional simulation.
-- **Reports playlists:** compact searchable table with status dots, per-row overflow menu (rename/archive/remove), bounded scroll for large collections. Verified by test to N=1000 (sums, sort, ranges, chart endpoints, pagination).
-- **Storage:** IndexedDB `learnquest-db` v2 (additive migration — v1 keys preserved); versioned JSON backup v2 (restores v1 too); CSV exports carry playlist/position identity; clear-metadata vs clear-all are separate; sim reset never erases real data. Backend cache is bounded ephemeral (TTL + LRU 50 + in-flight dedup) — no database required; see `STORAGE_AND_SCALE_AUDIT.md` for measured sizes and RAM.
+Run each from its own directory (`frontend/` or `backend/`):
 
-## Verification (actually run, V5)
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start dev server (backend `:3001`, frontend `:5173`) |
+| `npm test` | Run that app's test suite (frontend 168, backend 18) |
+| `npm run typecheck` | TypeScript check, no emit |
+| `npm run build` | Production build (`frontend/dist`, `backend/dist`) |
+| `npm run start` | _(backend)_ Serve the built API (`node dist/server.js`) |
+| `npm run preview` | _(frontend)_ Preview the production build locally |
 
-- Tests **168/168**: backend 11 (ISO-passthrough contract + pagination, bounded LRU/TTL/dedup cache, memory profile 1/139/500/1000 with heap 16.4→16.7 MB), frontend 157 (all prior suites plus DST-safe calendar windows incl. 23h/25h days, cross-midnight/month/year attribution, streaks, N=1…1000 scale matrix with hand-computed totals, sort/pagination/chart endpoints, perf budgets).
-- `tsc --noEmit` clean in both workspaces; `vite build` + API `tsc` build succeed.
-- API smoke: live `200 /api/health {ok:true, hasKey:true}` (key never printed); mocked `503` playlist without key, `400` missing arg, no secret in bodies. `/api/cache` returns bounded `{entries, approxBytes, maxEntries}`.
-- Prior live YouTube measurement (with the configured key, never printed; not re-fetched this pass to spare quota): Sigma playlist `PLu0W_9lII9agq5TrH9XLIKQvv0iaF2X3w` returned **139/139 resolved** with independently summed `1–84 = 28:30:15, 85–139 = 28:00:41, total = 56:30:56` (`A+B=C`). The app computes totals live; nothing is hardcoded.
-- Browser automation is **not** available in this environment: no screenshots claimed. UI covered by jsdom workflow tests (nav, drawer/Escape, hash routing, seeded range totals, sort reorder, timezone search with live `UTC+05:30`). A prior report cited headless-Chromium checks with tooling not present in this repo; that result is historical, not re-verified here.
-- Secret audit: no `AIza` key material and no key value in the frontend bundle (single `YOUTUBE_API_KEY=…` documentation string in Settings help text); `backend/.env` + `frontend/.env.local` git-ignored.
-- Known limitations and the full feature-by-feature matrix: `TIME_AND_ANALYTICS_AUDIT.md`; storage/RAM/scale evidence: `STORAGE_AND_SCALE_AUDIT.md`.
+## Production deployment
 
-## Deploy
+- **Backend → Render** via `render.yaml`: service root `backend/`,
+  build `npm install && npm run build`, start `npm run start`. Set
+  `YOUTUBE_API_KEY` (secret, not synced), `CORS_ORIGIN` (your frontend
+  origin), and the cache/rate-limit vars. Free-tier footprint is small
+  (measured ~17 MB heap / ~77 MB RSS with four cached playlists); the
+  filesystem is ephemeral by design — nothing essential lives there.
+- **Frontend → Vercel** (or any static host): project root `frontend/`,
+  build `npm run build`, output `dist`. Set `VITE_API_BASE_URL` to the
+  backend origin when the API is hosted separately.
 
-- Frontend → Vercel: root `frontend/`, build `npm run build --workspace=frontend`, output `dist`; set `VITE_API_BASE_URL` if API is separate.
-- Backend → Render via `render.yaml`: root `backend/`, start `node dist/server.js`; set the six env vars; restrict the key to the host.
+## Data persistence and privacy
+
+- Learning records (progress, sessions, goals, modules, checkpoints,
+  revision data, settings) live **only in your browser's IndexedDB**.
+  There are no accounts and no cloud sync — export JSON backups regularly
+  (Reports → Backup JSON) and keep the file yourself.
+- The backend sees only playlist metadata requests; it stores no learning
+  history. The YouTube API is used solely to resolve public playlist
+  entries and durations.
+- Deleting browser data (or an unrecoverable storage failure) deletes local
+  progress; a storage write failure shows one actionable backup notice
+  instead of failing silently. Concurrent tabs are last-writer-wins.
+
+## Limitations
+
+- Timed in-browser playback events, overnight soak runs, live quota
+  metering, 2000+-video stress, and live storage-quota exhaustion are
+  verified by unit/integration tests and inspection — not by live runs here.
+  See [`docs/audits/V7_FINAL_ACCEPTANCE.md`](./docs/audits/V7_FINAL_ACCEPTANCE.md).
+- Playlists are capped at **1000 entries** per fetch (larger ones are
+  rejected with a clear error, never silently truncated).
+- Quota costs ≈ 5 units per 100-video import/refresh, ≈ 21 per 500-video
+  one; navigation costs nothing. Your Google Cloud quota may differ from
+  the 10,000/day default.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| API key missing | Follow Configuration; restart backend; Recheck in Settings |
+| Invalid/restricted key | Allow YouTube Data API v3 + backend host in Google Cloud; restart |
+| Quota exhausted | Wait for daily reset; use JSON import meanwhile |
+| Playlist fetch fails | Re-paste URL/ID; check public visibility; try Refresh active |
+| Unresolved videos | Expected for deleted/private/region-blocked items; totals stay labeled incomplete |
+| Player won't embed (101/150) | Use Open on YouTube; log a self-reported History entry |
+| Totals look wrong | Confirm range endpoints and unresolved flags; content duration ≠ study time |
+| Port conflict (`EADDRINUSE`) | Stop the other process or change `PORT` in `backend/.env` |
+| Frontend can't reach backend | Check `VITE_API_BASE_URL`, `CORS_ORIGIN`, and that both dev servers run |
+
+## Documentation
+
+- [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
+- [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — current feature acceptance matrix and real-browser evidence.
+- [docs/audits/V6_FINAL_AUDIT.md](./docs/audits/V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.
+- [docs/audits/TIME_AND_ANALYTICS_AUDIT.md](./docs/audits/TIME_AND_ANALYTICS_AUDIT.md) — time-correctness matrix.
+- [docs/audits/STORAGE_AND_SCALE_AUDIT.md](./docs/audits/STORAGE_AND_SCALE_AUDIT.md) — storage, memory, and scale measurements.

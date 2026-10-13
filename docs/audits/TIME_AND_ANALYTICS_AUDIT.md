@@ -103,6 +103,19 @@ from real timestamps; calendar sequences come from calendar arithmetic.
   automated test.
 - Player interruption recovery beyond documented "refresh ends verification".
 
+## V6 addendum (2026-10-13)
+
+- Revision overdue moved from **PARTIALLY VERIFIED** to **verified by test**:
+  new `domain/revision/revision.ts` (`isRevisionOverdue` fail-closed,
+  `revisionFilterStatus`) with 11-test coverage; screen uses the display
+  timezone's day tick; revision XP is one reward per lesson per calendar day.
+- `useDayTick` hook-order violation (Dashboard, Revision) found by inspection
+  and fixed; all 8 call sites audited.
+- Persist writer hardened for quota failures (sequential best-effort writes +
+  one actionable backup notice); kv round-trip verified by test. Live quota
+  exhaustion and overnight browser soak remain NOT VERIFIED (no harness).
+- Full V6 evidence: [V6_FINAL_AUDIT.md](./V6_FINAL_AUDIT.md). V7 evidence: [V7_FINAL_ACCEPTANCE.md](./V7_FINAL_ACCEPTANCE.md).
+
 ## Test evidence
 
 - Frontend: **157/157** (`time-correctness` 12, `scale` 30 incl. N=1…1000

@@ -1,11 +1,33 @@
 import 'dotenv/config';
 import { parsePlaylistId, httpError, MAX_ENTRIES } from '../../utils/playlistId.js';
+import { recordUpstream, recordRetry, recordRetryFailure } from '../../diagnostics/apiStats.js';
 import type { NormalizedEntry, NormalizedSnapshot } from '../../types/index.js';
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 const FETCH_TIMEOUT_MS = 10000;
 
-async function ytFetch(path: string, apiKey: string): Promise<any> {
+/** Retryable: rate-limit, transient 5xx, and timeouts. Never quota/4xx. */
+function isRetryable(e: any): boolean {
+  if (e?.retryable === false) return false;
+  const status = e?.status;
+  if (e?.name === 'AbortError') return true;
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
+  // Undifferentiated network failures (no HTTP status) are retryable; HTTP 4xx are not.
+  if (status === undefined || status === null) return true;
+  return false;
+}
+
+function backoffMs(attempt: number): number {
+  const base = attempt === 0 ? 400 : 1200;
+  return base + Math.floor(Math.random() * 200); // jitter
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function ytFetch(path: string, apiKey: string, method: 'playlists.list' | 'playlistItems.list' | 'videos.list'): Promise<any> {
+  recordUpstream(method);
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -16,12 +38,17 @@ async function ytFetch(path: string, apiKey: string): Promise<any> {
     if (res.status === 400) throw httpError('Invalid playlist or request rejected by YouTube API.', 400);
     if (res.status === 403) {
       const body = await res.text().catch(() => '');
-      throw httpError(
-        /quota/i.test(body)
+      const quota = /quota/i.test(body);
+      const err = httpError(
+        quota
           ? 'YouTube API quota exhausted. Try again tomorrow or use CSV/JSON import.'
           : 'YouTube API key invalid, restricted, or unauthorized.',
         502,
       );
+      // Quota/auth failures must never be retried: retries burn quota (or
+      // hammer a rejected key) for zero benefit. Flag survives the 502 mapping.
+      if (quota) (err as any).retryable = false;
+      throw err;
     }
     if (res.status === 404) throw httpError('Playlist not found or private.', 404);
     if (!res.ok) throw httpError(`YouTube API error (HTTP ${res.status}).`, 502);
@@ -32,6 +59,33 @@ async function ytFetch(path: string, apiKey: string): Promise<any> {
   } finally {
     clearTimeout(t);
   }
+}
+
+/**
+ * Bounded retry for one upstream call: at most 2 retries, exponential
+ * backoff with jitter, retryable errors only (429/5xx/timeouts). Quota (403),
+ * 400, and 404 are never retried — retrying them burns quota for nothing.
+ */
+async function ytFetchRetry(
+  path: string,
+  apiKey: string,
+  method: 'playlists.list' | 'playlistItems.list' | 'videos.list',
+): Promise<any> {
+  let last: any = null;
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      return await ytFetch(path, apiKey, method);
+    } catch (e) {
+      last = e;
+      if (attempt >= 2 || !isRetryable(e)) {
+        if (attempt >= 2 && isRetryable(e)) recordRetryFailure();
+        throw e;
+      }
+      recordRetry();
+      await sleep(backoffMs(attempt));
+    }
+  }
+  throw last;
 }
 
 function detectUnresolvedReason(title: string): NormalizedEntry['unresolvedReason'] {
@@ -52,7 +106,7 @@ export async function fetchPlaylistSnapshot(
   if (!apiKey) throw httpError('Server is missing YOUTUBE_API_KEY. Add it to backend/.env — see .env.example.', 503);
   const playlistId = parsePlaylistId(rawInput);
 
-  const pl = await ytFetch(`/playlists?part=snippet,contentDetails&id=${encodeURIComponent(playlistId)}`, apiKey);
+  const pl = await ytFetchRetry(`/playlists?part=snippet,contentDetails&id=${encodeURIComponent(playlistId)}`, apiKey, 'playlists.list');
   const plItem = pl?.items?.[0];
   if (!plItem) throw httpError('Playlist not found, private, or inaccessible.', 404);
   const title: string = plItem.snippet?.title ?? 'Untitled playlist';
@@ -67,9 +121,10 @@ export async function fetchPlaylistSnapshot(
   let guard = 0;
   for (;;) {
     if (guard++ > 25) throw httpError('Playlist too large to fetch safely.', 400);
-    const data = await ytFetch(
+    const data = await ytFetchRetry(
       `/playlistItems?part=snippet,contentDetails&maxResults=50&playlistId=${encodeURIComponent(playlistId)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`,
       apiKey,
+      'playlistItems.list',
     );
     for (const it of data?.items ?? []) {
       items.push({
@@ -98,19 +153,11 @@ export async function fetchPlaylistSnapshot(
   const meta = new Map<string, { durationIso: string | null; title: string; thumbnail?: string }>();
   for (let i = 0; i < uniqueIds.length; i += 50) {
     const chunk = uniqueIds.slice(i, i + 50);
-    let data: any = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        data = await ytFetch(
-          `/videos?part=contentDetails,snippet&id=${encodeURIComponent(chunk.join(','))}`,
-          apiKey,
-        );
-        break;
-      } catch (e) {
-        if (attempt === 1) throw e;
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    }
+    const data: any = await ytFetchRetry(
+      `/videos?part=contentDetails,snippet&id=${encodeURIComponent(chunk.join(','))}`,
+      apiKey,
+      'videos.list',
+    );
     for (const v of data?.items ?? []) {
       const id: string = v?.id;
       const iso: unknown = v?.contentDetails?.duration;

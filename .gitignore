@@ -1,10 +1,39 @@
+# LearnQuest ignore rules: generated, secret, and machine-local artifacts only.
+# Application source, tests, manifests, lockfiles, render.yaml, templates,
+# README.md, and HOW_TO_USE_LEARNQUEST.md must ALWAYS stay trackable.
+
+# dependencies (matches at any directory level)
 node_modules/
+
+# production build output (frontend/dist, backend/dist)
 dist/
 dist-ssr/
-*.local
+
+# real secret files — never commit (safe templates stay tracked)
 .env
 .env.local
 !.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# test coverage output
 coverage/
+
+# vite dev/build caches
 .vite/
 vite.config.ts.timestamp-*
+
+# local end-to-end artifacts (kept outside the repo by convention)
+playwright-report/
+test-results/
+
+# operating-system artifacts
+.DS_Store
+Thumbs.db
+
+# IDE-local state (shared editor config, if any, lives outside these dirs)
+.vscode/
+.idea/

@@ -19,9 +19,11 @@ export function Reports() {
     setBusy(true);
     setMsg(null);
     try {
-      const { snapshot, cached } = await fetchPlaylistFromServer(url || (snap ? snap.playlistId : ''));
+      // Refresh bypasses a fresh backend cache entry (`refresh=1`) so the
+      // button always revalidates upstream; plain Add reuses valid cache.
+      const { snapshot, cached } = await fetchPlaylistFromServer(url || (snap ? snap.playlistId : ''), { refresh });
       s.addSnapshot(snapshot);
-      setMsg(refresh ? `Refreshed ${snapshot.title} (N=${snapshot.entries.length}${cached ? ', cached' : ''}). Progress preserved; check flagged ranges.` : `Added ${snapshot.title} (N=${snapshot.entries.length}).`);
+      setMsg(refresh ? `Refreshed ${snapshot.title} (N=${snapshot.entries.length}${cached ? ', served from cache' : ', fresh from YouTube'}). Progress preserved; check flagged ranges.` : `Added ${snapshot.title} (N=${snapshot.entries.length}${cached ? ' — served from cache' : ''}).`);
       setUrl('');
     } catch (e: any) {
       setMsg(e?.message ?? 'Fetch failed.');

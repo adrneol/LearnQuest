@@ -14,3 +14,4 @@ export * from './goals/goals.js';
 export * from './competition/competition.js';
 export * from './competition/aliases.js';
 export * from './analytics/insights.js';
+export * from './revision/revision.js';

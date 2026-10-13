@@ -13,3 +13,10 @@ export function validatePlaylistQuery(query: unknown): string {
   parsePlaylistId(raw);
   return raw;
 }
+
+/** `?refresh=1` bypasses a fresh cache entry to force upstream revalidation. */
+export function isRefreshRequested(query: unknown): boolean {
+  const q = (query ?? {}) as Record<string, unknown>;
+  const v = q.refresh;
+  return v === '1' || v === 'true' || v === 1 || v === true;
+}
