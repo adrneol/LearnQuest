@@ -46,8 +46,9 @@ async function ytFetch(path: string, apiKey: string, method: 'playlists.list' | 
         502,
       );
       // Quota/auth failures must never be retried: retries burn quota (or
-      // hammer a rejected key) for zero benefit. Flag survives the 502 mapping.
-      if (quota) (err as any).retryable = false;
+      // hammer a rejected key) for zero benefit. The 502 status is downstream-
+      // facing only; the retry classifier must see the non-retryable flag.
+      (err as any).retryable = false;
       throw err;
     }
     if (res.status === 404) throw httpError('Playlist not found or private.', 404);
@@ -90,8 +91,12 @@ async function ytFetchRetry(
 
 function detectUnresolvedReason(title: string): NormalizedEntry['unresolvedReason'] {
   const t = (title || '').toLowerCase();
-  if (t.includes('deleted')) return 'deleted';
-  if (t.includes('private')) return 'private';
+  // Only reasons supported by observable YouTube placeholder text. A missing
+  // metadata row without such evidence stays 'unknown' — never invented.
+  if (t.includes('deleted video') || t.includes('video has been removed') || t.includes('video was removed')) return 'deleted';
+  if (t.includes('private video') || t.includes('video is private')) return 'private';
+  if (t.includes('not found') || t.includes('no longer available') || t.includes('video unavailable') || t.includes('video is unavailable')) return 'notFound';
+  if (t.includes('not available in your country') || t.includes('blocked it in your country')) return 'regionRestricted';
   return 'unknown';
 }
 
@@ -114,7 +119,16 @@ export async function fetchPlaylistSnapshot(
   const thumb: string | undefined =
     plItem.snippet?.thumbnails?.medium?.url ?? plItem.snippet?.thumbnails?.default?.url;
   const reportedCount: number | null =
-    typeof plItem.contentDetails?.itemCount === 'number' ? plItem.contentDetails.itemCount : null;
+    typeof plItem.contentDetails?.itemCount === 'number' && Number.isFinite(plItem.contentDetails.itemCount)
+      ? plItem.contentDetails.itemCount
+      : null;
+
+  // Reject before paging/batching: a playlist that already reports an
+  // unsupported size would otherwise spend many playlistItems/videos quota
+  // units only to be rejected at the end.
+  if (reportedCount !== null && reportedCount > MAX_ENTRIES) {
+    throw httpError(`Playlist reports ${reportedCount} entries, exceeding the supported cap of ${MAX_ENTRIES}. Nothing was imported.`, 400);
+  }
 
   const items: { videoId: string; title: string; thumbnail?: string; publishedAt?: string }[] = [];
   let pageToken = '';
@@ -143,7 +157,7 @@ export async function fetchPlaylistSnapshot(
       snapshot: {
         playlistId, title, channelTitle, thumbnail: thumb,
         reportedCount, entries: [], source: 'api',
-        fetchedAt: new Date().toISOString(), snapshotVersion: 1,
+        fetchedAt: new Date().toISOString(), snapshotVersion: 2,
       },
     };
   }
@@ -195,7 +209,7 @@ export async function fetchPlaylistSnapshot(
     snapshot: {
       playlistId, title, channelTitle, thumbnail: thumb,
       reportedCount, entries, source: 'api',
-      fetchedAt: new Date().toISOString(), snapshotVersion: 1,
+      fetchedAt: new Date().toISOString(), snapshotVersion: 2,
     },
   };
 }

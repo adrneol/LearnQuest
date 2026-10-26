@@ -16,3 +16,5 @@ services:
         value: '50'
       - key: RATE_LIMIT_PER_MIN
         value: '30'
+      - key: TRUST_PROXY_HOPS
+        value: '1'

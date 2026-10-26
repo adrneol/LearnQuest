@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from 'recharts';
 import {
   computePlaylistProgress, snapshotCompleteness, sumEntries, formatSecondsHHMMSS, formatHuman,
-  buildInsights, dateKeyInTimezone, calendarWindowDates,
+  buildInsights, calendarWindowDates, buildEntryProgressIndex, isProgressComplete, hasRevisionSignal,
+  attributePlaybackByDay, attributeFocusByDay, splitIntervalByDay, focusSessionDaySlices,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
@@ -27,29 +28,46 @@ export function Analytics() {
       return { pos: e.position, hrs: +(acc / 3600).toFixed(2), cumSec: acc };
     });
     const dist = snap.entries.filter((e) => e.durationSec !== null).map((e) => ({ pos: e.position, min: +((e.durationSec! / 60).toFixed(1)) }));
-    const verified = Object.values(s.progress).filter((p) => p.playlistId === pid && p.source === 'verified' && p.completedAt).length;
-    const manual = Object.values(s.progress).filter((p) => p.playlistId === pid && p.source !== 'verified' && p.completedAt).length;
+    const index = buildEntryProgressIndex(snap, s.progress);
+    const verified = snap.entries.filter((e) => {
+      const rec = index.get(e.position);
+      return isProgressComplete(rec) && rec?.source === 'verified';
+    }).length;
+    const manual = snap.entries.filter((e) => {
+      const rec = index.get(e.position);
+      return isProgressComplete(rec) && rec?.source !== 'verified';
+    }).length;
     // week windows: DST-safe calendar arithmetic in tz (current partial day included)
     const thisWk = new Set(calendarWindowDates(7, s.prefs.timezone));
     const lastWkKeys = calendarWindowDates(14, s.prefs.timezone).slice(0, 7);
     const lastWk = new Set(lastWkKeys);
-    const inWk = (iso: string, set: Set<string>) => set.has(dateKeyInTimezone(new Date(iso), s.prefs.timezone));
-    const segIn = (ms: number, set: Set<string>) => set.has(dateKeyInTimezone(new Date(ms), s.prefs.timezone));
-    const twContent = s.segments.filter((x) => x.playlistId === pid && segIn(x.wallStartMs, thisWk)).reduce((a, x) => a + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0);
-    const lwContent = s.segments.filter((x) => x.playlistId === pid && segIn(x.wallStartMs, lastWk)).reduce((a, x) => a + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0);
-    const twFocus = s.sessions.filter((x) => x.playlistId === pid && inWk(x.startedAt, thisWk)).reduce((a, x) => a + x.activeSec, 0);
-    const lwFocus = s.sessions.filter((x) => x.playlistId === pid && inWk(x.startedAt, lastWk)).reduce((a, x) => a + x.activeSec, 0);
-    const sessWk = s.sessions.filter((x) => x.playlistId === pid && inWk(x.startedAt, thisWk)).length
-      + s.playSessions.filter((x) => x.playlistId === pid && segIn(new Date(x.startedAt).getTime(), thisWk)).length;
+    const playbackByDay = attributePlaybackByDay(s.segments.filter((x) => x.playlistId === pid), s.prefs.timezone);
+    const focusByDay = attributeFocusByDay(s.sessions.filter((x) => x.playlistId === pid), s.prefs.timezone);
+    const contentIn = (set: Set<string>) => [...set].reduce((a, k) => a
+      + (playbackByDay.get(k) ?? []).reduce((b, x) => b + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0), 0);
+    const focusIn = (set: Set<string>) => [...set].reduce((a, k) => a + (focusByDay.get(k) ?? 0), 0);
+    const twContent = contentIn(thisWk);
+    const lwContent = contentIn(lastWk);
+    const twFocus = focusIn(thisWk);
+    const lwFocus = focusIn(lastWk);
+    const sessWk = s.sessions.filter((x) => x.playlistId === pid
+      && focusSessionDaySlices(x, s.prefs.timezone).some((slice) => thisWk.has(slice.dateKey))).length
+      + s.playSessions.filter((x) => {
+        const start = new Date(x.startedAt).getTime();
+        if (!Number.isFinite(start)) return false;
+        const end = x.finishedAt ? new Date(x.finishedAt).getTime() : start + 1;
+        return splitIntervalByDay(start, Math.max(start + 1, end), s.prefs.timezone)
+          .some((slice) => thisWk.has(slice.dateKey));
+      }).length;
     const allSess = [
       ...s.sessions.filter((x) => x.playlistId === pid).map((x) => x.activeSec / 60),
       ...s.playSessions.filter((x) => x.playlistId === pid).map((x) => x.activePlaybackSec / 60),
     ];
     const avgSess = allSess.length ? allSess.reduce((a, b) => a + b, 0) / allSess.length : null;
-    // largest remaining module
+    // largest remaining module — completion follows occurrence identity
     const mods = s.modules.filter((m) => m.playlistId === pid).map((m) => {
       const entries = snap.entries.filter((e) => m.positions.includes(e.position));
-      const left = m.positions.filter((p) => !s.progress[`${pid}::${p}`]?.completedAt);
+      const left = m.positions.filter((p) => !isProgressComplete(index.get(p)));
       const sum = sumEntries(entries.filter((e) => left.includes(e.position)));
       return { name: m.name, remainingCount: left.length, remainingSec: sum.isComplete ? sum.totalSec : null };
     }).sort((a, b) => b.remainingCount - a.remainingCount);
@@ -67,9 +85,10 @@ export function Analytics() {
       n: allSess.filter((v) => v >= b && v < buckets[i + 1]).length,
     }));
     // confidence trend
-    const confs = Object.values(s.progress).filter((p) => p.playlistId === pid && p.confidence);
+    const current = [...index.values()];
+    const confs = current.filter((p) => p.confidence);
     const avgConf = confs.length ? confs.reduce((a, p) => a + (p.confidence ?? 0), 0) / confs.length : null;
-    const revOpen = Object.values(s.progress).filter((p) => p.playlistId === pid && p.needsRevision).length;
+    const revOpen = current.filter((p) => hasRevisionSignal(p)).length;
     return { prog, comp, cum, dist, verified, manual, insights, hist, avgConf, confs: confs.length, revOpen, mods };
   }, [snap, pid, s.progress, s.segments, s.sessions, s.playSessions, s.modules, s.prefs, today]);
 
@@ -136,7 +155,7 @@ export function Analytics() {
             <p key={m.name} className="mt-1 text-xs text-slate-300">{m.name} · {m.remainingCount} left{m.remainingSec !== null ? ` · ${formatHuman(m.remainingSec)}` : ''}</p>
           ))}
           <p className="mt-2 text-xs text-slate-400">
-            Confidence rated on {data.confs} videos{data.avgConf !== null ? ` (avg ${data.avgConf.toFixed(1)}/5)` : ''} · {data.revOpen} flagged for revision. Mastery is evidence, not a single score.
+            Confidence rated on {data.confs} videos{data.avgConf !== null ? ` (avg ${data.avgConf.toFixed(1)}/5)` : ''} · {data.revOpen} with a current review signal (same queue rules as Revision). Mastery is evidence, not a single score.
           </p>
         </Card>
         <Card>

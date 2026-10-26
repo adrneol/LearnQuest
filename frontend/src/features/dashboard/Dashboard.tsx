@@ -4,6 +4,7 @@ import {
   formatSecondsHHMMSS, formatHuman, computePlaylistProgress, computeRangeProgress,
   snapshotCompleteness, sumEntries, rangeDuration, computeStreak,
   activeFocusDayKeys, attributeFocusByDay, calendarWindowDates, ACHIEVEMENTS,
+  dateKeyInTimezone, findProgressForEntry, isProgressComplete,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
@@ -28,11 +29,18 @@ export function Dashboard() {
   const nextCp = s.checkpoints
     .filter((c) => c.playlistId === snap.playlistId && !c.completedAt && c.status !== 'needsReview')
     .sort((a, b) => a.end - b.end)[0];
-  const recent = Object.values(s.progress)
-    .filter((p) => p.playlistId === snap.playlistId && p.completedAt)
-    .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
+  // Recents follow current occurrence identity, never a stale position.
+  const recent = snap.entries
+    .map((entry) => ({ entry, rec: findProgressForEntry(s.progress, snap.playlistId, entry) }))
+    .filter(({ rec }) => isProgressComplete(rec) && !!rec?.completedAt)
+    .sort((a, b) => (b.rec?.completedAt ?? '').localeCompare(a.rec?.completedAt ?? ''))
     .slice(0, 5);
-  const titleOf = (pos: number) => snap.entries.find((e) => e.position === pos)?.title ?? `#${pos}`;
+  const todayCompleted = snap.entries.filter((entry) => {
+    const rec = findProgressForEntry(s.progress, snap.playlistId, entry);
+    return isProgressComplete(rec) && rec?.completedAt
+      && dateKeyInTimezone(new Date(rec.completedAt), s.prefs.timezone) === todayKey;
+  }).length;
+  const wholePlaylistDone = prog.n > 0 && prog.completedCount === prog.n;
 
   // weekly trend (last 7 calendar days in tz, DST-safe)
   const weekKeys = calendarWindowDates(7, s.prefs.timezone);
@@ -70,8 +78,12 @@ export function Dashboard() {
               <a href={resumeUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg">
                 <Play size={15} /> Resume #{prog.nextPosition}
               </a>
-            ) : (
+            ) : wholePlaylistDone ? (
               <span className="rounded-xl bg-emerald-500/15 px-4 py-2.5 text-sm font-semibold text-emerald-300">Course complete</span>
+            ) : prog.n === 0 ? (
+              <span className="rounded-xl bg-white/5 px-4 py-2.5 text-sm font-semibold text-slate-300">Empty playlist</span>
+            ) : (
+              <span className="rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-200">In progress</span>
             )}
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
@@ -85,7 +97,7 @@ export function Dashboard() {
             {prog.durationPct !== null ? (
               <>
                 <ProgressBar pct={prog.durationPct} tone="cyan" />
-                <p className="text-xs text-slate-400">Duration-based: {prog.durationPct.toFixed(1)}% of verified content.</p>
+                <p className="text-xs text-slate-400">Duration-based: {prog.durationPct.toFixed(1)}% of playlist duration completed (manual + verified).</p>
               </>
             ) : (
               <p className="text-xs text-amber-300">Duration totals incomplete ({comp.unresolved} unresolved at {comp.unresolvedPositions.slice(0, 8).join(', ')}) — duration % withheld to avoid a false exact figure.</p>
@@ -105,7 +117,7 @@ export function Dashboard() {
                 <ProgressBar pct={goal.targetFocusSec ? (todaySec / goal.targetFocusSec) * 100 : 0} tone="emerald" />
                 <p className="mt-1 text-xs text-slate-400">
                   {todaySec >= goal.targetFocusSec ? 'Goal met — well done.' : `${formatHuman(Math.max(0, goal.targetFocusSec - todaySec))} to go.`}
-                  {goal.targetCount ? ` · ${prog.completedCount} videos done` : ''} Minimum viable: {formatHuman(goal.minViableSec)}.
+                  {goal.targetCount ? ` · ${todayCompleted}/${goal.targetCount} videos done today` : ''} Minimum viable: {formatHuman(goal.minViableSec)}.
                 </p>
               </>
             ) : (
@@ -178,11 +190,11 @@ export function Dashboard() {
           <p className="mt-1 text-sm text-slate-500">Nothing completed yet — your first finished video will appear here. No fabricated history.</p>
         ) : (
           <ul className="mt-2 space-y-1 text-sm">
-            {recent.map((p) => (
-              <li key={`${p.playlistId}::${p.position}`} className="flex items-center gap-2">
+            {recent.map(({ entry }) => (
+              <li key={entry.entryId ?? `${entry.position}:${entry.videoId}`} className="flex items-center gap-2">
                 <CheckCircle2 size={14} className="text-emerald-400" />
-                <span className="text-slate-400">#{p.position}</span>
-                <span className="truncate">{titleOf(p.position)}</span>
+                <span className="text-slate-400">#{entry.position}</span>
+                <span className="truncate">{entry.title}</span>
               </li>
             ))}
           </ul>

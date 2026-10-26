@@ -4,8 +4,9 @@ import { goalProgress, validateGoal, formatGoalTarget } from '../../domain/index
 import type { GoalMetric } from '../../domain/index.js';
 import { useStore, goalCurrentValue } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
-import { Card, Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
+import { Card, Btn, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
+import { NumberField } from '../../components/ui/NumberField.js';
 
 const METRICS: { id: GoalMetric; label: string; unit: string }[] = [
   { id: 'video-count', label: 'Videos completed', unit: 'videos' },
@@ -19,7 +20,7 @@ export function Goals() {
   const s = useStore();
   const today = useDayTick(s.prefs.timezone);
   const [metric, setMetric] = useState<GoalMetric>('video-count');
-  const [amount, setAmount] = useState('5');
+  const [amount, setAmount] = useState<number | null>(5);
   const [pid, setPid] = useState<string>('');
   const [cpId, setCpId] = useState('');
   const [dated, setDated] = useState(true);
@@ -30,7 +31,7 @@ export function Goals() {
     m === 'video-count' ? v : Math.round(v * 60);
 
   const create = () => {
-    const v = Number(amount);
+    const v = amount ?? NaN;
     const target = metric === 'checkpoint'
       ? (() => {
         const c = s.checkpoints.find((x) => x.id === cpId);
@@ -43,7 +44,7 @@ export function Goals() {
     if (problems.length) return;
     const c = s.checkpoints.find((x) => x.id === cpId);
     s.saveFlexGoal({
-      label: metric === 'checkpoint' && c ? `Reach: ${c.label}` : `${METRICS.find((m) => m.id === metric)?.label} — ${metric === 'video-count' ? target : `${amount}m`}${pid ? ` (${s.playlists[pid]?.title.slice(0, 24)})` : ' (all)'}${dated ? ` · ${today}` : ''}`,
+      label: metric === 'checkpoint' && c ? `Reach: ${c.label}` : `${METRICS.find((m) => m.id === metric)?.label} — ${metric === 'video-count' ? target : `${amount ?? '?'}m`}${pid ? ` (${s.playlists[pid]?.title.slice(0, 24)})` : ' (all)'}${dated ? ` · ${today}` : ''}`,
       metric,
       target,
       playlistId: pid || null,
@@ -51,7 +52,7 @@ export function Goals() {
       dateKey: dated ? today : null,
       paused: false,
     });
-    setAmount('5');
+    setAmount(5);
   };
 
   return (
@@ -76,9 +77,14 @@ export function Goals() {
               onChange={setCpId}
             />
           ) : (
-            <Field label={`Target (${metric === 'video-count' ? 'videos' : 'minutes'})`}>
-              <input value={amount} onChange={(e) => setAmount(e.target.value)} className={inputCls} inputMode="numeric" />
-            </Field>
+            <NumberField
+              label={`Target (${metric === 'video-count' ? 'videos' : 'minutes'})`}
+              value={amount}
+              min={1}
+              allowEmpty
+              live={false}
+              onCommit={setAmount}
+            />
           )}
           <Dropdown
             label="Scope"

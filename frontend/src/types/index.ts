@@ -6,6 +6,13 @@ export type EntryStatus = 'todo' | 'in-progress' | 'done' | 'unavailable';
 export interface PlaylistEntry {
   /** 1-indexed playlist position */
   position: number;
+  /**
+   * Stable identity for this playlist occurrence. API imports use the
+   * playlist-item id; imported/legacy snapshots derive `videoId#occurrence`.
+   * Reordering does not change it, and duplicate occurrences of one video
+   * remain distinct.
+   */
+  entryId?: string;
   videoId: string;
   title: string;
   thumbnail?: string;
@@ -59,10 +66,22 @@ export interface Checkpoint {
   status?: 'valid' | 'needsReview';
 }
 
+export interface ReviewEvent {
+  id: string;
+  /** Real UTC instant of the review. */
+  reviewedAt: string;
+  /** Calendar day used for review/XP idempotency in the display timezone. */
+  dateKey: string;
+  /** Screen that recorded the review. */
+  source?: 'revision' | 'player';
+}
+
 export interface ProgressRecord {
   playlistId: string;
-  /** 1-indexed */
+  /** 1-indexed position at the time of the last known snapshot */
   position: number;
+  /** Stable occurrence identity; mirrors PlaylistEntry.entryId. */
+  entryId?: string;
   videoId: string;
   completedAt: string | null;
   status: EntryStatus;
@@ -78,18 +97,47 @@ export interface ProgressRecord {
   builtExample?: boolean;
   needsRevision?: boolean;
   revisionDate?: string | null;
+  revisionDoneAt?: string | null;
+  /**
+   * Append-only review log. `revisionDoneAt` remains the fast latest-review
+   * mirror; history is preserved when a lesson is flagged again.
+   */
+  reviewHistory?: ReviewEvent[];
+  /**
+   * True when a playlist refresh removed/replaced the occurrence. The record
+   * (including notes and review history) is preserved for review but never
+   * counted as completion for another video.
+   */
+  orphaned?: boolean;
+  reviewReason?: 'removed' | 'video-mismatch' | 'unknown';
+}
+
+export interface FocusInterval {
+  /** UTC epoch milliseconds */
+  startMs: number;
+  endMs: number;
+  kind: 'active' | 'paused';
 }
 
 export interface StudySession {
   id: string;
+  /** Client-generated idempotency key (timer instance). */
+  clientId?: string;
   playlistId: string | null;
+  /** Real wall-clock start (UTC ISO). */
   startedAt: string;
+  /** Real wall-clock finish (UTC ISO). */
   finishedAt: string | null;
   /** active focused seconds (excludes paused/break time) */
   activeSec: number;
   elapsedSec: number;
+  pausedSec?: number;
+  /** Actual active/paused wall intervals for cross-midnight attribution. */
+  intervals?: FocusInterval[];
+  /** True when the user supplied a manual active-time correction. */
+  estimated?: boolean;
   note?: string;
-  dateKey: string; // YYYY-MM-DD in user timezone
+  dateKey: string; // start-day label (legacy/display only; attribution derives from intervals)
 }
 
 export interface XpEvent {
@@ -114,6 +162,7 @@ export interface PlaySession {
   playlistId: string;
   position: number;
   videoId: string;
+  entryId?: string;
   moduleId?: string | null;
   startedAt: string;
   finishedAt: string | null;
@@ -131,5 +180,29 @@ export interface PlaySession {
 export interface AppSettings {
   /** unique-coverage ratio required for verified completion (0.5–1) */
   verifiedThreshold: number;
+}
+
+export interface Module {
+  id: string;
+  playlistId: string;
+  name: string;
+  positions: number[];
+  goalSec?: number;
+}
+
+export interface RankSnapshot {
+  at: string;
+  rank: number;
+  of: number;
+  metric: string;
+}
+
+export interface AppPreferences {
+  /** IANA zone or the `local` sentinel. */
+  timezone: string;
+  sessionLenMin: number;
+  breakMin: number;
+  reducedMotion: boolean;
+  minViableMin: number;
 }
 

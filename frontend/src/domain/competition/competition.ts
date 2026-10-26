@@ -99,13 +99,21 @@ export function challengeWindowDates(windowDays: number, timeZone: string, nowMs
   return calendarWindowDates(windowDays, timeZone, nowMs);
 }
 
-/** Human window label, e.g. "Oct 5 – Oct 18, 2026". Falls back to ISO keys. */
-export function windowLabel(dates: string[]): string {
+/**
+ * Human window label, e.g. "Oct 5 – Oct 18, 2026". The supplied keys are
+ * already calendar dates in the selected timezone, so formatting is done in
+ * UTC explicitly rather than inheriting the host timezone. Falls back to keys.
+ */
+export function windowLabel(dates: string[], timeZone = 'UTC'): string {
   if (dates.length === 0) return '';
   try {
+    const zone = supportedZone(timeZone);
     const fmt = (k: string, withYear: boolean) => {
-      const d = new Date(k.length === 10 ? `${k}T12:00:00Z` : k);
-      return new Intl.DateTimeFormat('en-US', withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' }).format(d);
+      const d = k.length === 10 ? new Date(zonedNoonMs(k, zone)) : new Date(k);
+      return new Intl.DateTimeFormat('en-US', {
+        timeZone: zone,
+        ...(withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' }),
+      }).format(d);
     };
     if (dates.length === 1) return fmt(dates[0], true);
     return `${fmt(dates[0], false)} – ${fmt(dates[dates.length - 1], true)}`;
@@ -115,7 +123,8 @@ export function windowLabel(dates: string[]): string {
 }
 
 import { generateAlias, initialsOf } from './aliases.js';
-import { calendarWindowDates } from '../time/time.js';
+import { calendarWindowDates, zonedNoonMs } from '../time/time.js';
+import { supportedZone } from '../time/timezones.js';
 
 /**
  * Tier EFFICIENCY BANDS (simulation-design assumptions, not population
@@ -344,12 +353,6 @@ export interface UserArenaInput {
   activeDays: number;
 }
 
-function fmtHMS(sec: number): string {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
 /** FIXED efficiency-only ranking. Score = mean of eligible daily efficiencies. */
 export function rankBoard(
   cfg: ChallengeConfig,
@@ -418,13 +421,14 @@ export function rankBoard(
   const me = rows.find((r) => r.isUser)!;
   const userRank = me.rank;
   const ahead = me.value !== null ? scored.filter((o) => !o.isUser && (o.value as number) > (me.value as number)).length : 0;
-  const n = rows.length;
-  // Convention: percentile = share of the cohort ranked STRICTLY BELOW you
-  // (scored rows only). Provisional → null, not 0.
+  // Convention: percentile = share of SCORED RIVALS ranked strictly below you.
+  // Provisional rivals are excluded from both numerator and denominator; they
+  // are not scored zero and must not dilute a real rank.
+  const scoredRivals = scored.filter((o) => !o.isUser);
   const percentile =
-    me.value === null || n <= 1
+    me.value === null || scoredRivals.length === 0
       ? null
-      : (scored.filter((o) => !o.isUser && (o.value as number) < (me.value as number)).length / (n - 1)) * 100;
+      : (scoredRivals.filter((o) => (o.value as number) < (me.value as number)).length / scoredRivals.length) * 100;
   return { rows, userRank, percentile, ahead, required, userScore, userEligible };
 }
 

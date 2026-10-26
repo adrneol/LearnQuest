@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, SkipForward, SkipBack, CheckCircle2, ExternalLink, ListPlus, TriangleAlert, BookmarkPlus } from 'lucide-react';
-import { summarizeSegments, completionFromCoverage, formatSecondsHHMMSS } from '../../domain/index.js';
-import type { PlaybackSegment } from '../../domain/index.js';
+import { Play, Pause, SkipForward, SkipBack, CheckCircle2, ExternalLink, ListPlus, TriangleAlert, BookmarkPlus, RotateCcw } from 'lucide-react';
+import {
+  summarizeVerifiedSegments, completionFromCoverage, formatSecondsHHMMSS,
+  findProgressForEntry, entryKey, syntheticEntryId,
+} from '../../domain/index.js';
+import type { PlaybackSegment, PlaylistEntry } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { notify } from '../../services/notifications/notify.js';
 import { Card, Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
+import { NumberField } from '../../components/ui/NumberField.js';
+import { PlayerLearningRecord } from './LearningRecordEditor.js';
 
 declare global {
   interface Window {
@@ -19,17 +24,52 @@ function loadIframeApi(): Promise<void> {
   if (window.YT?.Player) return Promise.resolve();
   if (apiPromise) return apiPromise;
   apiPromise = new Promise((resolve, reject) => {
-    window.onYouTubeIframeAPIReady = () => resolve();
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Reset the cached promise so a later retry can load the API again.
+      apiPromise = null;
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error('YouTube player library timed out.')), 15000);
+    window.onYouTubeIframeAPIReady = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
     const tag = document.createElement('script');
     tag.src = 'https://www.youtube.com/iframe_api';
-    tag.onerror = () => reject(new Error('Could not load the YouTube player library.'));
+    tag.async = true;
+    tag.onerror = () => fail(new Error('Could not load the YouTube player library.'));
     document.head.appendChild(tag);
-    setTimeout(() => reject(new Error('YouTube player library timed out.')), 15000);
   });
   return apiPromise;
 }
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** Stable occurrence id for an entry even before migration has run. */
+function entryIdentity(entry: PlaylistEntry): string {
+  return entry.entryId ?? syntheticEntryId(entry.videoId, 1, entry.position);
+}
+
+/** Verified telemetry for exactly one playlist occurrence; never position-only. */
+function verifiedSegmentsFor(
+  segments: PlaybackSegment[],
+  playlistId: string,
+  entry: PlaylistEntry | undefined,
+): PlaybackSegment[] {
+  if (!entry) return [];
+  const id = entryIdentity(entry);
+  return segments.filter((x) => x.playlistId === playlistId
+    && x.source === 'verified'
+    && (x.entryId
+      ? x.entryId === id
+      : x.position === entry.position && x.videoId === entry.videoId));
+}
 
 export function Player() {
   const s = useStore();
@@ -43,10 +83,7 @@ function PlayerInner() {
   const snap = s.activeId ? s.playlists[s.activeId]! : undefined!;
   const N = snap.entries.length;
   const queue = s.queue[snap.playlistId] ?? [];
-  const nextTodo = snap.entries.find((e) => {
-    const r = s.progress[`${snap.playlistId}::${e.position}`];
-    return !r?.completedAt;
-  })?.position;
+  const nextTodo = snap.entries.find((e) => !findProgressForEntry(s.progress, snap.playlistId, e)?.completedAt)?.position;
   const [pos, setPos] = useState(queue[0] ?? nextTodo ?? 1);
   const entry = snap.entries.find((e) => e.position === pos);
   const [state, setState] = useState<'idle' | 'ready' | 'playing' | 'paused' | 'buffering' | 'ended' | 'error'>('idle');
@@ -54,12 +91,18 @@ function PlayerInner() {
   const [rate, setRate] = useState(1);
   const [note, setNote] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  const [sessionNote] = useState('');
-  void sessionNote;
+  const [reloadKey, setReloadKey] = useState(0);
 
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
-  const openSeg = useRef<{ wallStart: number; tlStart: number; rate: number } | null>(null);
+  const openSeg = useRef<{
+    wallStart: number;
+    tlStart: number;
+    rate: number;
+    entry: PlaylistEntry;
+    position: number;
+    sessionId: string;
+  } | null>(null);
   const lastT = useRef(0);
   const sessSegs = useRef<PlaybackSegment[]>([]);
   const sessWallStart = useRef<number>(Date.now());
@@ -67,46 +110,71 @@ function PlayerInner() {
   const sessionId = useRef(uid());
   const allSegsRef = useRef<PlaybackSegment[]>(s.segments);
   allSegsRef.current = s.segments;
+  const finalizedSession = useRef(false);
+  const lastRate = useRef(1);
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  const entryRef = useRef(entry);
+  entryRef.current = entry;
 
-  const pk = `${snap.playlistId}::${pos}`;
-  const rec = s.progress[pk];
-  const entrySegs = s.segments.filter((x) => x.playlistId === snap.playlistId && x.position === pos);
-  const cov = summarizeSegments(entrySegs);
-  const completion = completionFromCoverage(cov.uniqueSec, entry?.durationSec ?? null, {
+  const rec = entry ? findProgressForEntry(s.progress, snap.playlistId, entry) : undefined;
+  const entrySegs = verifiedSegmentsFor(s.segments, snap.playlistId, entry);
+  const cov = summarizeVerifiedSegments(entrySegs);
+  const evidenceCompletion = completionFromCoverage(cov.uniqueSec, entry?.durationSec ?? null, {
     threshold: s.settings.verifiedThreshold,
-    manualDone: rec?.status === 'done',
+    manualDone: rec?.status === 'done' && rec?.source !== 'verified',
     needsRevision: rec?.needsRevision,
     unavailable: (entry?.durationSec ?? null) === null,
   });
+  const completion = rec?.completedAt && rec.source === 'verified' && evidenceCompletion !== 'needs-revision'
+    ? 'verified'
+    : evidenceCompletion;
+
+  // Keep the selected position inside the current snapshot after a refresh.
+  useEffect(() => {
+    if (snap.entries.some((e) => e.position === pos) || snap.entries.length === 0) return;
+    const fallback = snap.entries.find((e) => e.position === queue[0])?.position
+      ?? snap.entries.find((e) => !findProgressForEntry(s.progress, snap.playlistId, e)?.completedAt)?.position
+      ?? snap.entries[0]?.position
+      ?? 1;
+    setPos(fallback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.entries, pos]);
 
   // reset per-video session tracking
   useEffect(() => {
     sessSegs.current = [];
     sessionId.current = uid();
     sessWallStart.current = Date.now();
-    openSeg.current = null;
     lastT.current = 0;
+    finalizedSession.current = false;
+    lastRate.current = 1;
     setCur(0);
     setState('idle');
     setErr(null);
-    prevUnique.current = summarizeSegments(
-      allSegsRef.current.filter((x) => x.playlistId === snap.playlistId && x.position === pos),
+    // A pause-note belongs to the video that was playing. Persistent learning
+    // notes are separate and are saved by the learning-record editor.
+    setNote('');
+    prevUnique.current = summarizeVerifiedSegments(
+      verifiedSegmentsFor(allSegsRef.current, snap.playlistId, entryRef.current),
     ).uniqueSec;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos, snap.playlistId]);
+  }, [pos, snap.playlistId, entry?.entryId]);
 
   const closeSeg = (tlNow: number) => {
     const o = openSeg.current;
     openSeg.current = null;
-    if (!o || !entry) return;
+    if (!o) return;
     const tlEnd = Math.max(0, tlNow);
     if (tlEnd <= o.tlStart + 0.15) return; // ignore empty/no-progress flushes
     const seg: PlaybackSegment = {
       id: uid(),
       playlistId: snap.playlistId,
-      position: pos,
-      videoId: entry.videoId,
-      sessionId: sessionId.current,
+      // Use the occurrence captured when the segment opened. A navigation or
+      // refresh may already have changed the visible entry/position refs.
+      position: o.position,
+      entryId: entryIdentity(o.entry),
+      videoId: o.entry.videoId,
+      sessionId: o.sessionId,
       wallStartMs: o.wallStart,
       wallEndMs: Date.now(),
       timelineStartSec: o.tlStart,
@@ -118,14 +186,90 @@ function PlayerInner() {
     s.addSegments([seg]);
   };
 
+  const openSegment = (at: number, tl: number, playbackRate: number) => {
+    const currentEntry = entryRef.current;
+    if (!currentEntry) return;
+    openSeg.current = {
+      wallStart: at,
+      tlStart: tl,
+      rate: playbackRate,
+      entry: currentEntry,
+      position: posRef.current,
+      sessionId: sessionId.current,
+    };
+  };
+
+  const startNewSession = (at: number) => {
+    sessSegs.current = [];
+    sessionId.current = uid();
+    sessWallStart.current = at;
+    finalizedSession.current = false;
+    prevUnique.current = summarizeVerifiedSegments(
+      verifiedSegmentsFor(allSegsRef.current, snap.playlistId, entryRef.current),
+    ).uniqueSec;
+  };
+
+  const finalize = () => {
+    const currentEntry = entryRef.current;
+    const currentPos = posRef.current;
+    if (!currentEntry) return;
+    const id = entryIdentity(currentEntry);
+    // Verified-only, identity-scoped evidence. Dedupe by segment id so the
+    // already-persisted segments are not counted twice with the local buffer.
+    const allForEntry = [
+      ...allSegsRef.current.filter((x) => x.playlistId === snap.playlistId
+        && x.source === 'verified'
+        && (x.entryId
+          ? x.entryId === id
+          : x.position === currentPos && x.videoId === currentEntry.videoId)),
+      ...sessSegs.current.filter((x) => x.entryId === id),
+    ];
+    const sum = summarizeVerifiedSegments(allForEntry);
+    const gain = Math.max(0, Math.round(sum.uniqueSec - prevUnique.current));
+    const activePlaybackSec = Math.round(sessSegs.current.reduce((a, x) => a + Math.max(0, (x.wallEndMs - x.wallStartMs) / 1000), 0));
+    const contentSec = Math.round(sessSegs.current.reduce((a, x) => a + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0));
+    const totalWall = Math.round((Date.now() - sessWallStart.current) / 1000);
+    s.addPlaySession({
+      playlistId: snap.playlistId,
+      position: currentPos,
+      entryId: id,
+      videoId: currentEntry.videoId,
+      startedAt: new Date(sessWallStart.current).toISOString(),
+      finishedAt: new Date().toISOString(),
+      activePlaybackSec,
+      contentSec,
+      uniqueGainSec: gain,
+      pauseSec: Math.max(0, totalWall - activePlaybackSec),
+      note: note || undefined,
+      source: 'verified',
+    });
+    const c = completionFromCoverage(sum.uniqueSec, currentEntry.durationSec ?? null, {
+      threshold: s.settings.verifiedThreshold,
+      needsRevision: rec?.needsRevision,
+    });
+    if (c === 'verified') {
+      const wasVerified = rec?.source === 'verified' && !!rec?.completedAt;
+      s.markVerified(snap.playlistId, currentPos, currentEntry.videoId);
+      if (!wasVerified) notify(`Video #${currentPos} verified complete.`);
+    } else {
+      notify(`Playback saved: +${formatSecondsHHMMSS(gain)} unique coverage.`);
+    }
+    prevUnique.current = Math.round(sum.uniqueSec);
+  };
+
+  const finalizeRef = useRef(finalize);
+  finalizeRef.current = finalize;
+
   // create / load player
   useEffect(() => {
     if (!entry?.videoId) {
       setErr('This entry has no playable video ID.');
+      setState('error');
       return;
     }
     let dead = false;
     let player: any = null;
+    setState('idle');
     loadIframeApi()
       .then(() => {
         if (dead || !mountRef.current) return;
@@ -164,7 +308,10 @@ function PlayerInner() {
                 } catch {
                   /* noop */
                 }
-                openSeg.current = { wallStart: now, tlStart: tl, rate: lastRate.current };
+                // A play after a completed run is a fresh session; duplicate
+                // PLAYING events during the same run do not reset anything.
+                if (finalizedSession.current) startNewSession(now);
+                openSegment(now, tl, lastRate.current);
                 lastT.current = tl;
                 setState('playing');
               } else if (st === YTNS?.PAUSED) {
@@ -188,24 +335,30 @@ function PlayerInner() {
                   closeSeg(lastT.current);
                 }
                 setState('ended');
-                finalize();
+                // Duplicate ENDED events must not create duplicate sessions or
+                // duplicate XP; one finalize per play run.
+                if (!finalizedSession.current) {
+                  finalizedSession.current = true;
+                  finalizeRef.current();
+                }
               }
             },
             onPlaybackRateChange: (e: any) => {
-              const r = e.data ?? 1;
+              const r = Number(e.data) || 1;
               setRate(r);
               lastRate.current = r;
               if (openSeg.current && playerRef.current) {
                 try {
                   const tl = playerRef.current.getCurrentTime?.() ?? lastT.current;
                   closeSeg(tl);
-                  openSeg.current = { wallStart: Date.now(), tlStart: tl, rate: r };
+                  openSegment(Date.now(), tl, r);
                 } catch {
                   /* noop */
                 }
               }
             },
             onError: (e: any) => {
+              if (dead) return;
               const code = e?.data;
               if (code === 101 || code === 150) {
                 setErr('Embedding is disabled for this video. Open it on YouTube instead — that watch cannot be verified here.');
@@ -226,18 +379,26 @@ function PlayerInner() {
       });
     return () => {
       dead = true;
-      if (openSeg.current && playerRef.current) {
+      if (openSeg.current) {
         try {
-          closeSeg(playerRef.current.getCurrentTime?.() ?? lastT.current);
+          closeSeg(playerRef.current?.getCurrentTime?.() ?? lastT.current);
         } catch {
           /* noop */
         }
       }
+      openSeg.current = null;
+      if (playerRef.current) {
+        try {
+          playerRef.current.destroy?.();
+        } catch {
+          /* noop */
+        }
+        playerRef.current = null;
+      }
+      player = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry?.videoId, snap.playlistId]);
-
-  const lastRate = useRef(1);
+  }, [entry?.videoId, entry?.entryId, snap.playlistId, reloadKey]);
 
   // 2 Hz telemetry poll while playing (documented resolution limit)
   useEffect(() => {
@@ -255,7 +416,7 @@ function PlayerInner() {
       const expected = lastT.current + 0.5 * lastRate.current;
       if (Math.abs(tl - expected) > 2.5 && openSeg.current) {
         closeSeg(lastT.current);
-        openSeg.current = { wallStart: Date.now(), tlStart: tl, rate: lastRate.current };
+        openSegment(Date.now(), tl, lastRate.current);
       }
       lastT.current = tl;
       setCur(tl);
@@ -263,39 +424,6 @@ function PlayerInner() {
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
-
-  const finalize = () => {
-    const allForEntry = [
-      ...allSegsRef.current.filter((x) => x.playlistId === snap.playlistId && x.position === pos),
-      ...sessSegs.current,
-    ];
-    const sum = summarizeSegments(allForEntry);
-    const gain = Math.max(0, Math.round(sum.uniqueSec - prevUnique.current));
-    const activePlaybackSec = Math.round(sessSegs.current.reduce((a, x) => a + Math.max(0, (x.wallEndMs - x.wallStartMs) / 1000), 0));
-    const contentSec = Math.round(sessSegs.current.reduce((a, x) => a + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0));
-    const totalWall = Math.round((Date.now() - sessWallStart.current) / 1000);
-    s.addPlaySession({
-      playlistId: snap.playlistId,
-      position: pos,
-      videoId: entry?.videoId ?? '',
-      startedAt: new Date(sessWallStart.current).toISOString(),
-      finishedAt: new Date().toISOString(),
-      activePlaybackSec,
-      contentSec,
-      uniqueGainSec: gain,
-      pauseSec: Math.max(0, totalWall - activePlaybackSec),
-      note: note || undefined,
-      source: 'verified',
-    });
-    const c = completionFromCoverage(sum.uniqueSec, entry?.durationSec ?? null, { threshold: s.settings.verifiedThreshold });
-    if (c === 'verified') {
-      s.markVerified(snap.playlistId, pos, entry?.videoId ?? '');
-      notify(`Video #${pos} verified complete.`);
-    } else {
-      notify(`Playback saved: +${formatSecondsHHMMSS(gain)} unique coverage.`);
-    }
-    prevUnique.current = Math.round(sum.uniqueSec);
-  };
 
   const play = () => {
     try {
@@ -313,7 +441,7 @@ function PlayerInner() {
   };
 
   const go = (p: number) => {
-    if (p < 1 || p > N) return;
+    if (!Number.isFinite(p) || p < 1 || p > N || p === pos) return;
     if (openSeg.current && playerRef.current) {
       try {
         closeSeg(playerRef.current.getCurrentTime?.() ?? lastT.current);
@@ -324,12 +452,19 @@ function PlayerInner() {
     setPos(p);
   };
 
+  const retry = () => {
+    setErr(null);
+    setState('idle');
+    setReloadKey((k) => k + 1);
+  };
+
   const enqueue = () => {
     const q = queue.includes(pos) ? queue : [...queue, pos];
     s.setQueue(snap.playlistId, q);
   };
 
   const dur = entry?.durationSec ?? null;
+  const currentKey = entry ? entryKey(snap.playlistId, entry) : `${snap.playlistId}::${pos}`;
 
   return (
     <div className="space-y-4">
@@ -347,17 +482,22 @@ function PlayerInner() {
           <div ref={mountRef} className="h-full w-full" />
         </div>
         {err && (
-          <p className="mt-2 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-200">
-            <TriangleAlert size={15} className="mt-0.5 shrink-0" />
-            <span>
-              {err}{' '}
-              {entry?.videoId && (
-                <a className="underline" target="_blank" rel="noreferrer" href={`https://www.youtube.com/watch?v=${entry.videoId}&list=${snap.playlistId}`}>
-                  Open on YouTube
-                </a>
-              )}
-            </span>
-          </p>
+          <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-200">
+            <p className="flex items-start gap-2">
+              <TriangleAlert size={15} className="mt-0.5 shrink-0" />
+              <span>
+                {err}{' '}
+                {entry?.videoId && (
+                  <a className="underline" target="_blank" rel="noreferrer" href={`https://www.youtube.com/watch?v=${entry.videoId}&list=${snap.playlistId}`}>
+                    Open on YouTube
+                  </a>
+                )}
+              </span>
+            </p>
+            {entry?.videoId && (
+              <Btn className="mt-2" onClick={retry}><RotateCcw size={14} /> Retry player</Btn>
+            )}
+          </div>
         )}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Btn variant="primary" onClick={play} disabled={state === 'error' || !entry?.videoId}><Play size={14} /> Play</Btn>
@@ -373,9 +513,14 @@ function PlayerInner() {
           <div className="mt-2"><ProgressBar pct={(cur / dur) * 100} tone="cyan" /></div>
         )}
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <Field label={`Jump to position (1–${N})`}>
-            <input type="number" min={1} max={N} value={pos} onChange={(e) => go(Number(e.target.value))} className={inputCls} />
-          </Field>
+          <NumberField
+            label={`Jump to position (1–${N})`}
+            value={pos}
+            min={1}
+            max={N}
+            live={false}
+            onCommit={(v) => { if (v !== null) go(v); }}
+          />
           <Field label="Pause-note (saved when the video ends)">
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What to remember…" className={inputCls} />
           </Field>
@@ -387,13 +532,16 @@ function PlayerInner() {
           <Btn
             onClick={() => {
               if (!entry) return;
-              const pk = `${snap.playlistId}::${pos}`;
-              const cur = s.progress[pk];
-              s.updateRecord(pk, {
-                playlistId: snap.playlistId, position: pos, videoId: entry.videoId,
-                status: cur?.status ?? 'in-progress', completedAt: cur?.completedAt ?? null,
-                needsRevision: !cur?.needsRevision,
-              } as any);
+              const curRec = s.progress[currentKey] ?? rec;
+              s.updateRecord(currentKey, {
+                playlistId: snap.playlistId,
+                position: pos,
+                entryId: entryIdentity(entry),
+                videoId: entry.videoId,
+                status: curRec?.status ?? 'in-progress',
+                completedAt: curRec?.completedAt ?? null,
+                needsRevision: !curRec?.needsRevision,
+              });
             }}
             aria-pressed={!!rec?.needsRevision}
           >
@@ -409,6 +557,8 @@ function PlayerInner() {
           Verified completion at ≥{Math.round(s.settings.verifiedThreshold * 100)}% unique coverage (Settings). Telemetry samples position ~2×/s; seeks never credit skipped spans; buffering never counts. Watching on YouTube directly cannot be verified here.
         </p>
       </Card>
+
+      {entry && <PlayerLearningRecord entry={entry} />}
 
       <Card>
         <h3 className="text-sm font-bold">Learning queue ({queue.length})</h3>

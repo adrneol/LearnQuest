@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { KeyRound, PlugZap } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { checkApiHealth } from '../../services/api/playlistApi.js';
-import { Card, Field, inputCls } from '../../components/ui/ui.js';
+import { Card, Field } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
+import { NumberField } from '../../components/ui/NumberField.js';
 
 export function Settings() {
   const s = useStore();
@@ -55,20 +56,45 @@ export function Settings() {
                 className="w-full" aria-label="Verified completion threshold"
               />
             </Field>
-            <Field label="Default session length (min)">
-              <input type="number" min={5} value={s.prefs.sessionLenMin} onChange={(e) => s.setPrefs({ sessionLenMin: Number(e.target.value) })} className={inputCls} />
-            </Field>
-            <Field label="Break length (min)">
-              <input type="number" min={0} value={s.prefs.breakMin} onChange={(e) => s.setPrefs({ breakMin: Number(e.target.value) })} className={inputCls} />
-            </Field>
-            <Field label="Minimum viable session (min)">
-              <input type="number" min={1} value={s.prefs.minViableMin} onChange={(e) => s.setPrefs({ minViableMin: Number(e.target.value) })} className={inputCls} />
-            </Field>
+            <NumberField
+              label="Default session length (min)"
+              value={s.prefs.sessionLenMin}
+              onCommit={(v) => { if (v !== null) s.setPrefs({ sessionLenMin: v }); }}
+              min={1}
+              max={600}
+            />
+            <NumberField
+              label="Break length (min)"
+              value={s.prefs.breakMin}
+              onCommit={(v) => { if (v !== null) s.setPrefs({ breakMin: v }); }}
+              min={0}
+              max={240}
+            />
+            <NumberField
+              label="Minimum viable session (min)"
+              value={s.prefs.minViableMin}
+              onCommit={(v) => { if (v !== null) s.setPrefs({ minViableMin: v }); }}
+              min={1}
+              max={600}
+            />
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} /> Reduce motion
             </label>
           </div>
         </div>
+        <p className="mt-2 text-[11px] text-slate-500">
+          Invalid or empty numeric values are rejected before they can be saved; duration planning always uses a positive session length.
+        </p>
+      </Card>
+
+      <Card>
+        <h2 className="text-base font-bold">Local data & privacy</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Learning records, progress, notes, focus history, and preferences live in this browser's IndexedDB. The small
+          localStorage keys used here are UI preferences (`lq-nav-collapsed`) and an interrupted-focus recovery snapshot
+          (`lq-focus-timer-v1`); they never leave the device. CSV/JSON exports are created locally, and the backend proxy
+          receives only the playlist URL/ID you request.
+        </p>
       </Card>
     </div>
   );

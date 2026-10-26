@@ -17,14 +17,15 @@ all local-first, with your data staying in your browser.
   **verified** completion through watched coverage in the embedded player.
 - **Focus sessions** — a study timer with pause/resume, notes, and manual
   correction; only active seconds are recorded.
-- **Organization** — modules (your own chapters), checkpoints (range
-  milestones), saved ranges, and a revision queue with confidence ratings.
+- **Organization** - modules (your own chapters), checkpoints (range
+  milestones), saved ranges, and a revision workflow with confidence ratings,
+  persistent learning records, review history, and an all-lessons browser.
 - **Goals & motivation** — daily and flexible goals, streaks, XP, achievements.
 - **Efficiency analytics** — unique content ÷ focused study time, with
   aggregate-vs-daily semantics documented in the UI.
 - **Arena (optional, off by default)** — a clearly labeled fictional
   simulation that ranks average daily efficiency; never real people.
-- **Reports** — versioned JSON backups, CSV exports, validated restore.
+- **Reports** — versioned (v3) JSON backups, CSV exports, validated atomic restore.
 
 ## How it works
 
@@ -95,6 +96,7 @@ Backend (`backend/.env` — create from `backend/.env.example`, never commit):
 | `CACHE_TTL_SEC` | Metadata cache TTL | `600` |
 | `CACHE_MAX_ENTRIES` | Metadata cache size cap | `50` |
 | `RATE_LIMIT_PER_MIN` | Per-IP request limit | `30` |
+| `TRUST_PROXY_HOPS` | Trusted reverse-proxy hops; `0` for direct traffic | `1` |
 
 Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`):
 
@@ -121,8 +123,9 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Command | What it does |
 |---|---|
 | `npm run dev` | Start dev server (backend `:3001`, frontend `:5173`) |
-| `npm test` | Run that app's test suite (frontend 168, backend 18) |
+| `npm test` | Run that app's test suite (frontend 226, backend 26) |
 | `npm run typecheck` | TypeScript check, no emit |
+| `npm run lint` | ESLint, real failures exit non-zero (warnings do not) |
 | `npm run build` | Production build (`frontend/dist`, `backend/dist`) |
 | `npm run start` | _(backend)_ Serve the built API (`node dist/server.js`) |
 | `npm run preview` | _(frontend)_ Preview the production build locally |
@@ -149,8 +152,11 @@ Run each from its own directory (`frontend/` or `backend/`):
   history. The YouTube API is used solely to resolve public playlist
   entries and durations.
 - Deleting browser data (or an unrecoverable storage failure) deletes local
-  progress; a storage write failure shows one actionable backup notice
-  instead of failing silently. Concurrent tabs are last-writer-wins.
+  progress. A storage read failure shows a recovery screen instead of treating
+  the database as empty; a write failure shows one actionable backup notice.
+  Concurrent tabs are last-writer-wins.
+- Small UI-only preferences and an interrupted-focus timer snapshot are kept
+  in `localStorage` on this device; they are never sent to the backend.
 
 ## Limitations
 
@@ -181,7 +187,8 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Documentation
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
-- [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — current feature acceptance matrix and real-browser evidence.
+- [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — current remediation report and verification matrix.
+- [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.
 - [docs/audits/V6_FINAL_AUDIT.md](./docs/audits/V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.
 - [docs/audits/TIME_AND_ANALYTICS_AUDIT.md](./docs/audits/TIME_AND_ANALYTICS_AUDIT.md) — time-correctness matrix.
 - [docs/audits/STORAGE_AND_SCALE_AUDIT.md](./docs/audits/STORAGE_AND_SCALE_AUDIT.md) — storage, memory, and scale measurements.

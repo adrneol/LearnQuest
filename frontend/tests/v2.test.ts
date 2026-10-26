@@ -86,10 +86,12 @@ describe('efficiency', () => {
     expect(agg).toBeCloseTo((5700 / 11100) * 100, 5);
     expect(agg).not.toBeCloseTo(75, 0);
   });
-  it('utilization caps at 100 and rejects impossible data', () => {
+  it('utilization reports measurable ratios and only rejects undefined data', () => {
     expect(playbackUtilization(1800, 3600)).toBe(50);
     expect(playbackUtilization(3600, 3600)).toBe(100);
-    expect(playbackUtilization(99999, 60)).toBeNull();
+    // Playback can exceed tracked focus when the video played outside Focus.
+    // Reporting that ratio is more honest than silently clamping it to 100.
+    expect(playbackUtilization(99999, 60)).toBeCloseTo(166665, 0);
     expect(playbackUtilization(10, 0)).toBeNull();
   });
   it('trend needs minimum observations', () => {

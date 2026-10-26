@@ -5,11 +5,13 @@ import { ProgressDonut } from '../../components/charts/ProgressDonut.js';
 import {
   formatSecondsHHMMSS, formatHuman, validateRange, rangeDuration, selectionDuration,
   computeRangeProgress, computePlaylistProgress, sessionsNeeded, sortEntries,
+  buildEntryProgressIndex, isProgressComplete, identityKey,
   type EntrySortKey,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
-import { Card, Btn, Field, inputCls, Empty } from '../../components/ui/ui.js';
+import { Card, Btn, inputCls, Empty } from '../../components/ui/ui.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
+import { NumberField } from '../../components/ui/NumberField.js';
 import { DurationBars } from '../../components/charts/DurationBars.js';
 import { CumulativeLine } from '../../components/charts/CumulativeLine.js';
 import type { RangePoint } from '../../components/charts/theme.js';
@@ -36,16 +38,21 @@ export function Library() {
     setSelected(new Set());
   }, [snap?.playlistId, N]);
 
+  const progressIndex = useMemo(
+    () => (snap ? buildEntryProgressIndex(snap, s.progress) : new Map()),
+    [snap, s.progress],
+  );
+
   const rows = useMemo(() => {
     if (!snap) return [];
     let list = [...snap.entries];
     if (q) list = list.filter((e) => e.title.toLowerCase().includes(q.toLowerCase()));
-    if (filter === 'done') list = list.filter((e) => s.progress[`${snap.playlistId}::${e.position}`]?.completedAt);
-    if (filter === 'todo') list = list.filter((e) => !s.progress[`${snap.playlistId}::${e.position}`]?.completedAt && e.durationSec !== null);
+    if (filter === 'done') list = list.filter((e) => isProgressComplete(progressIndex.get(e.position)));
+    if (filter === 'todo') list = list.filter((e) => !isProgressComplete(progressIndex.get(e.position)) && e.durationSec !== null);
     if (filter === 'unresolved') list = list.filter((e) => e.durationSec === null);
     // Single authoritative ordering — filter, then sort, then paginate below.
     return sortEntries(list, sort);
-  }, [snap, q, filter, sort, s.progress]);
+  }, [snap, q, filter, sort, progressIndex]);
 
   if (!snap) return <Empty title="No active playlist" hint="Add one to explore videos and ranges." />;
 
@@ -54,7 +61,7 @@ export function Library() {
   const safePage = Math.min(page, pages - 1);
   const pageRows = rows.slice(safePage * PER, (safePage + 1) * PER);
 
-  let range: ReturnType<typeof rangeDuration> | null = null;
+  let range: ReturnType<typeof rangeDuration> | null;
   let rangeErrMsg: string | null = null;
   try {
     validateRange(start, end, N);
@@ -75,7 +82,7 @@ export function Library() {
       .filter((e) => e.position >= start && e.position <= end)
       .map((e) => {
         cumSec += e.durationSec ?? 0;
-        const done = !!s.progress[`${snap.playlistId}::${e.position}`]?.completedAt;
+        const done = isProgressComplete(progressIndex.get(e.position));
         return {
           pos: e.position,
           title: e.title,
@@ -122,12 +129,18 @@ export function Library() {
       <Card>
         <h2 className="text-base font-bold">Range explorer <span className="font-normal text-slate-400">(N={N}, boundaries adapt to this playlist)</span></h2>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:max-w-md sm:grid-cols-4">
-          <Field label={`Start (1–${N})`}>
-            <input type="number" min={1} max={N} value={start} onChange={(e) => setStart(Number(e.target.value))} className={inputCls} />
-          </Field>
-          <Field label={`End (${start}–${N})`}>
-            <input type="number" min={start} max={N} value={end} onChange={(e) => setEnd(Number(e.target.value))} className={inputCls} />
-          </Field>
+          <NumberField
+            label={`Start (1–${N})`}
+            value={start}
+            onCommit={(v) => { if (v !== null) setStart(v); }}
+            min={1}
+          />
+          <NumberField
+            label={`End (${start}–${N})`}
+            value={end}
+            onCommit={(v) => { if (v !== null) setEnd(v); }}
+            min={1}
+          />
           <div>
             <Dropdown
               label="Session length — estimate only, never changes content duration"
@@ -241,9 +254,10 @@ export function Library() {
             </thead>
             <tbody>
               {pageRows.map((e) => {
-                const pk = `${snap.playlistId}::${e.position}`;
-                const done = !!s.progress[pk]?.completedAt;
-                const conf = s.progress[pk]?.confidence;
+                const pk = identityKey(snap.playlistId, e.entryId!);
+                const rec = progressIndex.get(e.position);
+                const done = isProgressComplete(rec);
+                const conf = rec?.confidence;
                 return (
                   <tr key={e.position} className={`border-t border-white/5 ${done ? 'bg-emerald-500/5' : ''} ${e.durationSec === null ? 'opacity-70' : ''}`}>
                     <td className="p-2"><input type="checkbox" checked={selected.has(e.position)} onChange={() => toggleSel(e.position)} aria-label={`Select video ${e.position}`} /></td>
@@ -255,22 +269,21 @@ export function Library() {
                     <td className="p-2">
                       <button
                         onClick={() => {
-                          const cur = s.progress[pk];
                           s.updateRecord(pk, {
-                            playlistId: snap.playlistId, position: e.position, videoId: e.videoId,
-                            status: cur?.status ?? 'in-progress', completedAt: cur?.completedAt ?? null,
-                            needsRevision: !cur?.needsRevision,
+                            playlistId: snap.playlistId, position: e.position, entryId: e.entryId, videoId: e.videoId,
+                            status: rec?.status ?? 'in-progress', completedAt: rec?.completedAt ?? null,
+                            needsRevision: !rec?.needsRevision,
                           } as any);
                         }}
-                        aria-label={s.progress[pk]?.needsRevision ? `Unflag video ${e.position} for revision` : `Flag video ${e.position} for revision`}
-                        aria-pressed={!!s.progress[pk]?.needsRevision}
+                        aria-label={rec?.needsRevision ? `Unflag video ${e.position} for revision` : `Flag video ${e.position} for revision`}
+                        aria-pressed={!!rec?.needsRevision}
                       >
-                        <BookmarkPlus size={17} className={s.progress[pk]?.needsRevision ? 'text-amber-300' : 'text-slate-600'} />
+                        <BookmarkPlus size={17} className={rec?.needsRevision ? 'text-amber-300' : 'text-slate-600'} />
                       </button>
                     </td>
                     <td className="p-2 font-mono text-slate-400">{e.position}</td>
                     <td className="max-w-[320px] truncate p-2" title={e.title}>
-                      {e.title} {conf ? <span className="text-[11px] text-cyan-300">· conf {conf}/5</span> : ''} {s.progress[pk]?.needsRevision ? <span className="text-[11px] text-amber-300">· revise</span> : ''}
+                      {e.title} {conf ? <span className="text-[11px] text-cyan-300">· conf {conf}/5</span> : ''} {rec?.needsRevision ? <span className="text-[11px] text-amber-300">· revise</span> : ''}
                     </td>
                     <td className="p-2 text-right font-mono">{e.durationSec !== null ? formatSecondsHHMMSS(e.durationSec) : <span className="text-amber-300">unresolved</span>}</td>
                     <td className="p-2">

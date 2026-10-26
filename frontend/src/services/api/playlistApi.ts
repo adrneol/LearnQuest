@@ -1,4 +1,4 @@
-import { validateImportedSnapshot, toCsv, formatSecondsHHMMSS, parseISO8601ToSeconds } from '../../domain/index.js';
+import { validateImportedSnapshot, toCsv, formatSecondsHHMMSS, parseISO8601ToSeconds, entryKey } from '../../domain/index.js';
 import type { PlaylistSnapshot, PlaylistEntry } from '../../domain/index.js';
 
 // Backend contract: normalized metadata with ORIGINAL ISO durations.
@@ -69,22 +69,37 @@ export function apiUrl(path: string): string {
   return `${getApiBase()}/api${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/** Abort a hung request instead of leaving the UI in a permanent spinner. */
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error('The server took too long to respond. Check the connection and retry.', { cause: e });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchPlaylistFromServer(
   input: string,
   opts?: { refresh?: boolean },
 ): Promise<{ snapshot: PlaylistSnapshot; cached: boolean }> {
   const url = `${apiUrl('/playlist')}?url=${encodeURIComponent(input)}${opts?.refresh ? '&refresh=1' : ''}`;
-  const res = await fetch(url, {
-    headers: { Accept: 'application/json' },
-  });
+  const res = await fetchWithTimeout(url, 20_000);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error ?? `Playlist fetch failed (HTTP ${res.status}).`);
+  if (!body?.snapshot || !Array.isArray(body.snapshot.entries)) {
+    throw new Error('The server returned an unexpected playlist response. Nothing was changed.');
+  }
   return { snapshot: toClientSnapshot(body.snapshot as ServerSnapshot), cached: Boolean(body.cached) };
 }
 
 export async function checkApiHealth(): Promise<{ ok: boolean; hasKey: boolean }> {
   try {
-    const res = await fetch(apiUrl('/health'));
+    const res = await fetchWithTimeout(apiUrl('/health'), 5_000);
     if (!res.ok) return { ok: false, hasKey: false };
     return (await res.json()) as { ok: boolean; hasKey: boolean };
   } catch {
@@ -99,7 +114,7 @@ export function snapshotToCsv(snapshot: PlaylistSnapshot, doneKeys?: Set<string>
     e.videoId,
     e.durationSec ?? '',
     e.durationSec !== null ? formatSecondsHHMMSS(e.durationSec) : 'UNRESOLVED',
-    doneKeys?.has(`${snapshot.playlistId}::${e.position}`) ? 'done' : 'todo',
+    doneKeys?.has(entryKey(snapshot.playlistId, e)) ? 'done' : 'todo',
     `https://www.youtube.com/watch?v=${e.videoId}&list=${snapshot.playlistId}`,
   ]);
   return toCsv(rows, ['position', 'title', 'videoId', 'durationSec', 'durationHMS', 'status', 'url']);

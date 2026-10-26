@@ -97,7 +97,6 @@ describe('backend memory under representative playlist sizes', () => {
       const m = process.memoryUsage();
       rows.push({ n, heapUsed: m.heapUsed, rss: m.rss, entries: cache.size() });
     }
-    // eslint-disable-next-line no-console
     console.log(
       `backend-mem before heap=${(before.heapUsed / 1048576).toFixed(1)}MB rss=${(before.rss / 1048576).toFixed(1)}MB :: ` +
         rows.map((r) => `N=${r.n} heap=${(r.heapUsed / 1048576).toFixed(1)}MB rss=${(r.rss / 1048576).toFixed(1)}MB`).join(' | '),

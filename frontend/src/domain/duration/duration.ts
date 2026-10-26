@@ -56,14 +56,26 @@ export function formatSecondsHHMMSS(totalSec: number): string {
   return `${h}:${mm}:${ss}`;
 }
 
-export function formatHuman(totalSec: number): string {
+/**
+ * One human-readable duration convention for aggregate UI (never the raw
+ * "0s" placeholder that made empty History cards look technical). Zero is a
+ * real value and stays explicit; sub-minute values keep seconds; whole
+ * minutes/hours drop trailing zero units. `formatSecondsHHMMSS` remains the
+ * exact clock convention for per-video timelines.
+ */
+export function formatDuration(totalSec: number): string {
   assertSafeNonNegativeInt(totalSec, 'totalSec');
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  return s === 0 ? '0m' : `${s}s`;
+}
+
+/** Backwards-compatible name used throughout the existing UI. */
+export function formatHuman(totalSec: number): string {
+  return formatDuration(totalSec);
 }
 
 /** Sessions needed to cover totalSec with sessionLenSec chunks. */

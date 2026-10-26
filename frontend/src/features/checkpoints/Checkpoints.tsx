@@ -5,6 +5,7 @@ import { useStore } from '../../app/store.js';
 import { promptDialog } from '../../components/ui/dialog.js';
 import { notify } from '../../services/notifications/notify.js';
 import { Card, Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
+import { NumberField } from '../../components/ui/NumberField.js';
 
 export function Checkpoints() {
   const s = useStore();
@@ -35,8 +36,8 @@ export function Checkpoints() {
         <h2 className="text-base font-bold">New checkpoint <span className="font-normal text-slate-400">(any valid range in 1–{N})</span></h2>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Field label="Label"><input className={inputCls} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={`Videos ${a}–${b}`} /></Field>
-          <Field label="Start"><input type="number" className={inputCls} min={1} max={N} value={a} onChange={(e) => setA(Number(e.target.value))} /></Field>
-          <Field label="End"><input type="number" className={inputCls} min={1} max={N} value={b} onChange={(e) => setB(Number(e.target.value))} /></Field>
+          <NumberField label="Start" value={a} min={1} max={N} live={false} onCommit={(v) => { if (v !== null) setA(v); }} />
+          <NumberField label="End" value={b} min={1} max={N} live={false} onCommit={(v) => { if (v !== null) setB(v); }} />
           <div className="flex items-end"><Btn variant="primary" onClick={create}><Plus size={14} /> Add</Btn></div>
         </div>
         {err && <p className="mt-1 text-sm text-red-300">{err}</p>}

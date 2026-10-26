@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Play, ListVideo, Clapperboard, ChartLine, BookOpen, Target, CheckCircle2,
   Timer as TimerIcon, Gauge, Swords, RefreshCw, History, BarChart3, Settings as SettingsIcon,
@@ -7,23 +7,73 @@ import {
 import { useStore } from './store';
 import { checkApiHealth } from '../services/api/playlistApi';
 import { PlaylistSwitcher, Onboarding } from '../features/playlists/Playlists';
-import { Dashboard } from '../features/dashboard/Dashboard';
-import { Library } from '../features/playlists/Library';
 import { Player } from '../features/player/Player';
-import { Analytics } from '../features/analytics/Analytics';
 import { Modules } from '../features/modules/Modules';
 import { Goals } from '../features/goals/Goals';
 import { Checkpoints } from '../features/checkpoints/Checkpoints';
-import { Focus } from '../features/focus/Focus';
-import { Efficiency } from '../features/efficiency/Efficiency';
-import { Competition } from '../features/competition/Competition';
-import { Revision } from '../features/revision/Revision';
-import { HistoryView } from '../features/history/History';
-import { Reports } from '../features/reports/Reports';
 import { Settings } from '../features/settings/Settings';
 import { Notifier } from '../components/layout/Notifier';
 import { DialogHost } from '../components/ui/dialog';
 import type { Tab } from './tabs';
+
+// Chart-heavy screens are split out so the initial shell stays small.
+const Dashboard = lazy(() => import('../features/dashboard/Dashboard').then((m) => ({ default: m.Dashboard })));
+const Library = lazy(() => import('../features/playlists/Library').then((m) => ({ default: m.Library })));
+const Analytics = lazy(() => import('../features/analytics/Analytics').then((m) => ({ default: m.Analytics })));
+const Efficiency = lazy(() => import('../features/efficiency/Efficiency').then((m) => ({ default: m.Efficiency })));
+const HistoryView = lazy(() => import('../features/history/History').then((m) => ({ default: m.HistoryView })));
+const Focus = lazy(() => import('../features/focus/Focus').then((m) => ({ default: m.Focus })));
+const Competition = lazy(() => import('../features/competition/Competition').then((m) => ({ default: m.Competition })));
+const Revision = lazy(() => import('../features/revision/Revision').then((m) => ({ default: m.Revision })));
+const Reports = lazy(() => import('../features/reports/Reports').then((m) => ({ default: m.Reports })));
+
+function SectionLoading() {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-sm text-slate-400" role="status">
+      Loading section…
+    </div>
+  );
+}
+
+export class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // The local database is never touched here. Surfacing the error beats a
+    // blank screen; reload restores from IndexedDB without data loss.
+    console.error('LearnQuest UI error:', error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="mx-auto max-w-2xl p-6">
+        <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/10 p-5 text-slate-100">
+          <h1 className="text-lg font-bold">Something went wrong in this view</h1>
+          <p className="mt-1 text-sm text-slate-300">
+            Your learning data is stored locally and was not deleted. Reload to reopen it; export a backup from
+            Reports if the problem repeats.
+          </p>
+          <p className="mt-2 break-words font-mono text-[11px] text-red-200">{this.state.error.message}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
+          >
+            Reload LearnQuest
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
 
 interface NavItem {
   id: Tab;
@@ -75,13 +125,17 @@ function tabFromHash(): Tab {
   return (ALL_IDS.has(h as Tab) ? h : 'dash') as Tab;
 }
 
-export default function App() {
+function AppInner() {
   const s = useStore();
   const [tab, setTab] = useState<Tab>(() => tabFromHash());
   const [drawer, setDrawer] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lq-nav-collapsed') === '1');
   const [health, setHealth] = useState<{ ok: boolean; hasKey: boolean }>({ ok: false, hasKey: false });
   const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     checkApiHealth().then(setHealth);
@@ -125,23 +179,90 @@ export default function App() {
     localStorage.setItem('lq-nav-collapsed', collapsed ? '1' : '0');
   }, [collapsed]);
 
-  // lock body scroll + Escape handling for the drawer
+  // Mobile header height drives sticky offsets (Revision toolbar/scroll).
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const update = () => {
+      const h = Math.max(0, Math.round(el.getBoundingClientRect().height));
+      document.documentElement.style.setProperty('--lq-mobile-header-h', `${h}px`);
+    };
+    update();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', update);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+
+  // Lock body scroll, trap focus inside the drawer, mark the page inert, and
+  // restore focus to the opener. A drawer must never leak Tab into the page.
   useEffect(() => {
     if (!drawer) return;
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : menuBtnRef.current;
+    const background = Array.from(document.querySelectorAll<HTMLElement>('[data-app-background]'));
+    for (const el of background) el.setAttribute('inert', '');
+    const focusTimer = window.setTimeout(() => closeBtnRef.current?.focus(), 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
         setDrawer(false);
-        menuBtnRef.current?.focus();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const root = drawerRef.current;
+      if (!root) return;
+      const focusable = Array.from(root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((el) => el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
       }
     };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
+      window.clearTimeout(focusTimer);
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
+      for (const el of background) el.removeAttribute('inert');
+      previousFocus.current?.focus?.();
     };
   }, [drawer]);
+
+  if (s.loadError) {
+    // A failed read is not an empty database. The store deliberately refuses to
+    // start the writer in this state, so retrying cannot lose existing records.
+    return (
+      <div className="mx-auto max-w-2xl p-6 text-slate-200">
+        <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5">
+          <h1 className="text-lg font-bold">Could not open your local learning data</h1>
+          <p className="mt-2 text-sm text-slate-300">{s.loadError}</p>
+          <p className="mt-2 text-xs text-slate-400">
+            Nothing was overwritten and no defaults were saved. If this persists, open LearnQuest in the same browser
+            profile (private windows cannot see the original IndexedDB), or restore a JSON backup after fixing browser storage.
+          </p>
+          <button
+            type="button"
+            onClick={s.retryLoad}
+            className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
+          >
+            Retry read
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!s.ready) {
     return (
@@ -212,9 +333,13 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#0b0e1a] bg-[radial-gradient(ellipse_at_top,rgba(124,58,237,0.18),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.08),transparent_60%)]">
+    <div
+      data-reduced-motion={s.prefs.reducedMotion ? 'true' : 'false'}
+      className="min-h-screen bg-[#0b0e1a] bg-[radial-gradient(ellipse_at_top,rgba(124,58,237,0.18),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.08),transparent_60%)]"
+    >
       {/* Desktop sidebar */}
       <aside
+        data-app-background
         className={`fixed bottom-0 left-0 top-0 z-30 hidden flex-col border-r border-white/10 bg-[#0d1122]/95 backdrop-blur transition-[width] lg:flex ${
           collapsed ? 'w-[68px]' : 'w-60'
         }`}
@@ -248,7 +373,7 @@ export default function App() {
       </aside>
 
       {/* Mobile header */}
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0b0e1a]/90 backdrop-blur lg:hidden">
+      <header ref={headerRef} data-app-background className="sticky top-0 z-20 border-b border-white/10 bg-[#0b0e1a]/90 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2 px-3 py-2.5">
           <button
             ref={menuBtnRef}
@@ -279,6 +404,7 @@ export default function App() {
         <div className="fixed inset-0 z-40 lg:hidden" role="presentation">
           <div className="absolute inset-0 bg-black/60" onClick={() => setDrawer(false)} />
           <div
+            ref={drawerRef}
             role="dialog"
             aria-modal="true"
             aria-label="Menu"
@@ -288,6 +414,7 @@ export default function App() {
               <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
               <p className="mr-auto text-sm font-bold">LearnQuest</p>
               <button
+                ref={closeBtnRef}
                 onClick={() => {
                   setDrawer(false);
                   menuBtnRef.current?.focus();
@@ -305,7 +432,7 @@ export default function App() {
       )}
 
       {/* Content */}
-      <div className={collapsed ? 'lg:pl-[68px]' : 'lg:pl-60'}>
+      <div data-app-background className={collapsed ? 'lg:pl-[68px]' : 'lg:pl-60'}>
         <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
           {!snap && <Onboarding onGo={(t) => go(t)} />}
           {s.lastDiff && (
@@ -326,20 +453,22 @@ export default function App() {
               Active playlist: <span className="text-slate-300">{displayTitle}</span> · N={snap.entries.length} · {snap.source} · fetched {new Date(snap.fetchedAt).toLocaleString()}
             </p>
           )}
-          {tab === 'dash' && <Dashboard />}
-          {tab === 'learn' && <Library />}
-          {tab === 'player' && <Player />}
-          {tab === 'analytics' && <Analytics />}
-          {tab === 'modules' && <Modules />}
-          {tab === 'goals' && <Goals />}
-          {tab === 'checks' && <Checkpoints />}
-          {tab === 'focus' && <Focus />}
-          {tab === 'efficiency' && <Efficiency />}
-          {tab === 'competition' && <Competition />}
-          {tab === 'revise' && <Revision />}
-          {tab === 'history' && <HistoryView />}
-          {tab === 'reports' && <Reports />}
-          {tab === 'settings' && <Settings />}
+          <Suspense fallback={<SectionLoading />}>
+            {tab === 'dash' && <Dashboard />}
+            {tab === 'learn' && <Library />}
+            {tab === 'player' && <Player />}
+            {tab === 'analytics' && <Analytics />}
+            {tab === 'modules' && <Modules />}
+            {tab === 'goals' && <Goals />}
+            {tab === 'checks' && <Checkpoints />}
+            {tab === 'focus' && <Focus />}
+            {tab === 'efficiency' && <Efficiency />}
+            {tab === 'competition' && <Competition />}
+            {tab === 'revise' && <Revision />}
+            {tab === 'history' && <HistoryView />}
+            {tab === 'reports' && <Reports />}
+            {tab === 'settings' && <Settings />}
+          </Suspense>
         </main>
 
         <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] text-slate-600">
@@ -349,5 +478,13 @@ export default function App() {
       <Notifier />
       <DialogHost />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppInner />
+    </AppErrorBoundary>
   );
 }

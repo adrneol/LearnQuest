@@ -5,9 +5,9 @@ export function Card({ children, className = '' }: { children: React.ReactNode; 
 }
 
 export function Btn({
-  children, onClick, variant = 'ghost', className = '', type = 'button', disabled,
+  children, onClick, variant = 'ghost', className = '', type = 'button', disabled, title,
 }: {
-  children: React.ReactNode; onClick?: () => void; variant?: 'primary' | 'ghost' | 'danger'; className?: string; type?: 'button' | 'submit'; disabled?: boolean;
+  children: React.ReactNode; onClick?: () => void; variant?: 'primary' | 'ghost' | 'danger'; className?: string; type?: 'button' | 'submit'; disabled?: boolean; title?: string;
 }) {
   const base = 'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] disabled:opacity-50';
   const styles =
@@ -17,7 +17,7 @@ export function Btn({
         ? 'bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25'
         : 'bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200';
   return (
-    <button type={type} disabled={disabled} onClick={onClick} className={`${base} ${styles} ${className}`}>
+    <button type={type} disabled={disabled} title={title} onClick={onClick} className={`${base} ${styles} ${className}`}>
       {children}
     </button>
   );

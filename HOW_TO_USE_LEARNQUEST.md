@@ -100,8 +100,16 @@ kept separately and never mixed.
   coverage (default 90%, adjustable 50–100% in Settings) the video flips to
   **✓ verified**. Refreshing mid-playback ends verification honestly — no
   background time is ever credited.
+- **Player learning record** — the card below the player edits that exact
+  playlist occurrence: confidence (1–5), revision date, notes, key concepts,
+  open questions, and code/exercise/example evidence. It autosaves after a
+  short pause and flushes before you switch videos; saving never marks the
+  video complete or verified. This persistent record is separate from the
+  pause-note above, which belongs to the current playback session.
 - **History tab** lists every session with verified vs self-reported labels,
   per-video segment details, and a self-reported entry form for older history.
+  Every statistic, the session list, and per-video detail obey the selected
+  range; an empty range says so explicitly instead of presenting fake zeroes.
 
 ### Duration, repeats, and unique content
 A 20-minute video plus notes, pauses, and practice is more than 20 minutes
@@ -118,9 +126,10 @@ progress; seeking never credits skipped spans.
   start/stop) are applied on finish.
 - Set a daily target plus a **minimum-viable** fallback (10 focused minutes
   still counts); **Set goal** saves it.
-- If the page reloads or the browser sleeps mid-session, the running timer
-  is lost — finished history is never rewritten. Record what you actually
-  studied instead; interrupted time is never invented.
+- If the page reloads or the browser sleeps mid-session, the timer is
+  recovered **paused at its last saved tick**; time while the page was closed
+  is never counted. Resume to continue, or finish to record what was actually
+  observed. Hiding the tab also pauses automatically.
 
 ## C. Organizing learning
 
@@ -158,14 +167,32 @@ until you confirm them.
 Lessons enter the **Revision** queue when flagged **needs revision**
 (Player, Library table, or the position box on the Revision screen), rated
 confidence 1–2, given a revision date, or left with open questions.
-- **Filters:** all / low confidence / open exercises / questions / overdue.
+- **Sticky toolbar:** the find field, jump button, and filters stay below the
+  app header while you scroll a long queue.
+- **Find and jump:** type a lesson position (`50`, `050`) or part of a title,
+  then press **Enter** or **Jump**. The matching card scrolls into view below
+  the sticky header, highlights briefly, and receives focus. A jump that would
+  be hidden by the current filter explains why and clears that filter.
+- **Scope:** **Revision queue** shows only current review signals. **All
+  lessons** browses every playlist entry — including reviewed lessons and
+  entries with no record — and adds a **Reviewed** filter. Search always
+  covers the whole playlist, so a lesson that left the queue stays findable
+  with its notes intact.
+- **Filters:** all / low confidence / open exercises / questions / overdue,
+  with a visible filtered count and inline errors for missing lessons. An
+  absent `exerciseDone` value is not treated as an unfinished exercise.
 - **Overdue** means the revision date is a past calendar day in your display
   timezone (today is not overdue; malformed dates are never treated as due).
 - Each card holds confidence (1–5), revision date, notes, key concepts,
   questions, and evidence checkboxes (code reproduced, exercise done, built
   example).
-- **Mark revised** clears the flag, records the review, and awards one XP
-  reward per lesson per day — repeated clicks never double-award.
+- **Mark revised** clears the current flag and revision date, appends a dated
+  review, and awards one XP reward per lesson per day — repeated clicks never
+  double-award or duplicate history. Notes, concepts, questions, confidence,
+  and completion evidence are preserved.
+- A lesson can legitimately show both **Reviewed on …** (history) and **Needs
+  revision** (current work); the UI explains this instead of hiding either
+  state. Notes and key concepts alone never keep a lesson in the queue.
 - An empty queue ("Queue clear") means nothing currently needs review — not
   a broken feature. Only your actions create entries; nothing is pre-filled.
 
@@ -263,20 +290,33 @@ network, no real leaderboard.
 
 ## H. Backup, restore, and data safety
 
-- **Download:** Reports → **Backup JSON** (everything, versioned v2).
+- **Download:** Reports → **Backup JSON** (everything, schema v3).
   Store the file yourself — there is no cloud copy.
-- **Restore:** Reports → **Restore backup** (validates first; v2 restores v1
-  backups too) or **Import snapshot JSON** (single playlist metadata).
+- **Restore:** Reports → **Restore backup** validates the complete file first;
+  v3 restores v2/v1 backups too. You are offered a fresh pre-restore JSON
+  download before anything is replaced. The restore is all-or-nothing, and
+  **Import snapshot JSON** handles single-playlist metadata separately.
   Malformed files are rejected with row-level messages; restores never
   half-apply.
-- **CSV exports** carry playlist/position identity and current values.
+- **CSV exports** carry stable playlist/entry identity and current values;
+  text beginning with formula characters is escaped for spreadsheets.
 - **Clear cached metadata (keep progress)** drops playlist snapshots only
-  (re-add to refetch). **Clear ALL data** (two-step confirm) deletes
-  everything locally — export a backup first.
+  (re-add to refetch). **Clear ALL data** (two-step confirm) deletes all
+  learning data **and resets preferences** locally — export a backup first.
+  Pending debounced writes are drained before the clear, so old state cannot
+  reappear.
+- **Remove playlist** deletes that playlist's progress, sessions, playback
+  segments, saved ranges, checkpoints, modules, revision-queue entries, and
+  scoped goals together; other playlists are untouched.
 - If a save ever fails (e.g. browser storage full), the app shows one
   actionable backup notice instead of failing silently; your in-memory
-  session data stays available until you back it up. Concurrent tabs are
-  last-writer-wins — prefer one tab for recording.
+  session data stays available until you back it up. A failed database **read**
+  shows a retry screen and never initializes defaults over existing data.
+  Concurrent tabs are last-writer-wins — prefer one tab for recording.
+- The only `localStorage` values are device-local UI preferences
+  (`lq-nav-collapsed`), the interrupted-focus recovery snapshot
+  (`lq-focus-timer-v1`), and the one-time storage notice; they never leave
+  the device.
 - Practical habit: export a backup weekly (or before playlist refreshes and
   major cleanups) and keep two recent copies.
 
@@ -290,7 +330,7 @@ network, no real leaderboard.
 | Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production: `VITE_API_BASE_URL` must be the exact Render origin on the Vercel **Production** env (no trailing slash, no `/api` suffix) followed by a redeploy; `CORS_ORIGIN` on Render must exactly match the Vercel origin |
 | Refresh fails | Retry Refresh active — failures never poison the cache or delete progress |
 | Unresolved videos | Expected for deleted/private/region-blocked items; totals stay incomplete-labeled |
-| Focus session lost to reload/sleep | By design only finished sessions persist; record a History self-reported entry for the real study |
+| Focus session lost to reload/sleep | Reopen Focus: a snapshot is recovered **paused**. Time while the page was closed is never counted; resume or finish what was actually observed, or record a History self-reported entry |
 | Day-boundary numbers look off | Re-check the display timezone and its live UTC offset; cross-midnight sessions split across both days |
 | Revision/goal status unexpected | Compare its date against today's date in the selected timezone; check filters (e.g. overdue vs all) |
 | Changes missing after reload | Don't use private/incognito windows; check disk space; restore the latest backup |

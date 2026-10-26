@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Plus, Trash2, Pencil, ChevronUp, ChevronDown } from 'lucide-react';
-import { validateRange, sumEntries, formatSecondsHHMMSS } from '../../domain/index.js';
+import { validateRange, sumEntries, formatSecondsHHMMSS, buildEntryProgressIndex, isProgressComplete } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { promptDialog } from '../../components/ui/dialog.js';
 import { notify } from '../../services/notifications/notify.js';
@@ -109,7 +109,8 @@ export function Modules() {
       {mods.map((m, idx) => {
         const entries = snap.entries.filter((e) => m.positions.includes(e.position));
         const sum = sumEntries(entries);
-        const done = m.positions.filter((p) => s.progress[`${snap.playlistId}::${p}`]?.completedAt).length;
+        const progressIndex = buildEntryProgressIndex(snap, s.progress);
+        const done = m.positions.filter((p) => isProgressComplete(progressIndex.get(p))).length;
         return (
           <Card key={m.id}>
             <div className="flex flex-wrap items-center gap-2">

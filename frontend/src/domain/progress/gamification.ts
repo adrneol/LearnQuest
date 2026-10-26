@@ -1,5 +1,3 @@
-import type { StudySession } from '../../types/index.js';
-
 // Transparent deterministic scoring. Documented in README + UI.
 export const XP_RULES: Record<string, number> = {
   videoDone: 10,

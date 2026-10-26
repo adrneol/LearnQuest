@@ -123,7 +123,6 @@ describe('frontend performance budgets (measured, not estimated)', () => {
     const tChart = performance.now() - t3;
 
     // Record actuals for the audit doc; budgets are generous sanity rails.
-    // eslint-disable-next-line no-console
     console.log(`scale N=1000: filter=${tFilter.toFixed(1)}ms sort=${tSort.toFixed(1)}ms range=${tRange.toFixed(1)}ms chart=${tChart.toFixed(1)}ms`);
     expect(chart).toHaveLength(N);
     expect(tFilter).toBeLessThan(500);

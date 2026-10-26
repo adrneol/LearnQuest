@@ -7,6 +7,8 @@ export interface PlaybackSegment {
   playlistId: string;
   /** 1-indexed playlist position (duplicates stay distinct) */
   position: number;
+  /** Stable playlist occurrence identity (see progress/identity.ts). */
+  entryId?: string;
   videoId: string;
   sessionId: string;
   /** UTC epoch ms wall clock */
@@ -76,9 +78,20 @@ export function summarizeSegments(segments: PlaybackSegment[]): CoverageSummary 
   return { uniqueSec, totalContentSec, activeSec, rewatchedSec: Math.max(0, totalContentSec - uniqueSec) };
 }
 
+/** Coverage from player-observed evidence only. */
+export function summarizeVerifiedSegments(segments: PlaybackSegment[]): CoverageSummary {
+  return summarizeSegments(segments.filter((s) => s.source === 'verified'));
+}
+
+/** Coverage from self-reported/manual evidence only. */
+export function summarizeManualSegments(segments: PlaybackSegment[]): CoverageSummary {
+  return summarizeSegments(segments.filter((s) => s.source === 'manual'));
+}
+
 /**
  * Completion from coverage. `threshold` 0.5–1 (default 0.9): uniqueSec/durationSec.
- * Manual override always wins when present but is labelled manual, never verified.
+ * `manualDone` must only be supplied for a record whose stored source is manual
+ * (or explicitly manual); verified coverage is never inferred from self-report.
  */
 export function completionFromCoverage(
   uniqueSec: number,
@@ -86,11 +99,12 @@ export function completionFromCoverage(
   opts: { threshold?: number; manualDone?: boolean; needsRevision?: boolean; unavailable?: boolean } = {},
 ): CompletionState {
   if (opts.unavailable || durationSec === null) return 'unavailable';
-  if (opts.manualDone) return opts.needsRevision ? 'needs-revision' : 'manual';
+  if (opts.needsRevision) return 'needs-revision';
   const t = Math.min(1, Math.max(0.5, opts.threshold ?? 0.9));
-  if (durationSec <= 0) return 'todo';
+  if (durationSec <= 0) return opts.manualDone ? 'manual' : 'todo';
   const ratio = uniqueSec / durationSec;
   if (ratio >= t) return 'verified';
+  if (opts.manualDone) return 'manual';
   if (uniqueSec > 0) return 'in-progress';
   return 'todo';
 }

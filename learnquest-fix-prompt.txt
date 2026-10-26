@@ -1,0 +1,574 @@
+# LearnQuest — Senior Engineer Full Remediation and UX Quality Pass
+
+## Mission
+
+Act as a senior software engineer responsible for making LearnQuest reliable, correct, convenient, accessible, and maintainable.
+
+This is an **implementation task**, not another audit-only task. Inspect the current repository, reconcile it with the previous audit findings below, implement the justified fixes, add regression tests, run verification, and produce a detailed Markdown implementation report.
+
+The project is a local-first learning tracker with a React/Vite/TypeScript frontend, an Express/TypeScript YouTube metadata proxy, IndexedDB persistence, a domain calculation engine, and features for playlist progress, Focus sessions, Revision, goals, checkpoints, Analytics, Efficiency, Arena, History, exports, and Settings. Verify the current implementation instead of assuming the historical description is still accurate.
+
+I have also identified specific UX problems:
+1. The Revision page's queue/header and controls scroll away, making it inconvenient to work through a long list.
+2. When a lesson near position 50 needs revision, locating its fields requires excessive scrolling. Add a direct navigation/search/filter workflow.
+3. Several numeric fields display leading zeros such as `019` instead of `19`.
+4. The Focus module needs a thorough functional review, not merely cosmetic changes.
+5. There may be other small, inconsistent, broken, or inconvenient behaviors that the previous audit did not identify.
+
+**Implement the fixes. Do not stop after describing them.**
+
+---
+
+## 1. Safety, repository, and execution rules
+
+Before changing anything:
+
+- Inspect `git status`, the current branch, HEAD, and existing diffs.
+- Inspect the previous audit if it exists in the repository. The full findings are also reproduced in this prompt.
+- Inventory the actual source, manifests, scripts, tests, and configuration.
+- Run safe baseline tests and type checks where practical.
+- Use a task checklist to track findings from discovery through implementation and validation.
+
+Preserve all pre-existing user changes. In particular, do not overwrite or delete `learnquest-audit-prompt.txt`, `learnquest-fix-prompt.txt`, other untracked files, existing work, or existing reports.
+
+Never use `git reset --hard`, `git clean`, destructive checkout operations, or other commands that discard user work. Do not automatically stash, revert, or clean the repository. Do not commit, push, or change branches.
+
+Do not clear browser storage, reset real user data, or perform a live migration against real learning records. Implement migrations in code and verify them using isolated fixtures and tests.
+
+Do not perform real YouTube API requests, quota-consuming tests, or destructive production operations as part of verification.
+
+Do not ask me to approve every phase. Complete the work using the repository, this specification, established behavior, and conservative engineering decisions. Where business rules are ambiguous, use existing documentation and UI wording as evidence, preserve data, and document the chosen behavior.
+
+Do not pretend that a test passed when it was skipped, unavailable, or merely inferred from source inspection.
+
+### Environment-file permission
+
+You are explicitly permitted to inspect, create, or modify environment files and their values when a genuine implementation requirement makes that necessary.
+
+However:
+
+- Do not create an `.env` file by default.
+- Do not create environment files if the fixes work without them.
+- Prefer validated existing configuration and sensible defaults where appropriate.
+- Never invent API keys, credentials, or other secrets.
+- Never overwrite existing secrets or expose their values in the final report.
+- If an environment-file change is genuinely necessary, record the exact file, variables changed, purpose, and verification in the final Markdown report. Also state explicitly in the short terminal summary that the environment file was changed.
+- If a required secret is unavailable, do not fabricate one; document the limitation and implement appropriate validation and error handling.
+
+---
+
+## 2. Establish regression protection before remediation
+
+Add or strengthen tests before changing critical state and calculation logic.
+
+Use the installed test tools where practical. The previous audit reported 174 frontend tests, 18 backend tests, passing type checks, passing production builds, missing effective lint validation, and no established Playwright end-to-end suite.
+
+Verify the current baseline independently.
+
+Tests must cover real domain behavior, state transitions, persistence boundaries, UI interactions, and regressions. Do not rely exclusively on pure calculation tests.
+
+For every High-severity finding, add a regression test that fails against the original defect when practical and passes after remediation.
+
+Use isolated IndexedDB fixtures and existing browser/testing tools. Add a dependency only when it is justified, necessary, and recorded in the implementation report.
+
+Keep production builds and test artifacts outside the repository where practical. Never delete existing generated files to obtain a clean result.
+
+---
+
+## 3. Data integrity: fix all High-severity findings
+
+### LQ-001 — Progress identity follows the wrong video after playlist changes
+
+Previous finding: progress is keyed by playlist position, such as `playlistId::position`, rather than a reliable video identity.
+
+Inspect `frontend/src/domain/progress/progress.ts`, `frontend/src/app/store.tsx`, playlist snapshot handling, XP/achievement deduplication, and every downstream consumer.
+
+Implement a stable identity and migration strategy that:
+
+- Prevents a completion from silently transferring to a different video after reordering, insertion, deletion, or refresh.
+- Handles duplicate occurrences of the same YouTube video in one playlist intentionally.
+- Reconciles existing progress with stored `videoId` values.
+- Flags mismatches for review rather than transferring completion blindly.
+- Preserves user-authored annotations and historical records.
+- Keeps Dashboard, Library, Reports, Checkpoints, Goals, Analytics, Arena, Revision, and XP consistent.
+- Remains backwards-compatible with existing IndexedDB data and older backups.
+
+Do not simply replace every position key with a video ID and discard the distinction between duplicate occurrences.
+
+Add tests for reordered playlists, insertion, deletion, duplicate video IDs, legacy records, refresh, and migration.
+
+### LQ-002 — Backup restore is unvalidated and non-atomic
+
+Previous finding: restore accepts arbitrary JSON, partially merges keys, ignores important validation, and can leave mixed old/new state.
+
+Implement a versioned backup schema and a genuine restore process.
+
+Requirements:
+
+- Validate the complete backup and all nested data before altering state.
+- Validate key types, timestamps, IDs, cross-record references, and collection limits.
+- Reject unsupported or malformed schemas with clear errors.
+- Make restore semantics explicit and consistent with UI wording.
+- Do not silently retain omitted keys when the operation promises a full restore.
+- Stage the restored state, then apply it atomically.
+- Prefer a single IndexedDB transaction or an equivalent all-or-nothing persistence boundary.
+- Update React state only after the restore has committed successfully.
+- Preserve all state if validation or persistence fails.
+- Offer a safe pre-restore backup/recovery path.
+- Provide clear error information without exposing sensitive content.
+
+Test complete backups, missing fields, malformed timestamps, invalid nested records, unsupported versions, partially valid data, storage failures, and backwards-compatible migration.
+
+Do not test by replacing my actual browser database.
+
+### LQ-003 — Focus session timestamps are synthetic
+
+Previous finding: session start time is reconstructed from active seconds, which loses real pauses and can misattribute activity across midnight.
+
+Audit the Focus timer from start through pause, resume, finish, persistence, reload, and history/analytics calculations.
+
+Preserve actual wall-clock start and finish times. Represent active and paused intervals sufficiently to make duration and day-attribution behavior accurate.
+
+Ensure:
+
+- Active duration excludes pauses.
+- Wall-clock duration includes elapsed pauses.
+- Start and finish timestamps remain real timestamps.
+- Repeated clicks cannot double-finish a session or award XP repeatedly.
+- Tab switching, browser visibility changes, reloads, and unmounting do not create phantom time.
+- Cross-midnight attribution is consistent.
+- Invalid timer state cannot corrupt saved sessions.
+- Historical sessions can still be displayed after a compatible migration.
+
+Add deterministic fake-clock tests for start, pause, resume, repeated pause/resume, finish, cross-midnight work, invalid state, reload/recovery, and duplicate completion.
+
+### LQ-004 — Manual and verified playback evidence are conflated
+
+Previous finding: manual segments can contribute to verified coverage, and verified records can receive manual-completion labels.
+
+Enforce evidence provenance throughout the domain, store, player, history, analytics, efficiency, goals, Arena, and exports.
+
+Only genuine player-observed evidence may contribute to verified completion. Manual entries must remain clearly identified as manual; verified completion must not be inferred from self-reported time.
+
+Do not destroy legitimate manual history. Distinguish verified metrics from manual or estimated metrics wherever necessary.
+
+Ensure the threshold calculation remains correct, partial coverage remains partial, and labels agree with stored evidence.
+
+Test mixed evidence, overlapping segments, repeated playback, seeking, completion thresholds, manual-only history, and verified-record labels.
+
+### LQ-005 — Unmarking completion destroys annotations
+
+Previous finding: marking or unmarking replaces/deletes the whole progress record and loses notes, confidence, revision dates, exercise flags, questions, and other learning metadata.
+
+Change completion actions to patch only the relevant completion fields.
+
+Preserve all unrelated annotations and ensure the result survives persistence and reload. Handle any dependent XP/achievement reversal or idempotency consistently with the existing rules; never silently grant duplicate rewards.
+
+Test every annotation field across mark, unmark, reload, and re-mark operations.
+
+### LQ-006 — Invalid session length can crash the application
+
+Previous finding: a session length of zero can reach a calculation that throws and blank the app.
+
+Add centralized validation at input boundaries, state updates, and persistence restoration.
+
+Reject or normalize zero, negative, non-finite, empty, and unreasonable values appropriately. Provide inline feedback and prevent invalid settings from being persisted.
+
+Add an application-level error boundary with a usable recovery state. A render failure must not leave an unexplained blank screen.
+
+Test invalid and boundary values in Settings, Reports, Focus, Library, and any other component using session planning. Verify the app remains usable after failure.
+
+### LQ-007 — Imported playlist snapshots accept invalid structure
+
+Previous finding: non-contiguous positions and `NaN` reported counts can pass validation.
+
+Validate snapshot schema, entry positions, IDs, duplicate video IDs, duration shapes, finite non-negative counts, timestamps, and the maximum supported size.
+
+Reject invalid snapshots or normalize incomplete information explicitly. Do not invent missing videos or durations. Incomplete metadata must remain visibly incomplete.
+
+Test gaps, duplicate positions, duplicate video IDs, NaN/infinite counts, invalid timestamps, empty playlists, and oversized snapshots.
+
+---
+
+## 4. Remediate the other audit findings
+
+Inspect the cited source areas and fix the following problems. These IDs refer to the prior audit; they are not permission to make blind changes without inspecting current code.
+
+### Backend, persistence, and calculations
+
+- **LQ-008:** Canonicalize backend playlist-cache keys so one playlist does not consume duplicate LRU entries unnecessarily.
+- **LQ-009:** Make the selected History date range consistently govern every associated statistic, session list, and per-video detail. Label intentionally all-time metrics explicitly.
+- **LQ-010:** Centralize the completion predicate so CSV exports, filters, counts, and UI labels do not treat any progress key as completed.
+- **LQ-011:** Correct Arena percentile calculations so scored and provisional competitors are handled according to the documented rule.
+- **LQ-012:** Do not declare an efficiency trend meaningful merely because two fixed-length arrays contain zero-filled days. Base eligibility on actual observations and document the rule.
+- **LQ-013:** Define open-ended goal semantics clearly and prevent pre-creation events from counting toward a goal intended to track activity since creation.
+- **LQ-014:** Classify upstream YouTube errors correctly. Do not repeatedly retry authentication/authorization errors; maintain appropriate retry behavior for retryable quota, transient, timeout, and server failures.
+- **LQ-015:** Repair proxy-aware rate limiting for the actual deployment topology. Trust forwarded client IP headers only through a documented trusted proxy configuration. Test separate client buckets and spoof resistance.
+- **LQ-016:** Improve unresolved playlist-item reason detection where evidence exists. Do not invent a cause for missing metadata.
+- **LQ-017:** Ensure “Refresh active” refreshes the actual active playlist regardless of text in an unrelated add/import field. Separate Add and Refresh responsibilities.
+- **LQ-018:** Centralize playback interval attribution so cross-midnight sessions are allocated correctly without double-counting unique coverage.
+- **LQ-019:** Use consistent timezone/day attribution for Focus goals, Dashboard, Analytics, Efficiency, streaks, and Arena.
+- **LQ-020:** Fix the Revision exercise filter so an absent `exerciseDone` field is not automatically treated as an explicitly unfinished exercise.
+- **LQ-021:** Define playlist-removal behavior and implement it consistently. The current UI implies progress is deleted, but dependent sessions, segments, queue entries, and goals can survive. Use safe, well-defined cascade or archive semantics and avoid resurrecting stale data after re-import.
+- **LQ-022:** Restrict module reordering to the relevant playlist.
+- **LQ-023:** Format Arena window/date labels using the selected timezone instead of implicitly using the host timezone.
+- **LQ-024:** Validate manual playback timeline bounds against the video duration and construct dates according to the selected timezone.
+- **LQ-025:** Prevent empty or zero-duration playlists from appearing 100% complete or showing a false “Course complete” state.
+- **LQ-026:** Fix Clear All behavior so preferences reset according to its stated semantics and pending debounced writes cannot restore stale state afterward.
+- **LQ-029:** Inspect stored preferences/options that are disconnected from behavior. Implement useful intended settings such as reduced motion, or remove dead options through a compatible change. Do not leave visible controls that do nothing.
+- **LQ-030:** Add sensible timeouts/cancellation and error recovery to frontend API calls, allow retry after failed YouTube IFrame API loading, and release player resources/listeners on unmount.
+- **LQ-034:** Validate numeric environment variables and reject NaN, infinite, and out-of-range configuration values at startup with clear errors.
+- **LQ-035:** Reconcile reported playlist counts, entry counts, size caps, and snapshot/schema versioning. Prevent avoidable quota usage for playlists known to exceed the supported limit.
+- **LQ-039:** Resolve the `local` timezone sentinel consistently to the device's actual IANA timezone. Validate free-text timezones and prevent different views from using UTC and device-local dates for the same preference.
+
+### Security, maintainability, and quality gates
+
+- **LQ-027:** Fix misleading lint scripts ending in `|| exit 0`. Ensure lint actually runs and fails on violations. If ESLint is missing, add a justified, properly configured setup and update lockfiles.
+- **LQ-031:** Investigate and remediate the reported high-severity `body-parser@1.20.8` advisory using the smallest compatible safe dependency update. Avoid indiscriminate upgrades.
+- **LQ-032:** Review the public unauthenticated playlist endpoint and abuse risk. Choose behavior compatible with the current product/deployment, preserve necessary frontend access, and strengthen rate limiting, quotas, and documentation. Do not introduce breaking authentication without a justified design.
+- **LQ-033:** Protect CSV exports from spreadsheet formula injection. Evaluate an appropriate frontend CSP and local-storage privacy disclosure without breaking Vite assets, YouTube embeds, or the backend API.
+- **LQ-036:** Add regression coverage at critical integration boundaries, especially store actions, IndexedDB, restore/import, Focus, History, playback evidence, proxy limits, and Arena scoring.
+- **LQ-037:** Correct mobile drawer/dialog keyboard behavior: focus entry, focus trap, accessible labeling, Escape handling, inert background where appropriate, and focus restoration.
+- **LQ-038:** Correct dropdown keyboard navigation, including opening, moving through options, selection, Escape, correct focus/active-option state, and accessible semantics.
+
+Also investigate the unnumbered audit risk: a failed IndexedDB read can be interpreted as empty/default data and potentially lead to existing data being overwritten. Distinguish read failure from an empty database and provide a safe recovery path.
+
+### LQ-028 — Build and documentation consistency
+
+Update stale README, audit, and setup claims after the real verification results are known.
+
+The previous frontend build produced a large JavaScript bundle with a chunk-size warning. Measure the updated build and use low-risk code splitting for heavy tabs/charts where justified. Do not refactor architecture solely for theoretical performance gains.
+
+---
+
+## 5. Revision module: a genuine usability improvement
+
+The current Revision page contains a queue heading, explanatory text, position entry, filters, and repeated lesson cards. When a user scrolls through many lessons, the upper controls move out of view, and finding lesson 50 or another specific lesson becomes unnecessarily difficult.
+
+Inspect the complete Revision implementation, routing, styling, queue calculations, persistence, and surrounding layout before changing it.
+
+### A. Persistent, compact queue controls
+
+Keep a compact Revision toolbar visible while scrolling the lesson list, positioned beneath the app's actual navigation/header.
+
+The toolbar should remain usable without covering inputs, cards, or navigation. Respect viewport heights, responsive layouts, reduced-motion preferences, stacking contexts, and the app's actual scrolling structure.
+
+Do not create an unnecessary nested scroll area or a huge sticky panel that consumes most of the viewport.
+
+Keep the visual design consistent with LearnQuest's existing dark/glass-like theme. Do not replace the established design system unnecessarily.
+
+### B. Add direct lesson search and jump-to-lesson
+
+Provide a clearly labeled input to find a lesson by its playlist position or title.
+
+Examples:
+
+- Entering `50` should navigate to lesson 50.
+- Searching `Variables` should find matching lesson titles.
+- Entering a position and pressing Enter should perform the same action as the jump button.
+- A direct position field should not confuse numeric input with free-text search.
+
+When a match exists:
+
+1. Bring the corresponding Revision card into view.
+2. Use an appropriate sticky-header offset so the lesson heading is not hidden.
+3. Temporarily highlight the destination card.
+4. Move focus to a useful field or accessible destination without stealing focus unexpectedly.
+5. Preserve the current filter state unless a filter prevents navigation to the target.
+
+If the target is excluded by the active filter, clearly explain why and provide a convenient way to clear or adjust that filter.
+
+If a position is invalid or does not exist, show a clear inline message rather than silently doing nothing.
+
+### C. Improve the existing filters
+
+Inspect the existing filters: all, low, todo-ex, questions, and overdue.
+
+Ensure each filter has clear semantics and returns the correct lessons, including edge cases for missing fields, review dates, confidence, and completed revision records.
+
+Provide the user with useful information such as the filtered result count. Keep existing queue prioritization unless testing identifies a specific defect.
+
+Verify that marking a lesson revised updates its flag, review history, queue membership, and persistence correctly.
+
+### D. Make lesson review convenient
+
+Ensure each lesson has usable notes, key concepts, revision date, confidence, questions, exercise status, code reproduction status, built-example status, and review action.
+
+Do not wipe user annotations through completion or revision operations.
+
+Consider a compact or collapsed card presentation only if the current layout becomes unwieldy. Keep the core editing controls accessible and keyboard-friendly.
+
+Add tests for search, direct navigation, filters, unavailable targets, Enter activation, sticky behavior where the browser test setup supports it, review persistence, and annotation preservation.
+
+---
+
+## 6. Numeric fields: eliminate unwanted leading zeros
+
+Across the application, inspect numeric inputs and controlled-value formatting. The user has observed inputs displaying values such as `019` instead of `19` across several areas.
+
+Find the actual cause in the current implementation instead of applying a superficial string replacement.
+
+Normalize numeric display and saved values consistently for genuine numeric fields, including values for session length, checkpoints, ranges, goals, Focus settings, positions, durations, thresholds, or other numeric controls discovered in the repository.
+
+Requirements:
+
+- A value entered as `019` should display/save as `19` once editing is complete.
+- `000` should normalize to `0` where zero is valid.
+- Empty inputs should remain empty during editing; do not turn a temporarily empty field into zero while the user is typing.
+- Support valid integer or decimal input as appropriate for each field.
+- Maintain correct min/max constraints, step rules, and validation messages.
+- Avoid updating a controlled field so aggressively on every keystroke that typing becomes impossible.
+- Prefer normalization on blur, commit, or another sensible boundary.
+- Preserve intentional string identifiers, date/time formats, IDs, and any other values where leading zeros are semantically meaningful.
+- Do not silently round legitimate decimal inputs or turn invalid values into unrelated numbers.
+- Never allow invalid numeric state to reach domain calculations or persistence.
+- Keep the UI formatting consistent without breaking accessibility or cursor position.
+
+Add reusable helpers/components only where they provide a clear improvement. Avoid unnecessary abstraction.
+
+Add tests covering leading zeros, empty values, zero, negative values where invalid, decimals, min/max values, editing state, blur/commit behavior, and persistence. Verify the affected fields through the UI rather than checking only a helper function.
+
+---
+
+## 7. Focus module: a complete functional audit and repair
+
+Do not assume Focus works merely because its controls render or its domain tests pass.
+
+Trace the complete user workflow:
+
+1. Select a playlist and lesson.
+2. Configure session length, targets, and relevant preferences.
+3. Start focus.
+4. Pause and resume multiple times.
+5. Use break/rest behavior if present.
+6. Finish, cancel, or abandon a session.
+7. Navigate away and return.
+8. Reload or recover from interruption where supported.
+9. Inspect saved session history and Focus statistics.
+10. Verify XP, achievements, goals, streaks, and analytics after completion.
+
+Test all relevant edge cases:
+
+- Zero and invalid session length.
+- Rapid repeated start/pause/resume/finish clicks.
+- Timer interval duplication and cleanup.
+- Background tab and visibility changes.
+- Midnight boundaries and timezone changes.
+- Pause duration versus active focus duration.
+- Session completion and persistence ordering.
+- Duplicate XP or achievement awards.
+- Finished and interrupted sessions.
+- Stored invalid sessions and legacy data.
+- Goal progress consistency with Dashboard, History, Efficiency, and Arena.
+- Clock changes where reproducible.
+
+Use fake clocks and isolated data for deterministic tests. Add browser tests using the existing test setup where feasible.
+
+Fix the root causes, not just the displayed symptoms. Establish one defensible source of truth for active duration, wall-clock intervals, and daily attribution. Preserve the historical data model through safe migrations.
+
+---
+
+## 8. Search for other broken or inconvenient behavior
+
+The listed issues are a minimum scope, not a ceiling.
+
+Perform a systematic, evidence-based review of all existing screens, forms, interactions, calculations, and data boundaries.
+
+Inspect at least:
+
+- Dashboard
+- Library and playlist analysis
+- Player
+- Analytics
+- Modules
+- Goals
+- Checkpoints
+- Focus
+- Efficiency
+- Arena
+- Revision
+- History
+- Reports
+- Settings
+- Backend API and persistence/import-export flows
+
+Look for:
+
+- Incorrect calculations or stale displays.
+- Input values that don't match the actual saved values.
+- Buttons that do nothing or trigger the wrong action.
+- Broken or inconsistent filters.
+- Confusing navigation and unnecessary scrolling.
+- Loading states that never finish.
+- Missing cancellation, retry, or recovery behavior.
+- Data loss caused by toggles, deletions, or edits.
+- Incorrect empty states and boundary conditions.
+- Inconsistent date/time and timezone behavior.
+- Broken keyboard navigation, focus, labels, or responsive layouts.
+- Unnecessary duplicate requests or state updates.
+- Unvalidated assumptions between frontend and backend.
+- Dead settings, duplicate logic, and stale documentation.
+- Regressions in existing working functionality.
+
+For each newly found issue, establish a reproducible case or source-level evidence, fix it if within scope and safe, and add a regression test where appropriate. Do not invent problems or rewrite unrelated code simply to increase the number of changes.
+
+---
+
+## 9. Implement in safe phases
+
+Use the following sequence. Continue autonomously unless blocked by a genuine external dependency or missing secret.
+
+### Phase 0 — Baseline and regression protection
+
+- Inspect the current state.
+- Record existing test outcomes and build results.
+- Add targeted regression tests.
+- Identify all changes that require a schema migration.
+- Preserve existing user work and backups.
+
+### Phase 1 — Core data integrity
+
+Fix progress identity, annotation preservation, manual/verified evidence, versioned backup restore, snapshot validation, preference validation, zero-length crashes, Focus timestamps, and timezone normalization.
+
+### Phase 2 — Calculations and persistence consistency
+
+Fix History filters, completion predicates, Arena scoring, trend eligibility, goal boundaries, playlist removal, module ordering, cross-midnight attribution, cache behavior, retries, environment validation, and read/write recovery.
+
+### Phase 3 — Revision, Focus, and interface usability
+
+Implement the persistent Revision toolbar and direct lesson navigation, consistent numeric formatting, Focus workflow repairs, empty/error/recovery states, and keyboard accessibility.
+
+### Phase 4 — Backend and security
+
+Address proxy-aware rate limiting, the known dependency advisory, endpoint abuse resistance, CSV formula injection, relevant CSP configuration, upstream error classification, and configuration validation.
+
+### Phase 5 — Performance and maintainability
+
+Fix ineffective lint checks, update linting as needed, split oversized frontend chunks where justified, remove or wire dead options, update stale documentation, and improve critical-flow tests.
+
+### Phase 6 — Final validation
+
+Run tests, type checks, lint, production builds, relevant browser/interaction checks, dependency audit, migration tests, and regression scenarios.
+
+Fix failures caused by your changes. If unrelated existing failures appear, compare them with the baseline and report them accurately.
+
+Do not claim production deployment, live YouTube tests, screen-reader tests, or other checks that were not performed.
+
+---
+
+## 10. Environment, dependencies, and configuration policy
+
+Inspect the current `.env`, `.env.example`, deployment configuration, package manifests, and lockfiles as needed.
+
+Do not manufacture environment files as a routine step. Create or modify them only when an implementation requirement genuinely needs it. My permission to change environment files is explicit, but their creation is conditional on necessity.
+
+Do not print API keys or existing secret values into terminal output, generated Markdown, or logs. If a required secret is absent, report it instead of inventing one.
+
+When changing dependencies:
+
+- Make the smallest compatible update that resolves the demonstrated problem.
+- Keep package manifests and lockfiles synchronized.
+- Avoid indiscriminate major upgrades or unrelated dependency churn.
+- Run the relevant tests and dependency audit after changes.
+- Explain any dependency that must remain vulnerable, why it remains, and the mitigation.
+
+Do not introduce deployment-breaking authentication or configuration requirements without evidence that the product needs them. Maintain the existing local-first architecture and necessary frontend-to-backend functionality.
+
+---
+
+## 11. Acceptance criteria
+
+The work is not complete until the following applicable criteria are met.
+
+### Data and calculations
+
+- Playlist refresh/reorder cannot silently move a completion to the wrong video.
+- User-authored notes and revision annotations survive completion toggles and persistence.
+- Invalid restore data cannot partially overwrite learning state.
+- Manual evidence cannot become verified evidence.
+- Focus durations and timestamps remain coherent through pauses, reloads where supported, and cross-midnight sessions.
+- Invalid session length cannot blank the app.
+- Invalid snapshot data cannot corrupt playlist totals and ranges.
+- History filters, goals, Efficiency, Arena, streaks, and XP use consistent rules.
+- Empty playlists are not reported as complete.
+- Playlist removal and Clear All have explicit, correct semantics.
+- Device-local timezone behavior is consistent across features.
+
+### Revision UX
+
+- The queue controls remain conveniently accessible while scrolling.
+- A user can find a lesson by title or position and navigate directly to its Revision card.
+- Navigation works with the keyboard as well as the mouse.
+- Filters are accurate and visibly understandable.
+- Missing targets and empty results have clear feedback.
+- Review actions preserve annotations and persist properly.
+
+### Inputs and Focus
+
+- Integer fields do not retain unwanted leading zeros after editing.
+- Numeric inputs remain typeable and validate at commit.
+- Focus start, pause, resume, finish, and recovery behave consistently.
+- XP and other side effects cannot be duplicated by repeated actions.
+- Focus and daily reports agree on the relevant time attribution.
+
+### Quality gates
+
+- Critical flows have regression tests.
+- Tests and type checks pass, or any remaining failures are clearly isolated and documented.
+- Lint actually runs and reports its real result.
+- Production builds succeed.
+- The dependency audit has been rerun after relevant updates.
+- Relevant responsive and keyboard interactions are verified.
+- Existing configuration and user data are preserved.
+- No claimed check is fabricated.
+
+---
+
+## 12. Required implementation report — Markdown only
+
+At the end of implementation, create this file:
+
+`docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md`
+
+Create `docs/audits/` only if it does not already exist. Do not overwrite an existing report; choose a unique dated/suffixed filename if necessary.
+
+The report must be detailed enough to review the implementation without relying on the terminal transcript.
+
+Include:
+
+1. Executive summary.
+2. Baseline state and branch/HEAD information.
+3. Every prior finding ID LQ-001 through LQ-039, with status: Fixed, Partially Fixed, Not Fixed, or Not Applicable.
+4. Newly discovered bugs and their severity.
+5. Exact root causes and implementation choices.
+6. Files changed and the reason for each group of changes.
+7. Data migration, backup, and backwards-compatibility behavior.
+8. Revision navigation/filter UX changes and validation.
+9. Numeric input normalization behavior and regression tests.
+10. Focus workflow behavior, timestamp model, and test results.
+11. Backend, security, dependency, and environment-file changes.
+12. Tests, lint, type checks, production builds, and audit results with actual command outcomes.
+13. Responsive, keyboard, accessibility, and browser checks actually completed.
+14. Remaining limitations, unverified behavior, and justified deferrals.
+15. Manual verification steps for me, if any.
+16. Final Git status and a summary of existing versus new changes.
+
+Distinguish baseline defects from regressions introduced during implementation. Do not mislabel partial fixes as complete or use the word “fixed” without evidence.
+
+If any finding cannot be fully resolved, explain the remaining issue and the concrete blocker. Do not hide or suppress genuine failures to claim success.
+
+Keep the report organized and evidence-based. Save the report to the Markdown file rather than printing its entire contents in the terminal.
+
+## Final instruction
+
+Implement the work, test it, create the Markdown implementation report, and stop.
+
+When finished, print **only a concise terminal summary** containing:
+
+- The report path.
+- The number of findings fixed, partially fixed, and not fixed.
+- The final test/typecheck/lint/build status.
+- Whether any environment files were created or modified.
+- Any critical blocker requiring my attention.
+
+Do not dump the full audit, the entire diff, or the full Markdown report into the terminal. Do not commit or push changes. Do not stop at planning or analysis: implement all safe, justified fixes before reporting completion.

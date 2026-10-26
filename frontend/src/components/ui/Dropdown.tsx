@@ -68,9 +68,36 @@ export function Dropdown({ value, options, onChange, label, disabled, error }: P
         aria-labelledby={`dd-label-${slug}`}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
-          if ((e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') && !open) {
+          if (!open) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setOpen(true);
+            }
+            return;
+          }
+          // Combobox pattern: focus stays on the trigger, the active option is
+          // announced through the listbox and committed with Enter/Space.
+          if (e.key === 'ArrowDown') {
             e.preventDefault();
-            setOpen(true);
+            setActive((i) => Math.min(options.length - 1, i + 1));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActive((i) => Math.max(0, i - 1));
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            setActive(0);
+          } else if (e.key === 'End') {
+            e.preventDefault();
+            setActive(Math.max(0, options.length - 1));
+          } else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            const option = options[active];
+            if (option) pick(option.value);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setOpen(false);
+          } else if (e.key === 'Tab') {
+            setOpen(false);
           }
         }}
         className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-left text-sm text-slate-100 hover:border-white/25 disabled:opacity-50"

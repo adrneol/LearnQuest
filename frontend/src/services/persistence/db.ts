@@ -20,13 +20,13 @@ function db(): Promise<IDBPDatabase> {
   return dbp;
 }
 
+/**
+ * Read one key. A storage read failure is NOT an empty database: it rejects so
+ * callers can stop before defaults overwrite existing data.
+ */
 export async function kvGet<T>(key: string): Promise<T | undefined> {
-  try {
-    const d = await db();
-    return (await d.get(STORE, key)) as T | undefined;
-  } catch {
-    return undefined;
-  }
+  const d = await db();
+  return (await d.get(STORE, key)) as T | undefined;
 }
 
 export async function kvSet(key: string, value: unknown): Promise<void> {
@@ -52,4 +52,28 @@ export async function kvDump(): Promise<Record<string, unknown>> {
     out[String(k)] = await d.get(STORE, k);
   }
   return out;
+}
+
+/**
+ * All-or-nothing replacement of the whole key/value store. A restore either
+ * commits every validated key in one IndexedDB transaction or leaves the
+ * previous state untouched.
+ */
+export async function kvReplaceAll(data: Record<string, unknown>): Promise<void> {
+  const d = await db();
+  const tx = d.transaction(STORE, 'readwrite');
+  try {
+    const store = tx.objectStore(STORE);
+    await store.clear();
+    for (const [key, value] of Object.entries(data)) {
+      await store.put(value, key);
+    }
+  } catch (err) {
+    // A failed put (for example, a non-cloneable value) must roll back the
+    // clear and every write before it, not just reject after committing them.
+    try { tx.abort(); } catch { /* already aborted/finished */ }
+    try { await tx.done; } catch { /* expected AbortError */ }
+    throw err;
+  }
+  await tx.done;
 }

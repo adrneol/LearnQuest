@@ -6,13 +6,17 @@ import {
   type Tier,
 } from '../../domain/index.js';
 import { initialsOf } from '../../domain/competition/aliases.js';
-import { summarizeSegments, eligibleDailyEfficiencies, dateKeyInTimezone, attributeFocusByDay } from '../../domain/index.js';
+import {
+  summarizeSegments, eligibleDailyEfficiencies, attributeFocusByDay,
+  splitPlaybackSegmentByDay, segmentIdentityKey, buildEntryProgressIndex, isProgressComplete,
+} from '../../domain/index.js';
 import type { PlaybackSegment } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
 import { confirmDialog } from '../../components/ui/dialog.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
-import { Card, Btn, Field, inputCls, Empty } from '../../components/ui/ui.js';
+import { NumberField } from '../../components/ui/NumberField.js';
+import { Card, Btn, inputCls, Empty } from '../../components/ui/ui.js';
 
 /** Ranking is FIXED: average daily content efficiency. No metric selector. */
 
@@ -47,29 +51,42 @@ export function Competition() {
     const tz = s.prefs.timezone;
     const keys: string[] = windowDatesKey.split(',').filter(Boolean);
     const segs = s.segments.filter((x) => x.playlistId === pid);
+    // Split playback evidence at local midnight instead of trusting start day.
+    const segsByDay = new Map<string, PlaybackSegment[]>();
+    for (const seg of segs) {
+      for (const slice of splitPlaybackSegmentByDay(seg, tz)) {
+        const arr = segsByDay.get(slice.dateKey) ?? [];
+        arr.push(slice.segment);
+        segsByDay.set(slice.dateKey, arr);
+      }
+    }
+    // Focus attributed by the authoritative interval splitter (cross-midnight
+    // sessions contribute to both days; pauses excluded at record time).
+    const focusByDay = attributeFocusByDay(s.sessions.filter((x) => x.playlistId === pid), tz);
     const table = keys.map((dateKey) => {
-      const daySegs = segs.filter((x) => dateKeyInTimezone(new Date(x.wallStartMs), tz) === dateKey);
       const byKey = new Map<string, PlaybackSegment[]>();
-      for (const x of daySegs) {
-        const k = `${x.playlistId}::${x.position}`;
+      for (const x of segsByDay.get(dateKey) ?? []) {
+        const k = segmentIdentityKey(x);
         const arr = byKey.get(k) ?? [];
         arr.push(x);
         byKey.set(k, arr);
       }
       let unique = 0;
       for (const arr of byKey.values()) unique += summarizeSegments(arr).uniqueSec;
-      // focus attributed by the authoritative interval splitter (cross-midnight
-      // sessions contribute to both days; pauses excluded at record time)
-      const focus = attributeFocusByDay(
-        s.sessions.filter((x) => x.playlistId === pid),
-        tz,
-      ).get(dateKey) ?? 0;
+      const focus = focusByDay.get(dateKey) ?? 0;
       return { dateKey, uniqueSec: Math.round(unique), focusSec: focus };
     });
     const dailyEffs = eligibleDailyEfficiencies(table);
     const unique = table.reduce((a, t) => a + t.uniqueSec, 0);
     const focus = table.reduce((a, t) => a + t.focusSec, 0);
-    const verified = Object.values(s.progress).filter((p) => p.playlistId === pid && p.source === 'verified' && p.completedAt).length;
+    // Only current occurrences with completed verified evidence count.
+    const index = snap ? buildEntryProgressIndex(snap, s.progress) : new Map();
+    const verified = snap
+      ? snap.entries.filter((e) => {
+        const rec = index.get(e.position);
+        return isProgressComplete(rec) && rec?.source === 'verified';
+      }).length
+      : 0;
     return { dailyEffs, table, unique, verified, focus, days: new Set(table.filter((t) => t.focusSec > 0).map((t) => t.dateKey)).size };
   }, [s.segments, s.sessions, s.progress, snap, s.prefs.timezone, windowDatesKey]);
 
@@ -162,23 +179,39 @@ export function Competition() {
               Window: {anchorDates[0]} → {anchorDates[anchorDates.length - 1]} · each eligible day counts once · Efficiency page shows the aggregate ratio instead — same records, different question.
             </p>
             <div className="mt-2 grid gap-2 sm:grid-cols-4">
-              <Field label="Cohort size incl. you (10–2000)">
-                <input type="number" min={10} max={2000} value={cfg.cohortSize} onChange={(e) => s.setChallenge({ cohortSize: Number(e.target.value) })} className={inputCls} />
-              </Field>
-              <Field label="Max rival study per day (hours, 1–12)">
-                <input
-                  type="number" min={1} max={12} step={0.5}
-                  value={cfg.dailyCapHours}
-                  onChange={(e) => s.setChallenge({ dailyCapHours: Math.min(12, Math.max(1, Number(e.target.value) || 6)) })}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Seed (stable ranks)">
-                <input type="number" value={cfg.seed} onChange={(e) => s.setChallenge({ seed: Number(e.target.value) })} className={inputCls} />
-              </Field>
-              <Field label="Window (days)">
-                <input type="number" min={1} max={90} value={cfg.windowDays} onChange={(e) => s.setChallenge({ windowDays: Number(e.target.value) })} className={inputCls} />
-              </Field>
+              <NumberField
+                label="Cohort size incl. you (10–2000)"
+                value={cfg.cohortSize}
+                min={10}
+                max={2000}
+                live={false}
+                onCommit={(v) => { if (v !== null) s.setChallenge({ cohortSize: v }); }}
+              />
+              <NumberField
+                label="Max rival study per day (hours, 1–12)"
+                value={cfg.dailyCapHours}
+                min={1}
+                max={12}
+                integer={false}
+                live={false}
+                onCommit={(v) => { if (v !== null) s.setChallenge({ dailyCapHours: v }); }}
+              />
+              <NumberField
+                label="Seed (stable ranks)"
+                value={cfg.seed}
+                min={0}
+                max={1_000_000_000}
+                live={false}
+                onCommit={(v) => { if (v !== null) s.setChallenge({ seed: v }); }}
+              />
+              <NumberField
+                label="Window (days)"
+                value={cfg.windowDays}
+                min={1}
+                max={90}
+                live={false}
+                onCommit={(v) => { if (v !== null) s.setChallenge({ windowDays: v }); }}
+              />
             </div>
             <p className="mt-1 text-[11px] text-slate-500">
               Daily cap = fictional activity ceiling only (default 6 h): an Ultra rival at 110% covers at most 6.6 h of
@@ -195,9 +228,16 @@ export function Competition() {
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
               {TIERS.map((t) => (
-                <Field key={t} label={`${t} %`}>
-                  <input type="number" min={0} max={100} value={cfg.tierDist[t]} onChange={(e) => setTier(t, Number(e.target.value))} className={inputCls} />
-                </Field>
+                <NumberField
+                  key={t}
+                  label={`${t} %`}
+                  value={cfg.tierDist[t]}
+                  min={0}
+                  max={100}
+                  integer={false}
+                  live={false}
+                  onCommit={(v) => { if (v !== null) setTier(t, v); }}
+                />
               ))}
             </div>
             <p className="mt-1 text-[11px] text-slate-500">

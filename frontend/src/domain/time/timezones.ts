@@ -72,7 +72,19 @@ const LEGACY_LINKS: Record<string, string[]> = {
   'Asia/Yangon': ['Asia/Rangoon'],
 };
 
+/** The device's actual IANA zone (never the `local` sentinel). */
+export function deviceTimeZone(): string {
+  try {
+    const z = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (z && isValidTimezone(z)) return z;
+  } catch {
+    /* fall through */
+  }
+  return 'UTC';
+}
+
 export function isValidTimezone(tz: string): boolean {
+  if (typeof tz !== 'string' || !tz || tz.length > 100) return false;
   if (tz === 'local') return true;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
@@ -82,9 +94,14 @@ export function isValidTimezone(tz: string): boolean {
   }
 }
 
-/** Resolve a canonical zone to one this runtime supports (canonical first). */
+/**
+ * Resolve a canonical zone to one this runtime supports (canonical first).
+ * `local` resolves to the device's IANA zone so every Intl call and stored
+ * label uses one consistent zone instead of silently falling back to UTC.
+ */
 export function supportedZone(tz: string): string {
-  if (tz === 'local' || tz === 'UTC') return tz;
+  if (tz === 'local') return deviceTimeZone();
+  if (tz === 'UTC') return tz;
   if (isValidTimezone(tz)) return tz;
   for (const legacy of LEGACY_LINKS[tz] ?? []) {
     if (isValidTimezone(legacy)) return legacy;

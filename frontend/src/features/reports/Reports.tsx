@@ -1,11 +1,17 @@
 import { useRef, useState } from 'react';
-import { Plus, RefreshCw, Download, Upload, Trash2, Settings2, EllipsisVertical, Search } from 'lucide-react';
-import { computePlaylistProgress, rangeDuration, computeRangeProgress, toCsv, XP_RULES, snapshotCompleteness } from '../../domain/index.js';
+import { Plus, RefreshCw, Download, Upload, Trash2, Settings2, EllipsisVertical, Search, AlertTriangle } from 'lucide-react';
+import {
+  computePlaylistProgress, rangeDuration, computeRangeProgress, toCsv, XP_RULES, snapshotCompleteness,
+  completedEntryKeys,
+} from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { confirmDialog, promptDialog } from '../../components/ui/dialog.js';
 import { PopupShell } from '../../components/ui/popup.js';
 import { fetchPlaylistFromServer, snapshotToCsv, parseImportFile } from '../../services/api/playlistApi.js';
-import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
+import { Card, Btn, inputCls } from '../../components/ui/ui.js';
+import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
+import { NumberField } from '../../components/ui/NumberField.js';
+import { validateBackup } from '../../services/persistence/backup.js';
 
 export function Reports() {
   const s = useStore();
@@ -16,15 +22,26 @@ export function Reports() {
   const [confirmClear, setConfirmClear] = useState(false);
 
   const add = async (refresh = false) => {
+    // Add reads only the dedicated Add field; Refresh always targets the
+    // active playlist and never an unrelated URL typed into that field.
+    const target = refresh ? snap?.playlistId ?? '' : url.trim();
+    if (!target) {
+      setMsg(refresh ? 'Select an active playlist before refreshing.' : 'Enter a playlist URL or ID to add.');
+      return;
+    }
     setBusy(true);
     setMsg(null);
     try {
       // Refresh bypasses a fresh backend cache entry (`refresh=1`) so the
       // button always revalidates upstream; plain Add reuses valid cache.
-      const { snapshot, cached } = await fetchPlaylistFromServer(url || (snap ? snap.playlistId : ''), { refresh });
+      const { snapshot, cached } = await fetchPlaylistFromServer(target, { refresh });
+      if (!snapshot.entries.length) {
+        setMsg('That playlist has no accessible entries; nothing was added or marked complete.');
+        return;
+      }
       s.addSnapshot(snapshot);
-      setMsg(refresh ? `Refreshed ${snapshot.title} (N=${snapshot.entries.length}${cached ? ', served from cache' : ', fresh from YouTube'}). Progress preserved; check flagged ranges.` : `Added ${snapshot.title} (N=${snapshot.entries.length}${cached ? ' — served from cache' : ''}).`);
-      setUrl('');
+      setMsg(refresh ? `Refreshed ${snapshot.title} (N=${snapshot.entries.length}${cached ? ', served from cache' : ', fresh from YouTube'}). Progress follows video identity; check flagged ranges.` : `Added ${snapshot.title} (N=${snapshot.entries.length}${cached ? ' — served from cache' : ''}).`);
+      if (!refresh) setUrl('');
     } catch (e: any) {
       setMsg(e?.message ?? 'Fetch failed.');
     } finally {
@@ -56,7 +73,7 @@ export function Reports() {
         <div className="mt-2 flex flex-col gap-2 sm:flex-row">
           <input className={inputCls} placeholder="New playlist URL or ID" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="New playlist URL" />
           <Btn variant="primary" onClick={() => add(false)} disabled={busy || !url.trim()}><Plus size={14} /> Add</Btn>
-          <Btn onClick={() => add(true)} disabled={busy || (!url.trim() && !snap)}><RefreshCw size={14} /> Refresh active</Btn>
+          <Btn onClick={() => add(true)} disabled={busy || !snap}><RefreshCw size={14} /> Refresh active{snap ? ` (#${snap.entries.length})` : ''}</Btn>
         </div>
         {msg && <p className="mt-1 text-sm text-slate-300">{msg}</p>}
         <PlaylistTable ids={allIds} />
@@ -66,7 +83,7 @@ export function Reports() {
         <h3 className="text-sm font-bold">Exports (same verified engine as dashboard — no PDFs)</h3>
         <div className="mt-2 flex flex-wrap gap-2">
           <Btn onClick={async () => download(`learnquest-backup-${Date.now()}.json`, await s.exportBackup())}><Download size={14} /> Backup JSON</Btn>
-          <Btn disabled={!snap} onClick={() => snap && download(`${snap.playlistId}-videos.csv`, snapshotToCsv(snap, new Set(Object.keys(s.progress))))}><Download size={14} /> Videos CSV</Btn>
+          <Btn disabled={!snap} onClick={() => snap && download(`${snap.playlistId}-videos.csv`, snapshotToCsv(snap, completedEntryKeys(snap, s.progress)))}><Download size={14} /> Videos CSV</Btn>
           <Btn disabled={!snap} onClick={() => {
             if (!snap) return;
             const rows = s.sessions.map((x) => [x.id, x.playlistId ?? '', x.startedAt, x.activeSec, Math.round(x.activeSec / 60), x.note ?? '']);
@@ -91,12 +108,32 @@ export function Reports() {
             <Upload size={14} /> Restore backup
             <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
               const f = e.target.files?.[0];
+              e.target.value = '';
               if (!f) return;
               try {
-                await s.importBackup(await f.text());
-                setMsg('Backup restored and validated.');
+                const text = await f.text();
+                const check = validateBackup(text);
+                if (!check.ok) {
+                  setMsg('Restore rejected — nothing was changed. ' + check.errors.slice(0, 5).join(' '));
+                  return;
+                }
+                // Safe recovery path: download the current state before the
+                // atomic replace, then require explicit confirmation.
+                download(`learnquest-pre-restore-${Date.now()}.json`, await s.exportBackup());
+                const ok = await confirmDialog({
+                  title: 'Replace all local learning data?',
+                  body: 'The validated backup will replace every collection in one transaction. A pre-restore JSON backup was downloaded first.',
+                  confirmLabel: 'Restore',
+                  danger: true,
+                });
+                if (!ok) {
+                  setMsg('Restore cancelled; current data was not changed.');
+                  return;
+                }
+                const result = await s.importBackup(text);
+                setMsg('Backup restored and validated.' + (result.warnings.length ? ' ' + result.warnings.join(' ') : ''));
               } catch (err: any) {
-                setMsg('Restore failed: ' + (err?.message ?? 'invalid file'));
+                setMsg('Restore failed; current data was preserved. ' + (err?.message ?? 'Invalid file.'));
               }
             }} />
           </label>
@@ -116,15 +153,19 @@ export function Reports() {
         </div>
       </Card>
 
+      <OrphanReview />
+
       <Card>
         <h3 className="flex items-center gap-1.5 text-sm font-bold"><Settings2 size={15} /> Preferences</h3>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <Field label="Timezone (streaks & day reset)">
-            <input className={inputCls} value={s.prefs.timezone} onChange={(e) => s.setPrefs({ timezone: e.target.value })} placeholder="e.g. Europe/Berlin" />
-          </Field>
-          <Field label="Default session (min)">
-            <input type="number" className={inputCls} value={s.prefs.sessionLenMin} min={5} onChange={(e) => s.setPrefs({ sessionLenMin: Number(e.target.value) })} />
-          </Field>
+          <TimezonePicker value={s.prefs.timezone} onChange={(tz) => s.setPrefs({ timezone: tz })} />
+          <NumberField
+            label="Default session (min)"
+            value={s.prefs.sessionLenMin}
+            onCommit={(v) => { if (v !== null) s.setPrefs({ sessionLenMin: v }); }}
+            min={1}
+            max={600}
+          />
           <label className="flex items-end gap-2 text-sm">
             <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} /> Reduce motion
           </label>
@@ -139,14 +180,61 @@ export function Reports() {
             <Btn variant="danger" onClick={() => setConfirmClear(true)}><Trash2 size={14} /> Clear ALL data…</Btn>
           ) : (
             <>
-              <span className="text-sm text-red-300">Really delete everything locally?</span>
-              <Btn variant="danger" onClick={() => { s.clearAllData(); setConfirmClear(false); }}>Yes, delete</Btn>
+              <span className="text-sm text-red-300">Really delete all learning data and reset preferences?</span>
+              <Btn variant="danger" onClick={async () => { await s.clearAllData(); setConfirmClear(false); }}>Yes, delete</Btn>
               <Btn onClick={() => setConfirmClear(false)}>Cancel</Btn>
             </>
           )}
         </div>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Records whose occurrence disappeared after a playlist change. They are
+ * preserved with all annotations, excluded from every completion count, and
+ * only removed by an explicit user action.
+ */
+function OrphanReview() {
+  const s = useStore();
+  const entries = Object.entries(s.progress).filter(([, rec]) => rec.orphaned);
+  if (entries.length === 0) return null;
+  return (
+    <Card className="border-amber-500/30">
+      <h3 className="flex items-center gap-1.5 text-sm font-bold text-amber-200"><AlertTriangle size={15} /> Playlist changes need review ({entries.length})</h3>
+      <p className="mt-1 text-xs text-slate-400">
+        These records were preserved because their video occurrence was removed or replaced. They are not counted as
+        completion for any current video. Review the notes, then delete the orphan if it is no longer useful.
+      </p>
+      <ul className="mt-2 max-h-64 space-y-1 overflow-auto text-xs">
+        {entries.map(([key, rec]) => {
+          const snap = s.playlists[rec.playlistId];
+          const entry = snap?.entries.find((e) => e.entryId === rec.entryId);
+          return (
+            <li key={key} className="flex items-start gap-2 rounded-xl bg-white/5 p-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-slate-200">
+                  {snap ? (s.meta[snap.playlistId]?.customTitle ?? snap.title) : rec.playlistId} · #{rec.position} {entry?.title ?? rec.videoId}
+                </span>
+                <span className="block truncate text-slate-500">
+                  {rec.reviewReason === 'video-mismatch' ? 'video replaced at this position' : rec.reviewReason === 'removed' ? 'removed from playlist' : 'unmatched'}
+                  {' · '}{rec.completedAt ? `completed ${new Date(rec.completedAt).toLocaleDateString()}` : 'no completion'}
+                  {rec.notes ? ` · notes: ${rec.notes}` : ''}
+                </span>
+              </span>
+              <button
+                className="shrink-0 text-slate-500 hover:text-red-300"
+                aria-label={`Delete orphaned record ${rec.videoId}`}
+                onClick={() => s.deleteProgressRecord(key)}
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
   );
 }
 
@@ -182,7 +270,7 @@ function PlaylistTable({ ids }: { ids: string[] }) {
     } else {
       const ok = await confirmDialog({
         title: `Remove "${row.p.title}"?`,
-        body: 'Progress for this playlist is deleted. Other playlists are unaffected.',
+        body: 'This playlist’s progress, sessions, playback evidence, saved ranges, checkpoints, modules, revision queue, and scoped goals are deleted. Other playlists are unaffected.',
         confirmLabel: 'Remove',
         danger: true,
       });

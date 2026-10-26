@@ -4,9 +4,28 @@
 //   (>100% possible at >1x speed; lower is NOT worse — notes/practice take time)
 //
 // playbackUtilization% = activePlaybackWallSec / eligibleFocusedSec * 100
+//   (active playback excludes pause/buffer; >100 means playback was observed
+//    without an equal amount of tracked focus, which is reported, not hidden)
 //
 // Overall efficiency is ALWAYS the aggregate ratio, NEVER the mean of daily
 // percentages (a 5-min day must not weigh equal to a 3-h day).
+
+export type EvidenceFilter = 'all' | 'verified' | 'manual';
+
+/**
+ * Focus provenance follows the Evidence selector so a "verified" figure never
+ * silently divides by a manually corrected focus session (and vice versa).
+ * Timer sessions are observed unless the user supplied a manual correction.
+ */
+export function focusMatchesEvidence(session: { estimated?: boolean }, filter: EvidenceFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'verified') return session.estimated !== true;
+  return session.estimated === true;
+}
+
+export function filterFocusByEvidence<T extends { estimated?: boolean }>(sessions: T[], filter: EvidenceFilter): T[] {
+  return sessions.filter((session) => focusMatchesEvidence(session, filter));
+}
 
 export interface EfficiencyInput {
   uniqueContentSec: number;
@@ -24,8 +43,10 @@ export function contentEfficiency(input: EfficiencyInput): number | null {
 export function playbackUtilization(activePlaybackSec: number, eligibleFocusedSec: number): number | null {
   if (!Number.isFinite(activePlaybackSec) || !Number.isFinite(eligibleFocusedSec)) return null;
   if (activePlaybackSec < 0 || eligibleFocusedSec <= 0) return null;
-  if (activePlaybackSec > eligibleFocusedSec * 1.5) return null; // inconsistent measurement
-  return Math.min(100, (activePlaybackSec / eligibleFocusedSec) * 100);
+  // Never clamp or hide a measurable ratio. Active playback can exceed focused
+  // study when a video was watched outside the Focus timer; the UI explains
+  // that state instead of presenting it as unavailable.
+  return (activePlaybackSec / eligibleFocusedSec) * 100;
 }
 
 /** Aggregate ratio over many days/sessions — the only valid "overall" figure. */
@@ -75,17 +96,24 @@ export interface TrendComparison {
   meaningful: boolean;
 }
 
-/** Compare two windows of per-session unique-content seconds. */
+/**
+ * Compare two windows of per-day unique-content seconds. Zero-filled calendar
+ * days are not observations and never make a trend "meaningful"; only finite,
+ * positive observations count toward the minimum-observation rule.
+ */
 export function compareWindows(recent: number[], previous: number[], minObs = 3): TrendComparison {
+  const observations = (a: number[]) => a.filter((v) => Number.isFinite(v) && v > 0);
+  const ro = observations(recent);
+  const po = observations(previous);
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
-  const r = sum(recent);
-  const p = sum(previous);
+  const r = sum(ro);
+  const p = sum(po);
   return {
     recent: r,
     previous: p,
     delta: r - p,
-    sampleRecent: recent.length,
-    samplePrevious: previous.length,
-    meaningful: recent.length >= minObs && previous.length >= minObs,
+    sampleRecent: ro.length,
+    samplePrevious: po.length,
+    meaningful: ro.length >= minObs && po.length >= minObs,
   };
 }
