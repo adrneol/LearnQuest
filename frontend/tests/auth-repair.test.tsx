@@ -188,6 +188,26 @@ describe('auth response boundary (MongoDB render regression)', () => {
     }
   });
 
+  it.each(['/auth/forgot', '/auth/password/reset', '/auth/password/reset/validate'])(
+    'does not expire a session for a public recovery 401 from %s',
+    async (path) => {
+      globalThis.fetch = (async () => json({ error: 'The recovery request was rejected.', code: 'INVALID_RESET_TOKEN' }, 401)) as any;
+      setCsrfToken('stale-csrf-token');
+      const expired = vi.fn();
+      window.addEventListener('lq:auth-expired', expired);
+      try {
+        await expect(apiRequest(path, {
+          method: 'POST',
+          body: { identifier: 'learner', token: 'opaque-token', newPassword: 'long enough password' },
+        })).rejects.toMatchObject({ status: 401 });
+        expect(expired).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener('lq:auth-expired', expired);
+        setCsrfToken(null);
+      }
+    },
+  );
+
   it('still reports an expired session for a 401 from an authenticated endpoint', async () => {
     globalThis.fetch = (async () => json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' }, 401)) as any;
     setCsrfToken('live-csrf-token');
@@ -243,6 +263,38 @@ describe('Google intent UI separation', () => {
   });
 });
 
+describe('password recovery notice isolation', () => {
+  it('clears and never displays a cross-tab sign-out notice on recovery screens', async () => {
+    const onClearAuthNotice = vi.fn();
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).endsWith('/api/auth/forgot')) {
+        return json({ ok: true, message: 'If an eligible account matches, a reset link will be sent.' }, 202);
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <AuthScreens
+        setup={CONFIG}
+        authError="You were signed out in another tab. Sign in again to continue."
+        onClearAuthNotice={onClearAuthNotice}
+        onPasswordLogin={vi.fn(async () => undefined)}
+        onGoogle={vi.fn(async () => undefined)}
+      />,
+    );
+
+    expect(screen.getByText(/You were signed out in another tab/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    expect(onClearAuthNotice).toHaveBeenCalled();
+    expect(screen.queryByText(/You were signed out in another tab/i)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: 'learner' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send password reset link' }));
+    expect(await screen.findByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
+    expect(screen.queryByText(/You were signed out in another tab/i)).toBeNull();
+  });
+});
+
 describe('email action links in the browser', () => {
   it('captures a reset token from the fragment, removes it from history, and posts it explicitly', async () => {
     const token = 'opaque-reset-token-abcdefghijklmnopqrstuvwxyz';
@@ -251,6 +303,7 @@ describe('email action links in the browser', () => {
     globalThis.fetch = (async (url: any, init?: any) => {
       const u = String(url);
       if (u.endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (u.endsWith('/api/auth/password/reset/validate')) return json({ ok: true, valid: true });
       if (u.endsWith('/api/auth/password/reset')) {
         calls.push({ url: u, body: JSON.parse(init.body) });
         return json(null, 204);
@@ -274,6 +327,59 @@ describe('email action links in the browser', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].body.token).toBe(token);
     expect(calls[0].body.newPassword).toBe('new correct horse battery staple');
+  });
+
+  it('shows an expired-link state without consuming or rendering the password form', async () => {
+    const token = 'opaque-expired-token-abcdefghijklmnopqrstuvwxyz';
+    window.location.hash = `#/reset-password?token=${token}`;
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (u.endsWith('/api/auth/password/reset/validate')) {
+        calls.push(u);
+        return json({ error: 'This password reset link has expired. Request a new link.', code: 'EXPIRED_RESET_TOKEN' }, 400);
+      }
+      if (u.endsWith('/api/auth/password/reset')) {
+        calls.push(u);
+        return json(null, 204);
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'This reset link has expired' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Choose a new password' })).toBeNull();
+    expect(screen.queryByLabelText('New password')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Request a new reset link' })).toBeInTheDocument();
+    expect(calls.some((u) => u.endsWith('/api/auth/password/reset'))).toBe(false);
+  });
+
+  it('does not show the password form when the validation service is unavailable', async () => {
+    const token = 'opaque-unavailable-token-abcdefghijklmnopqrstuvwxyz';
+    window.location.hash = `#/reset-password?token=${token}`;
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (u.endsWith('/api/auth/password/reset/validate')) {
+        return json({ error: 'The database is unavailable. The request was not applied; retry when the service is ready.', code: 'DATABASE_UNAVAILABLE' }, 503);
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'We could not check this reset link' })).toBeInTheDocument();
+    expect(screen.getByText(/Nothing was changed/i)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Choose a new password' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Try checking again' })).toBeInTheDocument();
   });
 
   it('does not verify an email on page load; it requires the explicit button POST', async () => {

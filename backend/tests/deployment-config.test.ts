@@ -24,7 +24,8 @@ describe('production proxy and runtime configuration', () => {
   it('pins the public Vercel origin, callback, API origin, and two proxy hops in render.yaml', () => {
     const yaml = readFileSync(resolve(root, 'render.yaml'), 'utf8');
     expect(yaml).toContain('APP_ORIGIN');
-    expect(yaml).toContain('https://learn-quest-one.vercel.app');
+    expect(yaml).toMatch(/key:\s*APP_ORIGIN\s*\n\s*value:\s*https:\/\/learn-quest-one\.vercel\.app/);
+    expect(yaml).toMatch(/key:\s*NODE_ENV\s*\n\s*value:\s*production/);
     expect(yaml).toContain('CORS_ORIGIN');
     expect(yaml).toContain('GOOGLE_REDIRECT_URI');
     expect(yaml).toContain('https://learn-quest-one.vercel.app/api/auth/google/callback');

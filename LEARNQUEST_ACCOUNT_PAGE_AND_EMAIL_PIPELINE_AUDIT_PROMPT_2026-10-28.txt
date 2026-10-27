@@ -1,0 +1,409 @@
+# LEARNQUEST — ACCOUNT PAGE ISOLATION, EMAIL DELIVERY, AUTHENTICATION SECURITY, AND FINAL BUG AUDIT
+
+Repository: `E:\progressGameTracker`
+
+Branch: `main`
+
+Frontend: `https://learn-quest-one.vercel.app`
+
+Render backend: `https://learnquest-hhiv.onrender.com`
+
+Latest reports:
+- `docs/user-doc/audit2/13_LEARNQUEST_MONGODB_TLS_RECHECK_2026-10-28.md`
+- `docs/user-doc/audit2/14_LEARNQUEST_MONGODB_STARTUP_RECOVERY_2026-10-28.md`
+- `docs/user-doc/audit2/README.md`
+
+## EXECUTION POLICY — MAXIMUM EFFORT
+
+Use the strongest available DeepSeek model and the `#max` reasoning variant wherever supported. Preserve maximum reasoning effort for additional agent calls when supported.
+
+Inspect the current Git status, diffs, existing files, and audit reports before modifying anything. Continue the existing implementation; do not rebuild the project from scratch.
+
+MongoDB connectivity has reportedly started working again. Verify its current status with the existing safe diagnostic before assuming the problem remains or changing configuration.
+
+Preserve current source changes, user data, environment variables, secrets, and audit history.
+
+Never print credentials, database URIs, API keys, passwords, session tokens, reset tokens, or complete sensitive exception messages.
+
+Do not commit, push, reset, clean, stash, switch branches, or discard existing work.
+
+Do not delete real accounts, run destructive database operations, perform an unapproved migration, or change production configuration without explicit owner control.
+
+Do not merely change the UI to hide errors. Reproduce the defects, locate their root causes, implement real fixes, and run regression tests.
+
+Do not stop after planning or writing an audit. Execute every locally possible phase.
+
+## PHASE 1 — VERIFY THE LATEST DATABASE STATE WITHOUT DAMAGING DATA
+
+Before changing application behavior, verify the current MongoDB connection using the existing diagnostic.
+
+From `backend/`, use the current supported Node runtime and the existing read-only diagnostic script.
+
+Confirm whether the driver connects and successfully executes `ping`. If it still fails, classify the actual error without exposing secrets. Do not change credentials, URI, or TLS verification speculatively.
+
+If connectivity is restored, inspect the remaining application behavior carefully before starting the normal server, because startup may resume legitimate pending account-deletion jobs.
+
+Do not run migrations, legacy-collection retirement, or account deletion as a test.
+
+Preserve the existing legacy/unified storage setting. Do not change the authoritative storage configuration merely to simplify this task.
+
+Record whether live MongoDB connectivity was genuinely verified, not merely whether a local server starts.
+
+## PHASE 2 — MAKE THE ACCOUNT PAGE A TRULY SEPARATE PAGE
+
+### Observed defect
+
+The user opened Account → Profile, but the screen still includes the global top header showing:
+
+- The active playlist title.
+- Playlist metadata and video count.
+- Last-fetched timestamp.
+- The active-playlist context row immediately above the Account section.
+
+This makes Account appear to be embedded inside the playlist/dashboard workspace rather than a separate account-management destination.
+
+The previous implementation reportedly created hash-routed pages such as:
+
+- `#/account/profile`
+- `#/account/settings`
+- `#/account/security`
+
+However, the screenshot demonstrates that important playlist-specific shell content still leaks into Account pages.
+
+### Required architecture
+
+Inspect the actual React application shell, hash routing, header components, sidebar, playlist state, and account components.
+
+Implement a genuinely separated Account layout or route.
+
+When the current route matches an Account page:
+
+- Do not render the active-playlist title/header.
+- Do not render the playlist metadata row.
+- Do not render the active-playlist information banner.
+- Do not render dashboard-only onboarding or playlist-creation content.
+- Do not reserve vertical space for hidden playlist metadata.
+- Do not display Account as a tab inside a playlist-specific dashboard view.
+- Do not let an active playlist change the Account page's heading, layout, or content.
+
+The Account route should have its own clear page hierarchy and responsive layout. Keep shared application navigation where it remains appropriate, but strictly separate account management from the playlist workspace.
+
+The user should be able to navigate directly to an Account URL, reload it, use browser back/forward, and access Profile, Account Settings, and Security & Sessions without playlist content appearing above or inside the page.
+
+Keep the current LearnQuest design system, typography, glass-style cards, and spacing where appropriate. Improve focus management, semantic headings, keyboard accessibility, contrast, and responsive behavior.
+
+Do not redesign unrelated parts of the application.
+
+Add regression tests that fail if playlist metadata or dashboard-only content appears on any Account route.
+
+Inspect whether the header defect also affects password recovery or other standalone routes and isolate those routes appropriately.
+
+## PHASE 3 — FIX AUTHENTICATION MESSAGE LEAKAGE BETWEEN FLOWS
+
+### Observed defect
+
+The password-reset result screen displays:
+
+"You were signed out in another tab. Sign in again to continue."
+
+At the same time, the page displays "Check your email" and explains the reset-link workflow.
+
+These messages represent different states. The stale cross-tab logout message should not leak into password-recovery, onboarding, or reset-token screens.
+
+### Required behavior
+
+Inspect:
+- `BroadcastChannel` logout synchronization.
+- Storage-event fallback behavior.
+- Shared authentication error state.
+- Hash navigation and route initialization.
+- Reset-request and reset-completion forms.
+- Authentication/session-expiry events.
+- Global error banners, notifications, and route transitions.
+
+Ensure cross-tab logout notifications remain limited to authentication states where they are relevant.
+
+When changing routes to forgot-password, request-confirmation, or reset-password:
+
+- Clear stale, unrelated authentication banners when appropriate.
+- Do not erase a genuine security error while the user is still on the relevant authentication screen.
+- Do not incorrectly restore an invalid session.
+- Do not accidentally trigger global expiry notifications for public password-recovery API calls.
+- Do not show a false successful-login or successful-delivery message.
+- Keep the user on the intended recovery route when the request succeeds.
+
+Ensure a reset link can be opened in a fresh browser context without requiring an existing authenticated session.
+
+Add regression tests for password-recovery route isolation, cross-tab logout events during recovery, expired sessions on public routes, and successful navigation back to sign-in.
+
+## PHASE 4 — AUDIT THE ENTIRE EMAIL PIPELINE
+
+The user is still not receiving password-reset emails.
+
+Do not assume this is a cosmetic problem or that sending a request means delivery succeeded.
+
+Trace the complete pipeline from the frontend to the recipient's inbox:
+
+1. The forgot-password form and submission handler.
+2. API client URL, method, request payload, cookies, CSRF, and response handling.
+3. The backend recovery endpoint.
+4. Email normalization and account lookup.
+5. Eligibility and verification checks.
+6. Secure reset-token generation, persistence, expiry, and atomic single use.
+7. Public reset-link generation.
+8. `APP_ORIGIN` and deployment-specific URL construction.
+9. HTML/plain-text email rendering.
+10. Brevo API request construction and authentication.
+11. Sender identity and transactional email permissions.
+12. Provider response parsing and error classification.
+13. Sanitized application logs.
+14. Brevo transactional logs and observable delivery status.
+15. Frontend loading, cooldown, generic confirmation, and failure states.
+16. Password-reset link routing and completion.
+
+Inspect the current code rather than assuming the earlier audit describes the exact implementation in the working tree.
+
+Search for every email send function and every call site. Verify that the actual forgot-password route invokes the intended sender and awaits its result.
+
+### Environment configuration
+
+Review the presence and validity of relevant configuration without printing values:
+
+- `BREVO_API_KEY`
+- `BREVO_SENDER_EMAIL`
+- `BREVO_SENDER_NAME`
+- `EMAIL_ACTION_HMAC_SECRET`
+- `APP_ORIGIN`
+- `API_ORIGIN`
+- `MONGODB_URI`
+- `MONGODB_DB_NAME`
+
+Use sanitized checks such as present/absent/invalid. Never output the actual API key, password, URI, token, or other secret.
+
+Inspect the current verified sender configuration. Do not invent a sender domain or assume a Gmail sender's verification status guarantees successful delivery.
+
+For production, ensure reset links use the correct public frontend origin and reach the intended reset page through the actual deployed routes. Never generate production links using localhost.
+
+For local development, use the appropriate local origin. Do not accidentally send real users a localhost recovery link.
+
+Check both the local API route and the deployed frontend-to-backend proxy if the user is testing production.
+
+The previous audit reported stale Render/Vercel deployments. Recheck the currently observed versions and endpoints separately from local behavior.
+
+### Correct response and error handling
+
+Use the appropriate response for each stage:
+- Recovery request accepted for processing.
+- Missing server configuration.
+- Provider authentication/permission rejection.
+- Provider validation rejection.
+- Network timeout.
+- Provider accepted/queued message.
+- Confirmed delivery where the provider actually supplies that evidence.
+
+Do not treat HTTP acceptance as inbox delivery.
+
+Keep account-enumeration protections: the public response should not reveal whether an address exists.
+
+For an unknown or ineligible account, do not create a usable recovery token or send a recovery message, even though the public response remains generic.
+
+If sending fails, do not report that the email was delivered. Ensure no usable reset token is left orphaned after a failure, and preserve the existing secure retry and rate-limit rules.
+
+Log only sanitized diagnostic data. Never log raw recovery tokens, passwords, email action URLs, API keys, or raw provider responses that may contain sensitive values.
+
+### Live delivery verification
+
+Automated tests alone are insufficient to prove the email works.
+
+If real Brevo credentials are already configured and a clearly owner-controlled test recipient is available from explicit test configuration, perform at most one controlled end-to-end test using an account and mailbox the owner controls.
+
+Do not select arbitrary production recipients or send messages to unrelated users. If no safe recipient is configured, complete the code and mock-based tests and document the exact manual test needed.
+
+If the real request is made, determine whether:
+- The request reached Brevo.
+- Brevo accepted or rejected it.
+- A provider message ID was returned.
+- Delivery was confirmed.
+- The email reached the inbox.
+
+If delivery cannot be observed directly, say so. Never fabricate receipt.
+
+If the application successfully submits to Brevo but the message is missing, explain how to inspect Brevo Transactional → Logs for that recipient. Distinguish queued, sent, delivered, blocked, bounced, and failed statuses according to the actual data available.
+
+Do not claim the pipeline is fixed until the actual failure point has been established.
+
+## PHASE 5 — PASSWORD RECOVERY AND CRYPTOGRAPHIC TOKEN SECURITY
+
+The previously agreed recovery design replaced numeric OTP recovery with secure single-use email action links. Preserve that design for password recovery; do not reintroduce a numeric OTP field or create an inconsistent mixture of link and code flows.
+
+Audit all remaining account verification, email verification, and authentication-related OTP functionality separately.
+
+Search the entire repository for `Math.random` and determine whether any use occurs in:
+- OTP generation.
+- Password-reset or email-change tokens.
+- Session or authentication tokens.
+- Security challenges or verification codes.
+
+Never use `Math.random` for a security-sensitive secret or authentication credential.
+
+For any active OTP-based flow that is genuinely required by the application's current design, use a cryptographically secure generator, such as Node's `crypto.randomInt` for a numeric code or `crypto.randomBytes` for opaque tokens.
+
+Any remaining OTP flow must have:
+- Appropriate entropy for the credential's purpose.
+- Secure storage, preferably a digest/HMAC rather than the raw code.
+- Short server-enforced expiry.
+- Atomic single-use consumption.
+- Strict attempt limits and rate limiting.
+- Cooldown and resend invalidation.
+- Purpose and account binding.
+- Replay prevention.
+- No tokens/codes in logs.
+- Proper error messages that do not reveal account existence.
+
+For password-reset links, keep high-entropy cryptographically random tokens, digest/HMAC storage, purpose binding, expiry, atomic single-use consumption, and invalidation of older outstanding tokens.
+
+Do not weaken the password policy. Verify Argon2id password hashing and revoke existing sessions after a successful reset.
+
+Add security tests proving that no active security flow generates tokens with `Math.random`, where the code can be tested directly.
+
+## PHASE 6 — PROFESSIONAL EMAIL DESIGN
+
+Inspect the current reset and verification email templates.
+
+Use polished, responsive HTML and equivalent plain text. Ensure the emails contain the actual secure action link, product identity, clear action instructions, and appropriate expiry and ignore-if-unrequested wording.
+
+Avoid excessive technical copy and avoid naming Brevo in the user-facing email.
+
+Do not claim the email has been delivered before there is evidence.
+
+Test that:
+- The reset link is constructed for the appropriate frontend origin.
+- HTML and text alternatives contain the same functional action URL.
+- Email content does not expose passwords, session tokens, raw HMAC secrets, or sensitive database details.
+- The link's configured expiry matches the backend.
+- The action remains single-use and is rejected after expiry or replay.
+
+## PHASE 7 — VERIFY SESSION AND ACCOUNT SECURITY
+
+Inspect the current session implementation and the newly reported account/recovery behavior.
+
+Verify:
+- A second tab in the same browser reuses a valid server-side session.
+- Signing out in one tab propagates to other same-origin tabs without transmitting credentials through the broadcast.
+- Expired/revoked sessions cannot authenticate.
+- Resetting a password invalidates all existing server sessions across devices.
+- Late responses or queued writes cannot repopulate a signed-out account.
+- Cross-tab session events do not contaminate unrelated public authentication pages.
+- Cookies do not contain playlists, progress, notes, analytics, or other learning data.
+- Account data remains scoped to the authenticated server-side identity.
+
+Use regression tests and safe fixtures. Do not claim cross-device behavior is live-tested solely from unit tests.
+
+## PHASE 8 — DATABASE AND LEARNING-DATA SAFETY
+
+The database reportedly became reachable again.
+
+Verify the actual state before making changes. Do not assume either that the connection remains unavailable or that it is permanently repaired.
+
+Preserve account data and the existing authoritative storage mode. Do not perform a migration or retire legacy collections as part of this task.
+
+Verify that password recovery, account-page routing, and session events cannot accidentally overwrite account data or initialize an empty account incorrectly.
+
+The application must:
+- Load the actual user's MongoDB-backed state.
+- Preserve existing playlists and analyses.
+- Clearly distinguish unavailable database state from a valid empty account.
+- Fail closed on failed reads and writes.
+- Never report a cloud save as successful before the server confirms it.
+- Avoid browser-only fallbacks that become a competing production source of truth.
+
+Add regression tests for account-data state preservation and the relevant request-failure behavior.
+
+## PHASE 9 — ACCESSIBILITY AND UI/UX QUALITY AUDIT
+
+Inspect all authentication, reset-link, and Account pages.
+
+Requirements:
+- Account has a genuinely isolated layout without playlist-specific header metadata.
+- Recovery state has one concise explanation and no unrelated error banner.
+- Reset-link completion has password/confirmation feedback and clear invalid/expired states.
+- Buttons have visible hover and keyboard-focus states.
+- Loading controls prevent accidental duplicate submissions.
+- Dialogs are centered, accessible, scrollable on smaller screens, and consistently styled.
+- Labels are semantic and associated with controls.
+- Layout works on desktop, tablet, and mobile.
+- No content appears below the fold without a clear reason.
+- Avoid redundant explanatory text and developer-oriented claims.
+
+Run UI tests for routing and layout, and browser-based verification if an available browser-testing setup can safely be used.
+
+Do not claim a browser test was performed if only unit tests ran.
+
+## PHASE 10 — FINAL BUG AUDIT
+
+Perform a focused audit of the current authentication and account-related code for any additional defects exposed by these repairs.
+
+Inspect:
+- Account page and routing.
+- Login and Google onboarding.
+- Reset-link request and completion.
+- Every email-sending call site.
+- Crypto/token generation.
+- Session creation/revocation and cross-tab behavior.
+- MongoDB readiness and ownership checks.
+- Account-data persistence.
+- API origins, Vercel proxy, and Render routes.
+- UI error handling.
+- Existing regression tests.
+
+Fix each demonstrated defect that belongs to this scope. Do not expand into unrelated rewrites.
+
+For unresolved external issues such as provider authentication, sender-domain authentication, or stale deployment configuration, provide precise owner actions and distinguish them from code defects.
+
+## PHASE 11 — TESTS AND VERIFICATION
+
+Run targeted tests first, then the appropriate full suites and builds:
+
+1. Email pipeline and auth endpoint tests.
+2. Security/token tests.
+3. Account routing and account-page rendering tests.
+4. Session and cross-tab tests.
+5. Database connectivity/readiness tests.
+6. Full backend tests.
+7. Full frontend tests.
+8. Typechecks.
+9. Lint.
+10. Production builds.
+11. Dependency audits where appropriate.
+
+Do not weaken assertions, disable security checks, or suppress meaningful failures.
+
+Verify that the latest test counts correspond to actual fresh results. Do not copy historical counts into the final report.
+
+## PHASE 12 — SINGLE FINAL AUDIT REPORT
+
+Create exactly ONE new Markdown audit report:
+
+`docs/user-doc/audit2/15_LEARNQUEST_ACCOUNT_PAGE_AND_EMAIL_PIPELINE_REPAIR_2026-10-28.md`
+
+If report 15 exists from a partially completed run, inspect and continue it instead of creating a duplicate.
+
+Update the existing `docs/user-doc/audit2/README.md` in place. Do not create separate progress, summary, implementation, or second-index Markdown files.
+
+The report must include:
+- The exact account-header leak and its root cause.
+- The unrelated cross-tab logout warning appearing during recovery and its root cause.
+- The complete email pipeline trace and the exact delivery failure point, if identifiable.
+- Whether a real Brevo request was made and the available acceptance/delivery evidence.
+- Verification of remaining OTP/token-generation security and the handling of Math.random.
+- The session and account-isolation checks.
+- Actual database connectivity/readiness result.
+- Exact files changed and why.
+- Fresh test/build/typecheck/lint results.
+- Remaining owner actions.
+- What was verified locally versus live.
+- Final Git status and confirmation that no commit or push occurred.
+
+Do not claim email delivery, database connectivity, or production deployment has been fixed without direct evidence.
+
+Begin by inspecting the current repository and the latest reports. Then reproduce the displayed issues, trace the real email path, implement the fixes, and finish the verification.

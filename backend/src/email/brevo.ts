@@ -49,6 +49,11 @@ function assertActionUrl(actionUrl: string): URL {
   if (url.protocol !== 'https:' && !(env.nodeEnv !== 'production' && url.protocol === 'http:')) {
     throw new Error('The email action URL must use HTTPS.');
   }
+  // In production the action URL must be the one configured application
+  // origin. A caller cannot substitute another host, even over HTTPS.
+  if (env.isProduction && url.origin !== env.appOrigin) {
+    throw new Error('The email action URL must use the configured APP_ORIGIN.');
+  }
   // The token belongs in the fragment so it is never sent to a web server,
   // email scanner, or analytics service in the page request.
   if (!url.hash.includes('token=')) {
@@ -186,6 +191,14 @@ async function providerDiagnosticCode(res: Response): Promise<string | null> {
   }
 }
 
+/** Broad, non-secret classification for operational logs. */
+function providerFailureClass(status: number): 'provider_auth' | 'provider_rate_limit' | 'provider_unavailable' | 'provider_validation' {
+  if (status === 401 || status === 403) return 'provider_auth';
+  if (status === 429) return 'provider_rate_limit';
+  if (status >= 500) return 'provider_unavailable';
+  return 'provider_validation';
+}
+
 async function brevoSend(payload: Record<string, unknown>, event: string): Promise<EmailDeliveryReceipt> {
   if (!env.brevoConfigured) {
     console.error(JSON.stringify({ level: 'error', event: 'email_provider_not_configured', kind: event }));
@@ -214,6 +227,7 @@ async function brevoSend(payload: Record<string, unknown>, event: string): Promi
         level: 'error',
         event: 'email_provider_rejected',
         kind: event,
+        classification: providerFailureClass(res.status),
         status: res.status,
         providerCode,
         providerRequestId,

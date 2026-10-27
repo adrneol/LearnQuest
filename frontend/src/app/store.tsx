@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   computePlaylistProgress,
   computeRangeProgress,
@@ -148,6 +148,8 @@ interface Store {
   setup: AuthConfig | null;
   authUser: AuthUser | null;
   authError: string | null;
+  /** Dismiss a cross-tab session notice when entering a public recovery screen. */
+  clearAuthNotice: () => void;
   syncStatus: 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
   syncError: string | null;
   serverVersion: number;
@@ -597,6 +599,10 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const lastSyncedRef = useRef<Record<string, string>>({});
   const migrationIdRef = useRef<string | null>(null);
   const cloudUserRef = useRef<string | null>(null);
+  // The latest authenticated account, available synchronously to the
+  // BroadcastChannel/storage listener. A passive effect can miss a sign-out
+  // that arrives immediately after the authenticated UI renders.
+  const authUserRef = useRef<AuthUser | null>(null);
   // Invalidates an in-flight cloud load after sign-out or an account switch so
   // a late response can never apply the previous account's data.
   const cloudLoadGeneration = useRef(0);
@@ -607,8 +613,15 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // two finish clicks in one tick cannot both pass the stale `sessions` closure.
   const sessionKeys = useRef<Set<string>>(new Set());
 
+  useLayoutEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
+
   useEffect(() => {
     if (actionRoute) stripEmailActionToken(actionRoute.kind);
+    // A reset/verification link is a public, standalone destination. A stale
+    // cross-tab sign-out notice from the workspace must never follow it here.
+    if (actionRoute) setSessionNotice(null);
   }, [actionRoute]);
 
   const applyState = useCallback((state: LoadedState) => {
@@ -727,6 +740,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const applyRemoteSignOut = useCallback((reason: AuthSyncReason) => {
     // Invalidate every in-flight authentication/data request first. The
     // broadcast is only a UI signal, but no late response may repopulate it.
+    // A tab that had an authenticated account has a session to lose. A public
+    // recovery screen has no account and must never receive this notice.
+    const hadAuthenticatedSession = authUserRef.current !== null || cloudUserRef.current !== null;
     authEpoch.current += 1;
     if (saveT.current) clearTimeout(saveT.current);
     cloudLoadGeneration.current += 1;
@@ -735,12 +751,17 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setAuthUserState(null);
     setReady(false);
     setAuthReady(true);
-    setSessionNotice(REMOTE_SIGN_OUT_COPY[reason]);
+    // A tab that was already signed out (for example, while completing
+    // password recovery) has no session to lose. Do not attach a workspace
+    // sign-out warning to a public authentication screen.
+    setSessionNotice(hadAuthenticatedSession ? REMOTE_SIGN_OUT_COPY[reason] : null);
     setAuthError(null);
     sessionKeys.current.clear();
     try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* unavailable */ }
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
   }, [resetAccountState]);
+
+  const clearAuthNotice = useCallback(() => setSessionNotice(null), []);
 
   const loadCloud = useCallback(async (user: AuthUser) => {
     const generation = ++cloudLoadGeneration.current;
@@ -1090,7 +1111,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration,
     segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings,
-    mode, authReady, setup, authUser, authError, syncStatus, syncError, serverVersion,
+    mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, serverVersion,
     migrationAvailable, migrationSummary, migrationError,
 
     signInWithPassword: async (identifier, password) => {
@@ -1773,14 +1794,17 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       }
     },
     setLastDiff: (s) => setLastDiff(s),
-  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, syncStatus, syncError, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState]);
+  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState]);
 
   if (mode === 'cloud' && actionRoute) {
     const exit = () => {
       window.location.assign('/#/auth');
     };
+    const requestNew = () => {
+      window.location.assign('/#/auth?mode=forgot');
+    };
     return actionRoute.kind === 'reset'
-      ? <PasswordResetScreen token={actionRoute.token} onExit={exit} expiresInMin={setup?.emailActionTtlMin} />
+      ? <PasswordResetScreen token={actionRoute.token} onExit={exit} onRequestNew={requestNew} expiresInMin={setup?.emailActionTtlMin} />
       : <EmailVerificationScreen token={actionRoute.token} onExit={exit} />;
   }
 
@@ -1806,6 +1830,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         <AuthScreens
           setup={setup}
           authError={sessionNotice}
+          onClearAuthNotice={value.clearAuthNotice}
           onPasswordLogin={value.signInWithPassword}
           onGoogle={value.signInWithGoogle}
         />

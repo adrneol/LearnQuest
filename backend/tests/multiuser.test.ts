@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { createApp } from '../src/app.js';
@@ -474,7 +474,7 @@ describe('OAuth, email links, and password recovery security', () => {
     expect(known.body.challengeId).toBeUndefined();
     expect(known.body.resetToken).toBeUndefined();
     expect(String(known.body.message)).toMatch(/if an eligible account matches/i);
-    expect(String(known.body.message)).toMatch(/receive a password-reset link/i);
+    expect(String(known.body.message)).toMatch(/send a password-reset link/i);
     expect(email.actions).toHaveLength(1);
     const records = await store.actionTokens.find({ purpose: 'password_reset' });
     expect(records).toHaveLength(1);
@@ -517,6 +517,57 @@ describe('OAuth, email links, and password recovery security', () => {
     }
   });
 
+  it('invalidates a pending reset link when the password is changed from a signed-in session', async () => {
+    const oldPassword = 'correct horse battery staple';
+    const newPassword = 'new correct horse battery staple';
+    const account = await seedUser('pwchange_invalidate', 'pwchange-invalidate@example.test', oldPassword, 'google-sub-pwchange-invalidate');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'pwchange_invalidate' });
+    expect(email.actions).toHaveLength(1);
+    const token = actionToken(email.actions[0].actionUrl);
+
+    const session = await login('pwchange_invalidate', oldPassword);
+    const change = await authed(request(app).post('/api/auth/password/change'), session).send({
+      currentPassword: oldPassword,
+      newPassword,
+    });
+    expect(change.status).toBe(200);
+
+    const replay = await request(app).post('/api/auth/password/reset').send({
+      token,
+      newPassword: 'yet another long password value',
+    });
+    expect(replay.status).toBe(400);
+    expect(await store.actionTokens.count({ userId: account.userId, consumedAt: null })).toBe(0);
+  });
+
+  it('invalidates a pending email-change link when the password is reset', async () => {
+    const oldPassword = 'correct horse battery staple';
+    const newPassword = 'reset correct horse battery staple';
+    const account = await seedUser('reset_email_link', 'reset-email-link@example.test', oldPassword, 'google-sub-reset-email-link');
+    const session = await login('reset_email_link', oldPassword);
+    const change = await authed(request(app).post('/api/account/email/change'), session).send({
+      newEmail: 'reset-email-link-new@example.test',
+      password: oldPassword,
+    });
+    expect(change.status).toBe(202);
+    const emailChangeAction = email.actions.find((action) => action.purpose === 'email_change');
+    expect(emailChangeAction).toBeTruthy();
+    const emailChangeToken = actionToken(emailChangeAction!.actionUrl);
+
+    await request(app).post('/api/auth/forgot').send({ identifier: 'reset_email_link' });
+    const resetAction = email.actions.filter((action) => action.purpose === 'password_reset').at(-1);
+    expect(resetAction).toBeTruthy();
+    const reset = await request(app).post('/api/auth/password/reset').send({
+      token: actionToken(resetAction!.actionUrl),
+      newPassword,
+    });
+    expect(reset.status).toBe(204);
+
+    const staleConfirmation = await request(app).post('/api/account/email/confirm').send({ token: emailChangeToken });
+    expect(staleConfirmation.status).toBe(400);
+    expect(await store.actionTokens.count({ userId: account.userId, consumedAt: null })).toBe(0);
+  });
+
   it('cannot reset with an arbitrary email plus a guessed or wrong-account token', async () => {
     const a = await seedUser('guess_a', 'guessa@example.test', 'correct horse battery staple', 'google-sub-guessa');
     const b = await seedUser('guess_b', 'guessb@example.test', 'correct horse battery staple', 'google-sub-guessb');
@@ -546,6 +597,7 @@ describe('OAuth, email links, and password recovery security', () => {
     const action = email.actions.at(-1)!;
     const token = actionToken(action.actionUrl);
     expect(action.actionUrl).toContain('/#/reset-password?token=');
+    expect(action.actionUrl.startsWith(`${process.env.APP_ORIGIN}/#/reset-password?token=`)).toBe(true);
     expect(new URL(action.actionUrl).search).toBe(''); // token is never in the server-visible query string
     expect(new URL(action.actionUrl).hash).toContain('token=');
     expect(action).not.toHaveProperty('code');
@@ -581,10 +633,16 @@ describe('OAuth, email links, and password recovery security', () => {
     await request(app).post('/api/auth/forgot').send({ identifier: 'tok_a' });
     const resetToken = actionToken(email.actions.at(-1)!.actionUrl);
     const record = await store.actionTokens.findOne({ userId: a.userId, purpose: 'password_reset' });
-    await store.actionTokens.updateOne({ tokenId: record!.tokenId }, { $set: { expiresAt: new Date(Date.now() - 1000).toISOString() } });
+    // The reported link was opened roughly 37 minutes after it was received.
+    // Keep the record physically present to prove expiry is enforced by the
+    // consume predicate, not by a TTL cleanup.
+    await store.actionTokens.updateOne({ tokenId: record!.tokenId }, { $set: { expiresAt: new Date(Date.now() - 37 * 60_000).toISOString() } });
     const expired = await request(app).post('/api/auth/password/reset').send({ token: resetToken, newPassword: 'another long password' });
     expect(expired.status).toBe(400);
     expect(expired.body.code).toBe('INVALID_RESET_TOKEN');
+    const stillPresent = await store.actionTokens.findOne({ tokenId: record!.tokenId });
+    expect(stillPresent).toBeTruthy();
+    expect(stillPresent?.consumedAt).toBeNull();
 
     const malformed = await request(app).post('/api/auth/password/reset').send({ token: 'short', newPassword: 'another long password' });
     expect(malformed.status).toBe(400);
@@ -600,6 +658,79 @@ describe('OAuth, email links, and password recovery security', () => {
     await store.accounts.updateOne({ userId: a.userId }, { $set: { email: 'changed@example.test', emailNormalized: 'changed@example.test' } });
     const mismatch = await request(app).post('/api/auth/password/reset').send({ token: boundToken, newPassword: 'yet another long password' });
     expect(mismatch.status).toBe(400);
+  });
+
+  it('validates a reset link without consuming it and reports an expired link separately', async () => {
+    const account = await seedUser('validate_a', 'validate@example.test', 'correct horse battery staple', 'google-sub-validate');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'validate_a' });
+    const token = actionToken(email.actions.at(-1)!.actionUrl);
+    const record = await store.actionTokens.findOne({ userId: account.userId, purpose: 'password_reset' });
+
+    const valid = await request(app).post('/api/auth/password/reset/validate').send({ token });
+    expect(valid.status).toBe(200);
+    expect(valid.body).toEqual({ ok: true, valid: true });
+    // Opening the page must not burn the link.
+    expect((await store.actionTokens.findOne({ tokenId: record!.tokenId }))?.consumedAt).toBeNull();
+
+    await store.actionTokens.updateOne(
+      { tokenId: record!.tokenId },
+      { $set: { expiresAt: new Date(Date.now() - 60_000).toISOString() } },
+    );
+    const expired = await request(app).post('/api/auth/password/reset/validate').send({ token });
+    expect(expired.status).toBe(400);
+    expect(expired.body.code).toBe('EXPIRED_RESET_TOKEN');
+    expect((await store.actionTokens.findOne({ tokenId: record!.tokenId }))?.consumedAt).toBeNull();
+
+    const garbage = await request(app).post('/api/auth/password/reset/validate').send({ token: 'A'.repeat(43) });
+    expect(garbage.status).toBe(400);
+    expect(garbage.body.code).toBe('INVALID_RESET_TOKEN');
+  });
+
+  it('does not report a password reset as successful when the database is unavailable', async () => {
+    const account = await seedUser('dbfail_a', 'dbfail@example.test', 'correct horse battery staple', 'google-sub-dbfail');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'dbfail_a' });
+    const token = actionToken(email.actions.at(-1)!.actionUrl);
+    const before = await store.accounts.findOne({ userId: account.userId });
+    const record = await store.actionTokens.findOne({ userId: account.userId, purpose: 'password_reset' });
+    const spy = vi.spyOn(store.actionTokens, 'findOneAndUpdate').mockRejectedValueOnce(
+      Object.assign(new Error('The database is unavailable. The request was not applied; retry when the service is ready.'), {
+        status: 503,
+        code: 'DATABASE_UNAVAILABLE',
+      }),
+    );
+    try {
+      const res = await request(app).post('/api/auth/password/reset').send({
+        token,
+        newPassword: 'unavailable new long password',
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('DATABASE_UNAVAILABLE');
+      expect(res.body.error).toMatch(/database is unavailable/i);
+      const after = await store.accounts.findOne({ userId: account.userId });
+      expect(after?.passwordHash).toBe(before?.passwordHash);
+      expect(after?.passwordVersion).toBe(before?.passwordVersion);
+      // The failed write happened before consumption, so no token was burned.
+      expect((await store.actionTokens.findOne({ tokenId: record!.tokenId }))?.consumedAt).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+    const oldLogin = await request(app).post('/api/auth/login').send({
+      identifier: 'dbfail_a', password: 'correct horse battery staple',
+    });
+    expect(oldLogin.status).toBe(200);
+  });
+
+  it('ignores request Host and X-Forwarded-Host headers when building reset links', async () => {
+    await seedUser('header_a', 'header@example.test', 'correct horse battery staple', 'google-sub-header');
+    const res = await request(app)
+      .post('/api/auth/forgot')
+      .set('Host', 'attacker.example')
+      .set('X-Forwarded-Host', 'attacker.example')
+      .send({ identifier: 'header_a' });
+    expect(res.status).toBe(202);
+    const action = email.actions.at(-1)!;
+    expect(action.actionUrl.startsWith('http://localhost:5173/#/reset-password?token=')).toBe(true);
+    expect(action.actionUrl).not.toContain('attacker.example');
   });
 
   it('atomically allows only one concurrent use of a reset link', async () => {
@@ -619,7 +750,8 @@ describe('OAuth, email links, and password recovery security', () => {
   });
 
   it('resets the password only with a valid single-use link and revokes existing sessions', async () => {
-    await seedUser('resetuser', 'reset@example.test', 'correct horse battery staple', 'google-sub-reset');
+    const account = await seedUser('resetuser', 'reset@example.test', 'correct horse battery staple', 'google-sub-reset');
+    const before = await store.accounts.findOne({ userId: account.userId });
     const s = await login('resetuser', 'correct horse battery staple');
     const forgot = await request(app).post('/api/auth/forgot').send({ identifier: 'resetuser' });
     expect(forgot.status).toBe(202);
@@ -627,6 +759,10 @@ describe('OAuth, email links, and password recovery security', () => {
     const token = actionToken(email.actions[0].actionUrl);
     const reset = await request(app).post('/api/auth/password/reset').send({ token, newPassword: 'new correct horse battery staple' });
     expect(reset.status).toBe(204);
+    const after = await store.accounts.findOne({ userId: account.userId });
+    expect(after?.passwordHash).toMatch(/^\$argon2id\$/);
+    expect(after?.passwordHash).not.toBe(before?.passwordHash);
+    expect(after?.passwordVersion).toBe(Number(before?.passwordVersion) + 1);
     expect((await request(app).get('/api/account/data').set('Cookie', s.cookie)).status).toBe(401);
     const oldLogin = await request(app).post('/api/auth/login').send({ identifier: 'resetuser', password: 'correct horse battery staple' });
     expect(oldLogin.status).toBe(401);
@@ -726,6 +862,7 @@ describe('OAuth, email links, and password recovery security', () => {
     expect(email.actions.at(-1)?.to).toBe('new@example.test');
     const token = actionToken(email.actions.at(-1)!.actionUrl);
     expect(email.actions.at(-1)!.actionUrl).toContain('/#/verify-email?token=');
+    expect(email.actions.at(-1)!.actionUrl.startsWith(`${process.env.APP_ORIGIN}/#/verify-email?token=`)).toBe(true);
     const wrong = await request(app).post('/api/account/email/confirm').send({ token: 'x'.repeat(43) });
     expect(wrong.status).toBe(400);
     const verified = await request(app).post('/api/account/email/confirm').send({ token });

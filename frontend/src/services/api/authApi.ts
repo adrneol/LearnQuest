@@ -355,7 +355,12 @@ export async function forgotPassword(identifier: string): Promise<{ ok: boolean;
 }
 
 // The reset token is captured from the URL fragment by the recovery screen and
-// exchanged only through this explicit POST. It is never sent in a page GET.
+// exchanged only through explicit POSTs. Validation is read-only; it never
+// consumes the token. Submission remains the only consuming operation.
+export async function validateResetPasswordToken(token: string): Promise<void> {
+  await apiRequest('/auth/password/reset/validate', { method: 'POST', body: { token } });
+}
+
 export async function resetPassword(token: string, newPassword: string): Promise<void> {
   await apiRequest('/auth/password/reset', { method: 'POST', body: { token, newPassword } });
 }

@@ -42,14 +42,20 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
             {(user.displayName || user.username || user.email).slice(0, 2).toUpperCase()}
           </span>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-lg font-bold">{user.displayName || user.username}</h1>
+            <h1
+              id="account-page-title"
+              tabIndex={-1}
+              className="truncate text-lg font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a]"
+            >
+              {user.displayName || user.username}
+            </h1>
             <p className="truncate text-xs text-slate-400">{user.email} · @{user.username}</p>
           </div>
           <span className={`rounded-full px-2.5 py-1 text-[11px] ${s.syncStatus === 'error' || s.syncStatus === 'conflict' ? 'bg-red-500/15 text-red-200' : s.syncStatus === 'saving' ? 'bg-amber-500/15 text-amber-200' : 'bg-emerald-500/15 text-emerald-200'}`}>
             {s.syncStatus === 'saving' ? 'Saving to server…' : s.syncStatus === 'error' ? 'Save failed' : s.syncStatus === 'conflict' ? 'Save conflict' : s.syncStatus === 'saved' ? 'Cloud saves confirmed' : 'Cloud account'}
           </span>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Account sections" onKeyDown={onTabKeyDown}>
+        <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Account sections" aria-orientation="horizontal" onKeyDown={onTabKeyDown}>
           <SectionBtn id="account-tab-profile" active={section === 'profile'} onClick={() => onSection('profile')} icon={<UserRound size={14} />}>Profile</SectionBtn>
           <SectionBtn id="account-tab-settings" active={section === 'settings'} onClick={() => onSection('settings')} icon={<ShieldCheck size={14} />}>Account settings</SectionBtn>
           <SectionBtn id="account-tab-security" active={section === 'security'} onClick={() => onSection('security')} icon={<KeyRound size={14} />}>Security & sessions</SectionBtn>

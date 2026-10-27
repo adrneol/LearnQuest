@@ -99,6 +99,31 @@ describe('Brevo transactional delivery boundary', () => {
     expect(logs).not.toContain(TOKEN);
   });
 
+  it('classifies an IP/authentication rejection without logging the provider text or secrets', async () => {
+    globalThis.fetch = (async () => response({
+      code: 'unauthorized',
+      message: `Unrecognised IP 203.0.113.9 for ${RECIPIENT}; token ${TOKEN}; see https://provider.invalid/security`,
+    }, 401)) as any;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(createBrevoEmailService().sendActionEmail({
+      to: RECIPIENT,
+      purpose: 'password_reset',
+      actionUrl: ACTION_URL,
+      expiresInMin: 30,
+    })).rejects.toMatchObject({ status: 502, code: 'EMAIL_DELIVERY_FAILED' });
+
+    const logs = error.mock.calls.flat().join(' ');
+    expect(logs).toContain('email_provider_rejected');
+    expect(logs).toContain('"classification":"provider_auth"');
+    expect(logs).toContain('"status":401');
+    expect(logs).toContain('unauthorized');
+    expect(logs).not.toContain('203.0.113.9');
+    expect(logs).not.toContain('provider.invalid');
+    expect(logs).not.toContain(RECIPIENT);
+    expect(logs).not.toContain(TOKEN);
+  });
+
   it('reports a provider timeout as a timeout, not a false success', async () => {
     globalThis.fetch = (async () => {
       throw Object.assign(new Error('aborted'), { name: 'AbortError' });

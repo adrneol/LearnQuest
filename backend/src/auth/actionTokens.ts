@@ -40,7 +40,40 @@ export interface IssuedEmailActionToken {
 
 export function emailActionUrl(token: string, purpose: EmailActionPurpose): string {
   const route = purpose === 'password_reset' ? 'reset-password' : 'verify-email';
-  return `${env.appOrigin}/#/${route}?token=${encodeURIComponent(token)}`;
+  // env.appOrigin is the only origin authority. It validates scheme, rejects
+  // paths/queries/fragments, and fails closed for missing or localhost origins
+  // in production. Request Host/X-Forwarded-Host values are never consulted.
+  const url = new URL(env.appOrigin);
+  url.hash = `#/${route}?token=${encodeURIComponent(token)}`;
+  return url.toString();
+}
+
+function tokenDigestFor(rawToken: unknown): string | null {
+  if (typeof rawToken !== 'string' || rawToken.length < 20 || rawToken.length > 512) return null;
+  return actionTokenDigest(rawToken);
+}
+
+/**
+ * Read-only token inspection for the reset page. It never marks a token as
+ * consumed, so opening a link cannot burn it. The submit endpoint remains the
+ * only place that performs atomic consumption.
+ */
+export type EmailActionTokenState = 'valid' | 'expired' | 'invalid';
+
+export async function inspectEmailActionToken(
+  store: DataStore,
+  rawToken: unknown,
+  purpose: EmailActionPurpose,
+): Promise<{ state: EmailActionTokenState; record: EmailActionTokenRecord | null }> {
+  const tokenHash = tokenDigestFor(rawToken);
+  if (!tokenHash) return { state: 'invalid', record: null };
+  const record = (await store.actionTokens.findOne({ tokenHash, purpose })) as EmailActionTokenRecord | null;
+  if (!record || record.consumedAt) return { state: 'invalid', record: null };
+  const expiresAt = Date.parse(record.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return { state: 'expired', record: null };
+  }
+  return { state: 'valid', record };
 }
 
 // Serialize link issuance for one account/purpose in this process. The
@@ -117,6 +150,9 @@ export async function issueEmailActionToken(
     const tokenId = randomUUID();
     const expiresInMin = env.emailActionTtlMin;
     const expiresAt = new Date(now + expiresInMin * 60_000).toISOString();
+    // Build the link before persisting the token. If the public origin is
+    // misconfigured, no usable token record is left behind without an email.
+    const actionUrl = emailActionUrl(token, input.purpose);
     const record: EmailActionTokenRecord = {
       tokenId,
       tokenHash: actionTokenDigest(token),
@@ -136,7 +172,7 @@ export async function issueEmailActionToken(
       tokenId,
       expiresAt,
       expiresInMin,
-      actionUrl: emailActionUrl(token, input.purpose),
+      actionUrl,
     };
   });
 }
@@ -150,18 +186,27 @@ export async function consumeEmailActionToken(
   rawToken: unknown,
   purpose: EmailActionPurpose,
 ): Promise<EmailActionTokenRecord | null> {
-  if (typeof rawToken !== 'string' || rawToken.length < 20 || rawToken.length > 512) return null;
+  const tokenHash = tokenDigestFor(rawToken);
+  if (!tokenHash) return null;
   const now = new Date().toISOString();
   const record = await store.actionTokens.findOneAndUpdate(
     {
-      tokenHash: actionTokenDigest(rawToken),
+      tokenHash,
       purpose,
       consumedAt: null,
+      // Server-side UTC expiry is part of the authoritative compare-and-set.
+      // MongoDB applies this filter atomically together with the consumedAt
+      // update, so concurrent requests cannot both consume the same token.
       expiresAt: { $gt: now },
     },
     { $set: { consumedAt: now } },
-  );
-  return (record as EmailActionTokenRecord | null) ?? null;
+  ) as EmailActionTokenRecord | null;
+  if (!record) return null;
+  // Defensive check against a malformed/legacy expiry value: never treat a
+  // record as usable merely because it matched the database filter.
+  const expiresAt = Date.parse(record.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+  return record;
 }
 
 export async function invalidateEmailAction(

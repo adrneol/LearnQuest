@@ -33,19 +33,48 @@ function intEnvAlias(name: string, legacyName: string, fallback: number, min: nu
   return n;
 }
 
+function productionRuntime(): boolean {
+  return stringEnv('NODE_ENV', 'development') === 'production';
+}
+
+/**
+ * Resolve one configured public origin. Production never falls back to a
+ * localhost default and never accepts a local/private host, so a production
+ * reset email cannot silently point at a developer machine. The local
+ * development default remains available only outside production.
+ */
 function originEnv(name: string, fallback: string): string {
-  const raw = stringEnv(name, fallback).replace(/\/+$/, '');
+  const configured = stringEnv(name);
+  if (productionRuntime() && !configured) {
+    throw new Error(`${name} must be explicitly set to the public application origin in production.`);
+  }
+  const raw = (configured || fallback).replace(/\/+$/, '');
+  if (!raw) throw new Error(`${name} must be an absolute origin such as https://app.example.com.`);
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     throw new Error(`${name} must be an absolute origin such as https://app.example.com.`);
   }
-  if (url.pathname !== '/' || url.search || url.hash) {
+  // Reject credentials, paths, queries, and fragments. `URL.origin` would
+  // silently discard some of these, which would make an invalid configuration
+  // look valid while changing where a security-sensitive link points.
+  if (url.username || url.password) {
+    throw new Error(`${name} must not contain credentials.`);
+  }
+  if (url.pathname !== '/' || url.search || url.hash || /[?#]/.test(raw)) {
     throw new Error(`${name} must be an origin only (no path, query, or fragment).`);
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`${name} must use http or https.`);
+  }
+  if (productionRuntime()) {
+    if (url.protocol !== 'https:') {
+      throw new Error(`${name} must use https in production.`);
+    }
+    if (isLocalOrPrivateHost(url.hostname)) {
+      throw new Error(`${name} must be a public origin in production, never localhost, a private IP, or an internal host.`);
+    }
   }
   return url.origin;
 }
@@ -260,17 +289,23 @@ export interface PublicConfigStatus {
 }
 
 function isLocalOrPrivateHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  // URL.hostname keeps brackets around IPv6 literals.
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   return host === 'localhost'
     || host === '127.0.0.1'
     || host === '::1'
+    || host === '::'
+    || host === '0.0.0.0'
     || host.endsWith('.localhost')
     || host.endsWith('.local')
     || host.endsWith('.internal')
     || host === 'metadata.google.internal'
     || /^10\./.test(host)
     || /^192\.168\./.test(host)
-    || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+    || /^169\.254\./.test(host)
+    || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    || /^f[cd][0-9a-f]{2}:/.test(host)
+    || /^fe[89ab][0-9a-f]:/.test(host);
 }
 
 /** Actionable, value-free configuration status for the login screen and health. */
@@ -312,26 +347,46 @@ export function configStatus(): PublicConfigStatus {
 export function assertProductionConfig(): void {
   if (!env.isProduction) return;
   const problems: string[] = [];
+  const capture = <T>(read: () => T): T | null => {
+    try {
+      return read();
+    } catch (e) {
+      problems.push(e instanceof Error ? e.message : 'An environment value is invalid.');
+      return null;
+    }
+  };
   if (!env.mongodbConfigured) problems.push('MONGODB_URI is required in production.');
   if (!env.googleConfigured) problems.push('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in production.');
   if (!env.brevoConfigured) problems.push('BREVO_API_KEY and BREVO_SENDER_EMAIL are required in production.');
   if (!env.sessionConfigured) problems.push('SESSION_SECRET is required in production.');
   if (!env.emailActionConfigured) problems.push('EMAIL_ACTION_HMAC_SECRET is required in production (OTP_HMAC_SECRET is accepted only as a legacy fallback).');
-  if (!env.appOrigin.startsWith('https://') || !env.apiOrigin.startsWith('https://')) {
-    problems.push('APP_ORIGIN and API_ORIGIN must use https in production.');
+  // Read the numeric policy at startup so an invalid value fails closed now,
+  // rather than only when the first recovery request is attempted.
+  capture(() => env.emailActionTtlMin);
+  capture(() => env.emailActionResendSec);
+  const appOrigin = capture(() => env.appOrigin);
+  const apiOrigin = capture(() => env.apiOrigin);
+  const redirectUri = capture(() => env.googleRedirectUri);
+  if (appOrigin && !appOrigin.startsWith('https://')) {
+    problems.push('APP_ORIGIN must use https in production.');
   }
-  if (isLocalOrPrivateHost(new URL(env.appOrigin).hostname)) {
+  if (apiOrigin && !apiOrigin.startsWith('https://')) {
+    problems.push('API_ORIGIN must use https in production.');
+  }
+  if (appOrigin && isLocalOrPrivateHost(new URL(appOrigin).hostname)) {
     problems.push('APP_ORIGIN must be the public frontend origin in production, never localhost, a private IP, or an internal host.');
   }
-  if (isLocalOrPrivateHost(new URL(env.googleRedirectUri).hostname)) {
+  if (redirectUri && isLocalOrPrivateHost(new URL(redirectUri).hostname)) {
     problems.push('GOOGLE_REDIRECT_URI must use the public production origin, never localhost or an internal host.');
   }
   if (env.userDataStore === 'unified' && !env.userDataCutoverAcknowledged) {
     problems.push('LQ_USER_DATA_STORE=unified requires LQ_USER_DATA_CUTOVER_ACK=lq-data-to-user-data-v1 after a verified migration.');
   }
-  const redirectOrigin = new URL(env.googleRedirectUri).origin;
-  if (redirectOrigin !== env.appOrigin && redirectOrigin !== env.apiOrigin) {
-    problems.push('GOOGLE_REDIRECT_URI must use the public APP_ORIGIN (same-origin proxy) or API_ORIGIN (same-site API domain).');
+  if (redirectUri && appOrigin && apiOrigin) {
+    const redirectOrigin = new URL(redirectUri).origin;
+    if (redirectOrigin !== appOrigin && redirectOrigin !== apiOrigin) {
+      problems.push('GOOGLE_REDIRECT_URI must use the public APP_ORIGIN (same-origin proxy) or API_ORIGIN (same-site API domain).');
+    }
   }
   if (problems.length) {
     throw new Error(`Refusing to start with insecure production configuration:\n- ${problems.join('\n- ')}`);

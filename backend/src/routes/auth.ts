@@ -19,8 +19,8 @@ import {
   revokeAllSessions, revokeSession, rotateSession,
 } from '../auth/sessions.js';
 import {
-  consumeEmailActionToken, invalidateAllEmailActions, invalidateEmailAction, issueEmailActionToken,
-  latestEmailAction,
+  consumeEmailActionToken, inspectEmailActionToken, invalidateAllEmailActions, invalidateEmailAction,
+  issueEmailActionToken, latestEmailAction,
 } from '../auth/actionTokens.js';
 import {
   clearSessionCookie, clientInfo, noStore, readSessionToken, requireAuth, requireCsrf,
@@ -41,6 +41,7 @@ const onboardingSchema = z.object({
   minViableMin: z.number().optional(),
 }).strict();
 const forgotSchema = z.object({ identifier: z.string().trim().min(1).max(320) }).strict();
+const resetTokenSchema = z.object({ token: z.string().min(20).max(512) }).strict();
 const resetSchema = z.object({
   token: z.string().min(20).max(512),
   newPassword: z.string().max(128),
@@ -82,6 +83,18 @@ function requireCompletedAccount(account: Account): void {
   if (!account.onboardingComplete || !account.username) {
     throw http(409, 'Finish your LearnQuest account setup before using this action.', 'ONBOARDING_REQUIRED');
   }
+}
+
+/** The token must still belong to the account and email it was issued for. */
+function resetBelongsToAccount(
+  account: Account | null,
+  record: { emailNormalized: string; accountEmailNormalized: string },
+): account is Account {
+  return Boolean(
+    isPasswordResetEligible(account)
+    && account.emailNormalized === record.emailNormalized
+    && account.emailNormalized === record.accountEmailNormalized,
+  );
 }
 
 /**
@@ -377,6 +390,10 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const newHash = await hashCode(body.newPassword);
       const updated = await setAccountPassword(store, account, newHash);
       await revokeAllSessions(store, account.userId, req.auth!.session.sessionId);
+      // A password change makes every outstanding emailed action stale. This
+      // includes a reset link an attacker may have requested before the owner
+      // regained control, and any pending email-change verification.
+      await invalidateAllEmailActions(store, updated.userId);
       const created = await rotateSession(store, readSessionToken(req), updated.userId, {
         ...clientInfo(req),
         authMethod: 'password',
@@ -407,7 +424,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const body = parseBody(forgotSchema, req.body);
       const generic = {
         ok: true as const,
-        message: `If an eligible account matches that username or email, you'll receive a password-reset link. It expires in ${env.emailActionTtlMin} minutes and can be used once.`,
+        message: `If an eligible account matches that username or email, we'll send a password-reset link. It expires in ${env.emailActionTtlMin} minutes and can be used once.`,
       };
       const account = await findAccountByIdentifier(store, body.identifier);
       // A pending registration is not an eligible account: it has not chosen a
@@ -452,6 +469,34 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     }
   });
 
+  /**
+   * Read-only status check for the reset page. It validates the token and the
+   * account/email binding without consuming anything, so a user who opens an
+   * expired link sees an expired state immediately instead of a form that
+   * would only be rejected after they choose a password. GET is still never
+   * used: the fragment token is submitted explicitly.
+   */
+  router.post('/password/reset/validate', emailActionLimiter, noStore, async (req, res, next) => {
+    try {
+      await requireSetup(store);
+      const body = parseBody(resetTokenSchema, req.body);
+      const inspected = await inspectEmailActionToken(store, body.token, 'password_reset');
+      if (inspected.state === 'expired') {
+        throw http(400, 'This password reset link has expired. Request a new link.', 'EXPIRED_RESET_TOKEN');
+      }
+      if (inspected.state !== 'valid' || !inspected.record) {
+        throw http(400, 'This password reset link is invalid or has already been used. Request a new link.', 'INVALID_RESET_TOKEN');
+      }
+      const account = await findAccountById(store, inspected.record.userId);
+      if (!resetBelongsToAccount(account, inspected.record)) {
+        throw http(400, 'This password reset link is invalid or has already been used. Request a new link.', 'INVALID_RESET_TOKEN');
+      }
+      res.json({ ok: true, valid: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   /** Complete a reset with the single-use link token. GET never consumes it. */
   router.post('/password/reset', emailActionLimiter, noStore, async (req, res, next) => {
     try {
@@ -464,17 +509,15 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
       }
       const account = await findAccountById(store, record.userId);
-      if (
-        !isPasswordResetEligible(account)
-        || account.emailNormalized !== record.emailNormalized
-        || account.emailNormalized !== record.accountEmailNormalized
-      ) {
+      if (!resetBelongsToAccount(account, record)) {
         throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
       }
       const newHash = await hashCode(body.newPassword);
       const updated = await setAccountPassword(store, account, newHash);
       await revokeAllSessions(store, updated.userId);
-      await invalidateAllEmailActions(store, updated.userId, ['password_reset']);
+      // Burn every outstanding emailed action, not only reset links: a pending
+      // email-change confirmation must not survive a password reset.
+      await invalidateAllEmailActions(store, updated.userId);
       await invalidateLegacyRecoveryArtifacts(store, updated.userId);
       // The reset request may carry the browser's old session cookie. Clear it
       // here as well as revoking the server record so this browser is visibly

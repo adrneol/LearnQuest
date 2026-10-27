@@ -169,6 +169,8 @@ function AppInner() {
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const lastTabRef = useRef<Tab | null>(null);
+  const isAccountPage = tab === 'account';
 
   useEffect(() => {
     checkApiHealth().then(setHealth);
@@ -203,6 +205,19 @@ function AppInner() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // Entering Account from another route moves focus to the account page's
+  // own heading. Switching account sections keeps the normal tab focus so a
+  // keyboard user is not pulled away from the tab list on every selection.
+  useEffect(() => {
+    const enteredAccount = isAccountPage && lastTabRef.current !== 'account';
+    lastTabRef.current = tab;
+    if (!enteredAccount) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById('account-page-title')?.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isAccountPage, tab]);
 
   const go = useCallback((t: Tab) => {
     setTab(t);
@@ -380,6 +395,7 @@ function AppInner() {
   return (
     <div
       data-reduced-motion={s.prefs.reducedMotion ? 'true' : 'false'}
+      data-page={isAccountPage ? 'account' : 'workspace'}
       className="min-h-screen bg-[#0b0e1a] bg-[radial-gradient(ellipse_at_top,rgba(124,58,237,0.18),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.08),transparent_60%)]"
     >
       {/* Desktop sidebar */}
@@ -399,7 +415,7 @@ function AppInner() {
             </div>
           )}
         </div>
-        {!collapsed && (
+        {!collapsed && !isAccountPage && (
           <div className="px-3">
             <PlaylistSwitcher />
           </div>
@@ -430,7 +446,7 @@ function AppInner() {
             <Menu size={18} />
           </button>
           <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
-          <p className="mr-auto text-sm font-bold">LearnQuest</p>
+          <p className="mr-auto text-sm font-bold">{isAccountPage ? 'Account' : 'LearnQuest'}</p>
           <button
             onClick={() => go('settings')}
             className={`rounded-full px-2 py-1 text-[11px] ${statusTone}`}
@@ -440,9 +456,11 @@ function AppInner() {
           </button>
           {s.authUser && <AccountMenu onNavigate={goAccount} />}
         </div>
-        <div className="px-3 pb-2">
-          <PlaylistSwitcher />
-        </div>
+        {!isAccountPage && (
+          <div className="px-3 pb-2">
+            <PlaylistSwitcher />
+          </div>
+        )}
       </header>
 
       {/* Mobile drawer */}
@@ -483,10 +501,16 @@ function AppInner() {
           <div className="sticky top-0 z-20 hidden border-b border-white/10 bg-[#0b0e1a]/90 backdrop-blur lg:block">
             <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-2">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-semibold text-slate-200">{displayTitle ?? 'LearnQuest'}</p>
-                <p className="truncate text-[10px] text-slate-500">
-                  {snap ? `N=${snap.entries.length} · ${snap.source} · fetched ${new Date(snap.fetchedAt).toLocaleString()}` : 'No active playlist'}
-                </p>
+                {isAccountPage ? (
+                  <p className="truncate text-xs font-semibold text-slate-200">Account</p>
+                ) : (
+                  <>
+                    <p className="truncate text-xs font-semibold text-slate-200">{displayTitle ?? 'LearnQuest'}</p>
+                    <p className="truncate text-[10px] text-slate-500">
+                      {snap ? `N=${snap.entries.length} · ${snap.source} · fetched ${new Date(snap.fetchedAt).toLocaleString()}` : 'No active playlist'}
+                    </p>
+                  </>
+                )}
               </div>
               <SyncIndicator />
               <AccountMenu onNavigate={goAccount} />
@@ -494,22 +518,22 @@ function AppInner() {
           </div>
         )}
         <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
-          {!snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
-          <LegacyMigrationCard />
-          {s.lastDiff && (
+          {!isAccountPage && !snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
+          {!isAccountPage && <LegacyMigrationCard />}
+          {!isAccountPage && s.lastDiff && (
             <div className="flex items-start gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm">
               <p className="min-w-0 flex-1">{s.lastDiff}</p>
               <button onClick={() => s.setLastDiff(null)} aria-label="Dismiss" className="shrink-0"><X size={16} /></button>
             </div>
           )}
-          {s.celebration && (
+          {!isAccountPage && s.celebration && (
             <div className="flex items-start gap-3 rounded-2xl border border-violet-500/40 bg-gradient-to-r from-violet-600/25 to-cyan-500/15 p-4">
               <PartyPopper className="mt-0.5 shrink-0 text-violet-300" />
               <p className="min-w-0 flex-1 text-sm">{s.celebration}</p>
               <button onClick={s.clearCelebration} className="shrink-0 rounded-xl bg-white/10 px-3 py-1.5 text-sm">Continue</button>
             </div>
           )}
-          {snap && (
+          {!isAccountPage && snap && (
             <p className="truncate text-xs text-slate-500">
               Active playlist: <span className="text-slate-300">{displayTitle}</span> · N={snap.entries.length} · {snap.source} · fetched {new Date(snap.fetchedAt).toLocaleString()}
             </p>

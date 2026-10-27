@@ -228,6 +228,55 @@ describe('store integration with cross-tab sign-out', () => {
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
   });
 
+  it('keeps password recovery free of a cross-tab sign-out warning when this tab was already signed out', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (u.endsWith('/api/auth/forgot')) {
+        return json({ ok: true, message: 'If an eligible account matches, a reset link will be sent.' }, 202);
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    expect(screen.getByRole('heading', { name: 'Reset your password' })).toBeInTheDocument();
+
+    emitStorageSignOut('sign-out');
+    expect(screen.queryByText(/You were signed out in another tab/i)).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Reset your password' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: 'learner' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send password reset link' }));
+    expect(await screen.findByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
+    expect(screen.queryByText(/You were signed out in another tab/i)).toBeNull();
+  });
+
+  it('keeps a standalone reset-link screen free of a stale workspace sign-out notice', async () => {
+    window.location.hash = '#/reset-password?token=opaque-reset-token-abcdefghijklmnopqrstuvwxyz';
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (String(url).endsWith('/api/auth/password/reset/validate')) return json({ ok: true, valid: true });
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Choose a new password' })).toBeInTheDocument();
+    emitStorageSignOut('password-reset');
+    expect(screen.getByRole('heading', { name: 'Choose a new password' })).toBeInTheDocument();
+    expect(screen.queryByText(/signed out in another tab/i)).toBeNull();
+    expect(screen.queryByText(/password was reset in another tab/i)).toBeNull();
+  });
+
   it('does not let a late account load repopulate data after another tab signs out', async () => {
     let resolveData!: (response: Response) => void;
     let markDataRequested!: () => void;

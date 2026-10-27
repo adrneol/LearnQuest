@@ -54,6 +54,33 @@ const EMPTY_STATE = {
   prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, reducedMotion: false, minViableMin: 10 },
 };
 
+const ACTIVE_PLAYLIST = 'PLroute0000000000000';
+const ACTIVE_STATE = {
+  ...EMPTY_STATE,
+  playlists: {
+    [ACTIVE_PLAYLIST]: {
+      playlistId: ACTIVE_PLAYLIST,
+      title: 'Playlist Leak Canary',
+      reportedCount: 2,
+      entries: [
+        { position: 1, entryId: 'route-e1', videoId: 'route-v1', title: 'One', durationSec: 60 },
+        { position: 2, entryId: 'route-e2', videoId: 'route-v2', title: 'Two', durationSec: 120 },
+      ],
+      source: 'api',
+      fetchedAt: '2026-10-27T12:34:56.000Z',
+      snapshotVersion: 2,
+    },
+  },
+  meta: {
+    [ACTIVE_PLAYLIST]: {
+      archived: false,
+      customTitle: 'Playlist Leak Canary',
+      addedAt: '2026-10-01T00:00:00.000Z',
+    },
+  },
+  activeId: ACTIVE_PLAYLIST,
+};
+
 const realFetch = globalThis.fetch;
 const realHash = window.location.hash;
 
@@ -66,14 +93,15 @@ function json(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function mockCloud() {
+function mockCloud(state: unknown = EMPTY_STATE) {
   globalThis.fetch = (async (url: any) => {
     const u = String(url);
     if (u.endsWith('/api/health')) return json({ ok: true, hasKey: true });
     if (u.endsWith('/api/auth/session')) {
       return json({ authenticated: true, user: USER, csrfToken: 'csrf-route', ...CONFIG });
     }
-    if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+    if (u.endsWith('/api/account/data')) return json({ ok: true, state, version: 0 });
+    if (u.endsWith('/api/account/sessions')) return json({ sessions: [] });
     return json({ error: 'not found' }, 404);
   }) as any;
 }
@@ -116,6 +144,34 @@ describe('standalone account route', () => {
     expect(screen.queryByText('Your account is ready')).toBeNull();
   });
 
+  it.each([
+    ['profile', /Password sign-in:/],
+    ['settings', /Learning preferences/],
+    ['security', /^Password$/],
+  ])('renders the %s Account route without any active-playlist shell content', async (section, anchor) => {
+    mockCloud(ACTIVE_STATE);
+    window.location.hash = `#/account/${section}`;
+
+    render(
+      <StoreProvider mode="cloud">
+        <App />
+      </StoreProvider>,
+    );
+
+    expect(await screen.findByText(anchor)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Route Learner' })).toBeInTheDocument();
+    // The active playlist must not affect the Account heading, header,
+    // metadata row, playlist switcher, migration card, or onboarding content.
+    expect(screen.queryByText('Playlist Leak Canary')).toBeNull();
+    expect(screen.queryByText('Active playlist')).toBeNull();
+    expect(screen.queryByText(/Active playlist:/)).toBeNull();
+    expect(screen.queryByText(/fetched/i)).toBeNull();
+    expect(screen.queryByText(/N=2/)).toBeNull();
+    expect(screen.queryByText('Your account is ready')).toBeNull();
+    expect(screen.queryByLabelText('Playlist URL or ID')).toBeNull();
+    expect(screen.queryByText(/Local LearnQuest data found/)).toBeNull();
+  });
+
   it('still shows the dashboard onboarding on the dashboard route with no playlist', async () => {
     mockCloud();
     window.location.hash = '#/dash';
@@ -128,5 +184,20 @@ describe('standalone account route', () => {
 
     expect(await screen.findByText('Your account is ready')).toBeInTheDocument();
     expect(screen.getByLabelText('Playlist URL or ID')).toBeInTheDocument();
+  });
+
+  it('still shows the active playlist title and metadata in the workspace shell', async () => {
+    mockCloud(ACTIVE_STATE);
+    window.location.hash = '#/dash';
+
+    render(
+      <StoreProvider mode="cloud">
+        <App />
+      </StoreProvider>,
+    );
+
+    expect(await screen.findByText(/Active playlist:/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Playlist Leak Canary/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/N=2/).length).toBeGreaterThan(0);
   });
 });

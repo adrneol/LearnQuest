@@ -48,6 +48,7 @@ const SESSIONLESS_AUTH_PATHS = new Set([
   '/auth/login',
   '/auth/forgot',
   '/auth/password/reset',
+  '/auth/password/reset/validate',
   '/account/email/confirm',
 ]);
 

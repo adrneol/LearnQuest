@@ -1,0 +1,277 @@
+# LEARNQUEST — PASSWORD RESET EXPIRY ENFORCEMENT AND ENVIRONMENT-BASED PUBLIC URL FIX
+
+Repository: `E:\progressGameTracker`
+
+Branch: `main`
+
+Frontend: `https://learn-quest-one.vercel.app`
+
+Backend: `https://learnquest-hhiv.onrender.com`
+
+Current relevant report:
+`docs/user-doc/audit2/15_LEARNQUEST_ACCOUNT_PAGE_AND_EMAIL_PIPELINE_REPAIR_2026-10-28.md`
+
+## EXECUTION POLICY
+
+Use the strongest available DeepSeek model and `#max` reasoning variant wherever supported. Keep maximum reasoning effort for follow-up runs when supported.
+
+Inspect the current Git status, all relevant diffs, the existing report, token implementation, email sender, environment validation, and deployment configuration before making changes.
+
+This is a focused repair of two related defects. Do not restart the project or perform an unrelated general rewrite.
+
+Preserve all uncommitted source changes, account data, credentials, and previous audit reports.
+
+Never print passwords, MongoDB URIs, API keys, reset tokens, session tokens, HMAC secrets, or sensitive provider responses.
+
+Do not commit, push, reset, clean, stash, or switch branches.
+
+Do not perform account deletion, migrations, live database cleanup, or destructive operations.
+
+Do not disable TLS verification or modify MongoDB credentials to work around unrelated failures.
+
+Do not claim either fix is successful merely because the frontend builds or a unit test passes.
+
+## PHASE 1 — INVESTIGATE THE REPORTED EXPIRY PROBLEM
+
+The user received a LearnQuest password-reset email saying the link expires in 10 minutes.
+
+The email was opened approximately 37 minutes after it was received. The user reports being able to open the link and reach the reset flow.
+
+The reset page also displayed:
+
+"The database is currently unavailable. The request was not applied; retry when the service is ready."
+
+Investigate whether the expired token was genuinely accepted for a password change, or whether opening the reset page merely displayed the form before server-side validation.
+
+Do not assume that opening the link proves the token is valid. Equally, do not dismiss the problem without testing the token-consumption endpoint.
+
+Inspect:
+
+- `backend/src/auth/actionTokens.ts`
+- `backend/src/routes/auth.ts`
+- `backend/src/email/brevo.ts`
+- Environment configuration and password-reset constants.
+- Token repositories and MongoDB update filters.
+- Frontend reset-link parsing and `AuthScreens`/reset components.
+- All password-reset API client methods.
+- Existing token-expiry, password-reset, and session-revocation tests.
+
+Trace the full path from token creation to link construction, reset-page loading, password submission, token consumption, password-hash update, password-version increment, session revocation, and response rendering.
+
+Use read-only inspection of any available state. Never display existing reset tokens or sensitive account data.
+
+### Required server-side expiration behavior
+
+The server must enforce expiration when consuming the reset token, not merely when rendering the email or reset page.
+
+For every password-reset token:
+
+1. Generate a cryptographically random, high-entropy token.
+2. Persist only its HMAC/digest, purpose, account binding, issuance time, expiry time, and other necessary security metadata.
+3. Reject tokens that have expired, been consumed, been revoked, or do not match the expected purpose and account.
+4. Check expiry against server-side time in UTC.
+5. Consume the token atomically, with the actual expiry condition included in the authoritative database operation wherever supported.
+6. Prevent concurrent requests from using the same token twice.
+7. Update the password and invalidate all previous sessions under the intended atomic or concurrency-safe account-state transition.
+8. Invalidate obsolete outstanding email-action tokens after a successful password reset.
+9. Reject replay even if a token record remains in MongoDB after expiry or a TTL cleanup delay.
+10. Never rely on a MongoDB TTL index alone for security enforcement.
+
+An example of the intended logical condition is that the token is unconsumed, not revoked, has the correct purpose/account binding, and has `expiresAt > now`. Adapt this to the actual repository model rather than blindly copying pseudocode.
+
+If the current implementation already satisfies these properties, demonstrate this with targeted tests and investigate any remaining discrepancy.
+
+### Expiration tests
+
+Use a deterministic fake clock or equivalent test fixture.
+
+Test:
+- Token used before expiry: succeeds.
+- Token used at or after expiry: fails.
+- Token used well after expiry: fails.
+- Expired token record still physically present: fails.
+- Consumed token replay: fails.
+- Concurrent attempts using the same token: at most one succeeds.
+- Purpose or account mismatch: fails.
+- Password reset rejected because MongoDB is unavailable: no password change or false-success response.
+- Successful reset: password hash/password version change correctly and all previous sessions become invalid.
+- Unrelated users' accounts and sessions remain unchanged.
+
+Verify token issuance timestamps, expiry calculation, and password reset outcomes. Do not change the existing password policy to solve expiry.
+
+## PHASE 2 — ONE CONFIGURED SOURCE OF TRUTH FOR EXPIRY
+
+Inspect how the current email copy, token expiry, resend cooldown, and UI text are configured.
+
+The email currently advertises a 10-minute expiry. Verify whether this comes from the same configuration as the backend's actual expiration enforcement.
+
+If the current implementation uses inconsistent constants, introduce or normalize a single validated setting appropriate to the existing configuration architecture, such as `EMAIL_ACTION_TTL_MINUTES`.
+
+Requirements:
+- The token's server-enforced expiration derives from this configuration.
+- The email's expiry statement derives from the same value.
+- UI text must not contradict the actual configured duration.
+- The frontend must not be the authority for expiration.
+- Do not extend existing token lifetimes merely to make the reported issue disappear.
+- Validate the setting at startup and use a secure documented default if that is the intended existing configuration pattern.
+- Keep reset and other email-action purposes consistent with their current documented policies; do not unintentionally lengthen verification tokens.
+
+Add regression tests proving that the actual stored expiry time and the email's displayed expiry agree.
+
+## PHASE 3 — FIX THE RESET LINK'S BASE URL
+
+### Observed defect
+
+The received email contains a reset link beginning with:
+
+`http://localhost:5173/#/reset-password?token=...`
+
+That link is appropriate only for the local development environment. It must never be sent to production users.
+
+The previous audit says the `emailActionUrl` helper constructs the URL using `APP_ORIGIN`. That suggests the localhost URL may come from the local environment rather than being hardcoded into the email template. Verify this directly against the current source and configuration.
+
+### Requirements
+
+1. Search the repository for every hardcoded localhost URL, public frontend domain, and password-reset URL constructor.
+2. Ensure all password-reset, email-change, and other email-action links use the configured public application origin appropriate to the active environment.
+3. Use the existing `APP_ORIGIN` configuration variable where appropriate rather than scattering production URLs throughout source code.
+4. Do not derive the public origin from an untrusted request `Host` or forwarded-host header.
+5. Do not allow an arbitrary client-supplied origin to control a security-sensitive action URL.
+6. The production configuration must use the deployed frontend origin:
+
+   `https://learn-quest-one.vercel.app`
+
+7. The production configuration must reject missing, invalid, or localhost origins. It must not silently generate a production email that points to localhost.
+8. Local development may use `http://localhost:5173` only in a deliberately configured development environment.
+9. Validate URL syntax, permitted schemes, and origin expectations at configuration load time.
+10. Keep reset tokens in the URL fragment if that is the existing secure flow, preserving explicit POST submission and avoiding automatic token consumption by GET requests.
+11. Ensure the actual hash-router reset route can parse the link correctly.
+12. Keep the configured expiry and origin independent: changing the origin must not change token validity.
+
+The production public origin belongs in the backend's private environment configuration, such as Render's `APP_ORIGIN`. It is not a secret itself, but it must be configured explicitly and validated. Do not place API keys or other backend secrets in the Vercel frontend bundle.
+
+Inspect `render.yaml` and the actual deployment instructions. Keep configuration changes consistent with the current deployment model. If a static value in deployment configuration is necessary to set the environment variable, it must not become a separate hardcoded URL inside business logic.
+
+Do not edit production dashboard settings automatically.
+
+### URL construction tests
+
+Add tests for:
+- Local development with a valid localhost origin.
+- Production using `https://learn-quest-one.vercel.app`.
+- Production configuration missing `APP_ORIGIN`.
+- Production origin set to localhost.
+- Invalid URL and unapproved scheme.
+- URL containing an unexpected path, query, or fragment.
+- Reset link preserving the correct hash route and token handling.
+- Email template using the actual configured origin.
+- Preventing untrusted request headers from overriding the configured origin.
+- Email-change links using the appropriate configured origin as well.
+
+No test should print a live reset token or secret.
+
+## PHASE 4 — AUDIT PASSWORD-RESET ERROR HANDLING
+
+Ensure database unavailability is handled consistently throughout the reset flow.
+
+If the reset page loads but the database is unavailable:
+- Clearly explain that the password change has not been applied.
+- Keep the token's actual validity governed by server-side expiry.
+- Do not claim that a password has changed.
+- Do not show a misleading success screen.
+- Do not silently mark the token as consumed unless the system has deliberately implemented a safe recoverable attempt policy.
+- Do not queue an unauthenticated password update that automatically applies later without a fresh valid token and explicit user action.
+
+When connectivity returns, the user can retry only if the token remains valid. If it expires, they should request a new reset link.
+
+If the link has expired, provide a clean, professional expired-link state with an obvious request-new-link action.
+
+Ensure the frontend does not confuse:
+- Page opening.
+- Token validation.
+- Form submission.
+- Password change committed.
+- Session revocation completed.
+
+Treat them as separate states.
+
+## PHASE 5 — VERIFY MONGODB WITHOUT ALTERING ITS CONFIGURATION
+
+The user reports intermittent database unavailability. This task is not a general MongoDB connectivity repair.
+
+Use the existing safe diagnostic if needed to distinguish a real database outage from expiry-related logic. Do not change database credentials, connection strings, network access lists, TLS verification, or storage-mode configuration for this task.
+
+If the database is unavailable, perform unit tests using mocks or isolated test adapters and record the live verification limitation.
+
+If the reset endpoint returned 503 during the reported attempt, do not infer that the password changed. Verify the correct server semantics and regression tests.
+
+Do not start an application maintenance sweep, delete a live reset token for investigative convenience, migrate learning data, or access unrelated account data.
+
+## PHASE 6 — VERIFY PRODUCTION CONFIGURATION SEPARATELY
+
+Check the local configuration, `render.yaml`, and relevant deployment documentation.
+
+Determine exactly:
+- What origin the local environment uses.
+- What origin the Render environment is configured to use.
+- Whether Render's `APP_ORIGIN` is absent, wrong, or correctly set in deployment configuration.
+- Whether the current Vercel deployment includes the reset route.
+- Whether the current Render deployment includes the matching reset endpoint and expiry enforcement.
+
+Use only safe, read-only public health/configuration checks when network access is available. Do not perform a reset request against an unknown user or send email to an arbitrary recipient.
+
+Do not deploy automatically. If production is stale or misconfigured, give exact owner-side actions.
+
+Do not claim the local code fix has updated production.
+
+## PHASE 7 — TEST AND VERIFY
+
+Run targeted backend token/reset/email tests and URL-construction tests first.
+
+Then run backend tests, relevant frontend tests, typechecks, lint, and production builds in a sensible order. Use the supported Node runtime when required by the project's engine specification.
+
+Do not weaken assertions, skip existing tests, or suppress meaningful errors.
+
+Do not make tests pass by disabling security checks or using fake success responses.
+
+Report actual fresh test counts and any failed checks.
+
+## PHASE 8 — SINGLE AUDIT REPORT
+
+Create or continue exactly one report:
+
+`docs/user-doc/audit2/16_LEARNQUEST_RESET_LINK_EXPIRY_AND_ORIGIN_FIX_2026-10-28.md`
+
+If this report already exists from an interrupted run, inspect and continue it rather than creating a duplicate.
+
+Update the existing `docs/user-doc/audit2/README.md` in place. Do not create separate progress, summary, implementation, or final Markdown reports.
+
+The report must state:
+- Whether the old token was genuinely accepted after expiry or only opened the reset form.
+- The root cause, supported by tests or diagnostic evidence.
+- The exact expiry enforcement and single-use semantics after the fix.
+- Whether the email and server enforcement use the same expiry configuration.
+- Whether `APP_ORIGIN` was responsible for the localhost production link.
+- All URL configuration and validation changes.
+- The current production-origin value as a non-sensitive configuration name, but do not expose secrets.
+- Test, typecheck, lint, and build results.
+- Whether MongoDB was reachable during verification.
+- What was verified locally versus live.
+- Exact owner-side configuration or deployment steps still required.
+- Final Git status.
+
+Preserve prior audit history. Do not commit, push, reset, clean, stash, switch branches, or perform destructive database operations.
+
+## FINAL ACCEPTANCE CRITERIA
+
+The repair is complete only when:
+- The server rejects expired reset tokens even if the record still exists.
+- Token consumption is atomic and single-use.
+- The advertised expiry matches actual server enforcement.
+- Production reset links use the configured public frontend origin.
+- Production cannot silently fall back to a localhost URL.
+- Reset behavior when the database is unavailable is truthful and safe.
+- The targeted regression tests pass.
+- Remaining live or deployment blockers are stated precisely.
+
+Begin by inspecting the current code and Report 15. Reproduce the expiry and URL issues, fix their root causes, run verification, and create the single required audit report.

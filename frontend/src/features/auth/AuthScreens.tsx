@@ -4,8 +4,9 @@ import {
 } from 'lucide-react';
 import type { AuthConfig, AuthUser } from '../../services/api/authApi.js';
 import {
-  confirmEmailChange, forgotPassword, resetPassword,
+  confirmEmailChange, forgotPassword, resetPassword, validateResetPasswordToken,
 } from '../../services/api/authApi.js';
+import { ApiError } from '../../services/api/http.js';
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
@@ -45,6 +46,15 @@ function clearOAuthErrorFromHash(): void {
   const [path, query = ''] = raw.split('?');
   if (path !== 'auth' || !new URLSearchParams(query).has('error')) return;
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/auth`);
+}
+
+/** The expired-link action can open recovery directly with #/auth?mode=forgot. */
+function initialAuthMode(): 'signin' | 'forgot' {
+  if (typeof window === 'undefined') return 'signin';
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  const [path, query = ''] = raw.split('?');
+  if (path !== 'auth') return 'signin';
+  return new URLSearchParams(query).get('mode') === 'forgot' ? 'forgot' : 'signin';
 }
 
 export function SetupRequiredScreen({ setup: _setup, onRetry }: { setup: AuthConfig | null; onRetry: () => void }) {
@@ -93,15 +103,18 @@ type Mode = 'signin' | 'register' | 'forgot' | 'sent';
 export function AuthScreens({
   setup,
   authError,
+  onClearAuthNotice,
   onPasswordLogin,
   onGoogle,
 }: {
   setup: AuthConfig | null;
   authError: string | null;
+  /** Clear a cross-tab session notice when entering a public recovery screen. */
+  onClearAuthNotice?: () => void;
   onPasswordLogin: (identifier: string, password: string) => Promise<void>;
   onGoogle: (intent: 'login' | 'register') => Promise<void>;
 }) {
-  const [mode, setMode] = useState<Mode>('signin');
+  const [mode, setMode] = useState<Mode>(initialAuthMode);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -124,6 +137,23 @@ export function AuthScreens({
     const t = window.setTimeout(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
     return () => window.clearTimeout(t);
   }, [cooldown]);
+
+  // A cross-tab sign-out is meaningful on the sign-in screen. It is unrelated
+  // to password recovery, so clear it on entry and never render it above the
+  // forgot/request-confirmation states.
+  useEffect(() => {
+    if (mode === 'forgot' || mode === 'sent') onClearAuthNotice?.();
+  }, [mode, onClearAuthNotice]);
+
+  const enterMode = (next: Mode) => {
+    setMode(next);
+    setError(null);
+    if (next === 'forgot' || next === 'sent') onClearAuthNotice?.();
+  };
+
+  // Only the credential screens can legitimately consume a cross-tab sign-out
+  // notice. Recovery and confirmation states must show one coherent message.
+  const visibleAuthError = mode === 'signin' || mode === 'register' ? authError : null;
 
   const run = async (fn: () => Promise<void>) => {
     if (busy) return;
@@ -153,7 +183,7 @@ export function AuthScreens({
     if (!emailReady || !emailLinksReady) throw new Error('Password recovery is temporarily unavailable. Try again later.');
     await forgotPassword(identifier.trim());
     setCooldown(60);
-    setMode('sent');
+    enterMode('sent');
   });
 
   return (
@@ -183,7 +213,7 @@ export function AuthScreens({
             </div>
           </div>
 
-          {(authError || error) && <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error ?? authError}</p>}
+          {(visibleAuthError || error) && <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error ?? visibleAuthError}</p>}
 
           {mode === 'signin' && (
             <div className="mt-4">
@@ -210,8 +240,8 @@ export function AuthScreens({
                 </Btn>
               </form>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <button type="button" className="text-cyan-300 hover:underline" onClick={() => { setMode('forgot'); setError(null); }}>Forgot password?</button>
-                <button type="button" className="text-violet-300 hover:underline" onClick={() => { setMode('register'); setError(null); }}>Create an account</button>
+                <button type="button" className="text-cyan-300 hover:underline" onClick={() => enterMode('forgot')}>Forgot password?</button>
+                <button type="button" className="text-violet-300 hover:underline" onClick={() => enterMode('register')}>Create an account</button>
               </div>
             </div>
           )}
@@ -225,7 +255,7 @@ export function AuthScreens({
               <Btn variant="primary" className="mt-4 w-full justify-center" onClick={() => google('register')} disabled={busy || !googleReady}>
                 {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Connecting…' : 'Continue with Google'}
               </Btn>
-              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={() => setMode('signin')}>
+              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={() => enterMode('signin')}>
                 <ArrowLeft size={13} /> Back to sign in
               </button>
             </div>
@@ -246,7 +276,7 @@ export function AuthScreens({
                   {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Sending…' : 'Send password reset link'}
                 </Btn>
               </div>
-              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={() => setMode('signin')}>
+              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={() => enterMode('signin')}>
                 <ArrowLeft size={13} /> Back to sign in
               </button>
             </div>
@@ -256,12 +286,12 @@ export function AuthScreens({
             <section className="mt-5" aria-labelledby="recovery-sent-title">
               <h2 id="recovery-sent-title" className="text-lg font-bold">Check your email</h2>
               <p className="mt-1 text-sm text-slate-400">
-                If an eligible account matches, a password-reset link will arrive shortly. Open that link to choose a new password.
+                If an eligible account matches, we'll send a password-reset email to its verified address. Open the link in that email to choose a new password.
                 {' '}
                 {resetTtl ? `The link expires in ${resetTtl} minutes and can be used once.` : 'The link expires soon and can be used once.'}
               </p>
               <div className="mt-4 flex flex-col gap-2">
-                <Btn variant="primary" onClick={() => { setMode('signin'); }}>Back to sign in</Btn>
+                <Btn variant="primary" onClick={() => enterMode('signin')}>Back to sign in</Btn>
                 {cooldown > 0 ? (
                   <p role="status" className="text-center text-xs text-slate-500">
                     You can request another link in {cooldown}s.
@@ -312,15 +342,58 @@ function PasswordStrengthMeter({ password }: { password: string }) {
   );
 }
 
+type ResetLinkState = 'checking' | 'valid' | 'invalid' | 'expired' | 'unavailable';
+
 /** Link-only password recovery. The token is already in memory, never displayed. */
-export function PasswordResetScreen({ token, onExit, expiresInMin }: { token: string | null; onExit: () => void; expiresInMin?: number }) {
+export function PasswordResetScreen({
+  token, onExit, onRequestNew, expiresInMin,
+}: {
+  token: string | null;
+  onExit: () => void;
+  onRequestNew?: () => void;
+  expiresInMin?: number;
+}) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
-  const [error, setError] = useState<string | null>(token ? null : 'This password reset link is missing its token. Request a new link.');
+  const [linkState, setLinkState] = useState<ResetLinkState>(token ? 'checking' : 'invalid');
+  const [linkError, setLinkError] = useState<string | null>(
+    token ? null : 'This password reset link is missing its token. Request a new link.',
+  );
+  const [formError, setFormError] = useState<string | null>(null);
+  const [checkNonce, setCheckNonce] = useState(0);
 
-  const canSubmit = Boolean(token)
+  // Read-only check. Opening a link must never consume it, but an expired or
+  // already-used link should be identified before the form is shown.
+  useEffect(() => {
+    if (!token) {
+      setLinkState('invalid');
+      setLinkError('This password reset link is missing its token. Request a new link.');
+      return;
+    }
+    let cancelled = false;
+    setLinkState('checking');
+    setLinkError(null);
+    void validateResetPasswordToken(token)
+      .then(() => {
+        if (!cancelled) setLinkState('valid');
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 400) {
+          setLinkState(err.code === 'EXPIRED_RESET_TOKEN' ? 'expired' : 'invalid');
+          setLinkError(err.message);
+          return;
+        }
+        setLinkState('unavailable');
+        setLinkError('The account service is temporarily unavailable, so this link could not be checked. Nothing was changed. Retry when the service is ready.');
+      });
+    return () => { cancelled = true; };
+  }, [token, checkNonce]);
+
+  const canSubmit = linkState === 'valid'
+    && Boolean(token)
     && !busy
     && password.length >= 12
     && password.length <= 128
@@ -339,11 +412,11 @@ export function PasswordResetScreen({ token, onExit, expiresInMin }: { token: st
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!token) return;
-    setError(null);
-    if (password.length < 12) { setError('Password must be at least 12 characters.'); return; }
-    if (password.length > 128) { setError('Password must be at most 128 characters.'); return; }
-    if (password !== confirm) { setError('The passwords do not match.'); return; }
+    if (!token || linkState !== 'valid') return;
+    setFormError(null);
+    if (password.length < 12) { setFormError('Password must be at least 12 characters.'); return; }
+    if (password.length > 128) { setFormError('Password must be at most 128 characters.'); return; }
+    if (password !== confirm) { setFormError('The passwords do not match.'); return; }
     setBusy(true);
     try {
       await resetPassword(token, password);
@@ -353,14 +426,31 @@ export function PasswordResetScreen({ token, onExit, expiresInMin }: { token: st
       setDone(true);
       setPassword('');
       setConfirm('');
-    } catch (err: any) {
-      setError(err?.message ?? 'This reset link is invalid, expired, or already used. Request a new link.');
-      setPassword('');
-      setConfirm('');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'The password could not be changed. Nothing was reported as successful.';
+      if (err instanceof ApiError && err.status === 400) {
+        setLinkState(err.code === 'EXPIRED_RESET_TOKEN' ? 'expired' : 'invalid');
+        setLinkError(message);
+        setPassword('');
+        setConfirm('');
+      } else if (err instanceof ApiError && (err.status === 0 || err.status >= 500)) {
+        // The server did not confirm a change. Keep the form so a retry is
+        // possible only while the token itself remains valid.
+        setFormError('The account service is currently unavailable. Your password was not changed; retry when the service is ready.');
+      } else {
+        setFormError(message);
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  const requestNew = onRequestNew ?? onExit;
+  const back = (
+    <button type="button" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={onExit}>
+      <ArrowLeft size={13} /> Back to sign in
+    </button>
+  );
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl items-center p-4 text-slate-200">
@@ -379,16 +469,45 @@ export function PasswordResetScreen({ token, onExit, expiresInMin }: { token: st
             <p className="mt-1 text-sm text-slate-400">All earlier sessions were signed out. Sign in with your new password.</p>
             <Btn variant="primary" className="mt-4 w-full justify-center" onClick={onExit}>Back to sign in</Btn>
           </div>
+        ) : linkState === 'checking' ? (
+          <div className="mt-5 text-center" role="status" aria-live="polite">
+            <Loader2 className="mx-auto animate-spin text-cyan-300" size={30} />
+            <h1 className="mt-2 text-xl font-bold">Checking this reset link</h1>
+            <p className="mt-1 text-sm text-slate-400">The server is verifying the link before showing the password form. Nothing has changed yet.</p>
+          </div>
+        ) : linkState === 'invalid' || linkState === 'expired' ? (
+          <div className="mt-5" role="alert">
+            <h1 className="text-xl font-bold">
+              {linkState === 'expired' ? 'This reset link has expired' : 'This reset link is invalid'}
+            </h1>
+            <p className="mt-1 text-sm text-slate-400">
+              {linkError ?? 'Request a new link to choose a new password. No password was changed.'}
+            </p>
+            <p className="mt-2 text-xs text-slate-500">For your security, reset links are single-use and cannot be reused or kept indefinitely.</p>
+            <div className="mt-4 flex flex-col gap-2">
+              <Btn variant="primary" onClick={requestNew}>Request a new reset link</Btn>
+              {back}
+            </div>
+          </div>
+        ) : linkState === 'unavailable' ? (
+          <div className="mt-5" role="alert">
+            <h1 className="text-xl font-bold">We could not check this reset link</h1>
+            <p className="mt-1 text-sm text-slate-400">
+              {linkError ?? 'The account service is temporarily unavailable. Nothing was changed.'}
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              <Btn variant="primary" onClick={() => setCheckNonce((n) => n + 1)}>Try checking again</Btn>
+              {back}
+            </div>
+          </div>
         ) : (
           <form onSubmit={(e) => void submit(e)} className="mt-4 space-y-3">
             <h1 className="text-xl font-bold">Choose a new password</h1>
             <p className="text-xs text-slate-400">
-              {expiresInMin
-                ? `This single-use link expires in ${expiresInMin} minutes.`
-                : 'This single-use link expires soon.'}
+              This link was verified by the server. It expires in {expiresInMin ?? 'a few'} minute{expiresInMin === 1 ? '' : 's'} from when it was sent and can be used once.
               {' '}Choose at least 12 characters; a long passphrase is ideal.
             </p>
-            {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
+            {formError && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{formError}</p>}
             <Field label="New password">
               <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" minLength={12} maxLength={128} disabled={!token || busy} />
             </Field>
@@ -405,7 +524,7 @@ export function PasswordResetScreen({ token, onExit, expiresInMin }: { token: st
             <Btn type="submit" variant="primary" className="w-full justify-center" disabled={!canSubmit} title={!token ? 'This link has no token.' : invalidReason ?? undefined}>
               {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Resetting…' : 'Set new password'}
             </Btn>
-            <button type="button" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={onExit}>
+            <button type="button" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={requestNew}>
               <ArrowLeft size={13} /> Request a new link
             </button>
           </form>
