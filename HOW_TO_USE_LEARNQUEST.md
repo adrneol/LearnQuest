@@ -4,9 +4,9 @@ LearnQuest turns public YouTube playlists into measurable learning journeys:
 exact duration math, verified watch tracking, focus sessions, modules,
 checkpoints, goals, efficiency analytics, revision scheduling, and an
 optional fictional Arena. Learning data belongs to your **authenticated
-account** and is stored server-side in MongoDB, so it is available on other
-devices. Google is the only registration path; password sign-in and single-use
-email-link recovery are available after registration.
+account** and is stored with that account, not only in one browser. Google is
+the only registration path; password sign-in and single-use email-link recovery
+are available after registration.
 
 > Start with [A](#a-getting-started), then follow the journey in order.
 > Technical verification lives in [`docs/audits/`](./docs/audits/).
@@ -88,9 +88,9 @@ Google Cloud immediately and update the replacement in Render.
   Google** creates a new account. An unknown Google identity arriving through
   the sign-in button is told to create an account, not silently registered.
 - Afterwards you can sign in with your username or email and password.
-  Passwords are hashed with Argon2id.
+  Passwords are stored only as a one-way hash.
 - **Forgot password?** Enter your username or email. If an account matches,
-  Brevo sends a single-use link; the response does not reveal whether the
+  LearnQuest sends a single-use link; the response does not reveal whether the
   account exists. The link expires after about 30 minutes (configurable) and
   is invalidated when a newer link is requested. The link opens a reset screen
   in the app; the token is exchanged only when you press **Set new password**,
@@ -363,10 +363,10 @@ network, no real leaderboard.
 
 ## H. Backup, restore, and data safety
 
-- Your account is the primary copy in MongoDB. **Download:** Reports →
+- Your account is the primary copy in the cloud. **Download:** Reports →
   **Backup JSON** (everything, schema v3), or the account menu → **Export
-  account data**. Account exports never include password hashes, raw email
-  action tokens, or session tokens. Keep an offline copy before major cleanups.
+  account data**. Account exports never include passwords, email action
+  tokens, or sign-in tokens. Keep an offline copy before major cleanups.
 - **Restore:** Reports → **Restore backup** validates the complete file first;
   v3 restores v2/v1 backups too. You are offered a fresh pre-restore JSON
   download before anything is replaced. The restore is all-or-nothing, and
@@ -400,7 +400,7 @@ network, no real leaderboard.
   be retried. A different account never inherits it.
 - Practical habit: export a backup weekly (or before playlist refreshes and
   major cleanups) and keep two recent copies. Deleting your account removes
-  its MongoDB records and sessions permanently.
+  its account records and sessions permanently.
 
 ## I. Troubleshooting and FAQs
 
@@ -408,8 +408,8 @@ network, no real leaderboard.
 |---|---|
 | Setup/configuration screen | Add the listed names to `backend/.env`, restart, and retry. Accounts fail closed; there is no fake local login |
 | Google sign-in fails | Check the OAuth web client, exact redirect URI, consent-screen test user, and `GOOGLE_CLIENT_ID`/secret |
-| Recovery or verification email missing | Verify the Brevo sender/domain and API key; check spam; wait for the resend cooldown; request a new link (older links stop working) |
-| MongoDB errors | Check the connection string, database user, and network allow-list. No local fallback is used |
+| Recovery or verification email missing | Check the email provider's transactional email log for the recipient and status; verify sender/domain authentication (a verified Gmail sender can still fail DKIM/DMARC alignment), API key permissions, and spam; wait for the resend cooldown; request a new link (older links stop working). An unknown or ineligible account intentionally receives no message. See `docs/DEPLOYMENT_MULTIUSER.md` |
+| Account storage errors | Check the connection string, database user, and network allow-list. No local fallback is used |
 | Cloud save conflict | Another session changed the account. Use the conflict banner to reload before editing again |
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |
 | API key missing/invalid/restricted | Re-check key + restrictions in Google Cloud; restart backend; Recheck in Settings |

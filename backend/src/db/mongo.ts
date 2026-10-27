@@ -64,11 +64,51 @@ export function mongoTargetDescription(): string {
   return env.mongodbConfigured ? `database "${env.mongodbDbName}"` : 'not configured';
 }
 
+/**
+ * Pending Google registrations store `usernameNormalized: null` until
+ * onboarding. A legacy `unique + sparse` index indexes null (sparse skips only
+ * missing fields), so a second pending account would collide on null. A
+ * partial index that indexes only strings permits many pending accounts while
+ * keeping the username uniqueness guarantee. Existing deployments need the old
+ * index replaced once; the data itself is not modified.
+ */
+async function ensureUsernameIndex(db: Db): Promise<void> {
+  const accounts = db.collection('lq_accounts');
+  let indexes: Document[] = [];
+  try {
+    indexes = await accounts.listIndexes().toArray();
+  } catch (e: unknown) {
+    // NamespaceNotFound means this is the first connection to a new database;
+    // createIndex below will create the collection.
+    if ((e as { code?: number })?.code !== 26) throw e;
+  }
+  const existing = indexes.find((index) => {
+    const key = index.key as Record<string, unknown> | undefined;
+    return key && Object.keys(key).length === 1 && key.usernameNormalized === 1;
+  });
+  const partial = existing?.partialFilterExpression as
+    { usernameNormalized?: { $type?: unknown } } | undefined;
+  const alreadyPartial = partial?.usernameNormalized?.$type === 'string';
+  if (existing && !alreadyPartial) {
+    try {
+      await accounts.dropIndex(String(existing.name));
+    } catch (e: unknown) {
+      // A concurrent deploy may have replaced it already; the createIndex
+      // below is idempotent when the options now match.
+      if ((e as { code?: number })?.code !== 27) throw e;
+    }
+  }
+  await accounts.createIndex(
+    { usernameNormalized: 1 },
+    { unique: true, partialFilterExpression: { usernameNormalized: { $type: 'string' } } },
+  );
+}
+
 async function ensureIndexes(db: Db): Promise<void> {
+  await ensureUsernameIndex(db);
   await Promise.all([
     db.collection('lq_accounts').createIndex({ googleSub: 1 }, { unique: true, sparse: true }),
     db.collection('lq_accounts').createIndex({ emailNormalized: 1 }, { unique: true }),
-    db.collection('lq_accounts').createIndex({ usernameNormalized: 1 }, { unique: true, sparse: true }),
     db.collection('lq_sessions').createIndex({ tokenHash: 1 }, { unique: true }),
     db.collection('lq_sessions').createIndex({ userId: 1, revokedAt: 1 }),
     db.collection('lq_sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),

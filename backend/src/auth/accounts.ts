@@ -93,6 +93,27 @@ export function validateTimezone(value: unknown): string {
   }
 }
 
+/**
+ * A password reset is only meaningful for an account that finished
+ * registration. Pending Google registrations have no password yet and would be
+ * able to skip the onboarding step if they could consume a reset link.
+ *
+ * Every account email is verified by construction: Google registration stores
+ * an address only after Google reports it verified, and email changes require
+ * confirmation from the new address. There is deliberately no "resend to a
+ * client-supplied address" path.
+ */
+export function isPasswordResetEligible(account: Account | null): account is Account {
+  return Boolean(
+    account
+    && account.status === 'active'
+    && account.onboardingComplete
+    && account.email
+    && account.emailNormalized
+    && normalizeEmail(account.email) === account.emailNormalized,
+  );
+}
+
 export function http(status: number, message: string, code?: string): Error & { status: number; code?: string } {
   return Object.assign(new Error(message), { status, code });
 }
@@ -222,10 +243,31 @@ export async function completeOnboarding(
       updatedAt: now,
       passwordChangedAt: now,
     };
-    await store.accounts.updateOne(
-      { userId: account.userId },
-      { $set: { ...updated } },
+    // Never spread the whole account into $set: a MongoDB document read from
+    // the driver includes the immutable `_id`, and updating that path fails
+    // with "Would modify the immutable field '_id'". List only mutable fields.
+    const result = await store.accounts.updateOne(
+      { userId: account.userId, status: 'active' },
+      {
+        $set: {
+          username: updated.username,
+          usernameNormalized: updated.usernameNormalized,
+          displayName: updated.displayName,
+          passwordHash: updated.passwordHash,
+          passwordVersion: updated.passwordVersion,
+          onboardingComplete: updated.onboardingComplete,
+          timezone: updated.timezone,
+          sessionLenMin: updated.sessionLenMin,
+          breakMin: updated.breakMin,
+          minViableMin: updated.minViableMin,
+          passwordChangedAt: updated.passwordChangedAt,
+          updatedAt: updated.updatedAt,
+        },
+      },
     );
+    if (result.matchedCount === 0) {
+      throw http(409, 'This account is no longer available. Start registration again.', 'ACCOUNT_UNAVAILABLE');
+    }
     return updated;
   }).catch((e) => {
     // The cross-instance unique index is the final authority; report a usable

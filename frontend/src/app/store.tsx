@@ -588,6 +588,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const lastSyncedRef = useRef<Record<string, string>>({});
   const migrationIdRef = useRef<string | null>(null);
   const cloudUserRef = useRef<string | null>(null);
+  // Invalidates an in-flight cloud load after sign-out or an account switch so
+  // a late response can never apply the previous account's data.
+  const cloudLoadGeneration = useRef(0);
   // Client-generated session ids are a second idempotency barrier in memory:
   // two finish clicks in one tick cannot both pass the stale `sessions` closure.
   const sessionKeys = useRef<Set<string>>(new Set());
@@ -694,6 +697,8 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   }, [applyState]);
 
   const resetAccountState = useCallback(() => {
+    cloudLoadGeneration.current += 1;
+    cloudUserRef.current = null;
     applyState(normalizeLoadedState({}, defaultPreferences()).state);
     lastSyncedRef.current = {};
     serverVersionRef.current = 0;
@@ -708,10 +713,15 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   }, [applyState]);
 
   const loadCloud = useCallback(async (user: AuthUser) => {
+    const generation = ++cloudLoadGeneration.current;
     setLoadError(null);
     setReady(false);
     try {
       const { state, version } = await fetchAccountData();
+      // Signing out or switching accounts while the request was in flight must
+      // discard the late response instead of exposing the previous identity's
+      // learning data or overwriting the next account's state.
+      if (generation !== cloudLoadGeneration.current) return;
       const normalized = normalizeLoadedState(state as Partial<LoadedState>, defaultPreferences());
       applyState(normalized.state);
       serverVersionRef.current = version;
@@ -722,6 +732,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setSyncError(null);
       setReady(true);
     } catch (e: any) {
+      if (generation !== cloudLoadGeneration.current) return;
       setLoadError(e?.message ?? 'LearnQuest could not load your cloud learning data. Nothing was overwritten; retry the load.');
       setReady(false);
     }
@@ -759,7 +770,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     const expired = () => {
       setAuthUserState(null);
       setReady(false);
-      setAuthError('Your session expired or was signed out elsewhere. Sign in again — no local-only fallback was used.');
+      setAuthError('Your session ended or was signed out elsewhere. Sign in again to continue.');
     };
     window.addEventListener('lq:auth-expired', expired);
     return () => window.removeEventListener('lq:auth-expired', expired);
@@ -864,18 +875,25 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         challengeEnabled, rankHistory, settings,
       };
       const payload = cloudPayload(state);
+      const userId = authUser.userId;
       const changed = CLOUD_COLLECTIONS.filter((name) => JSON.stringify(payload[name]) !== lastSyncedRef.current[name]);
       if (changed.length === 0) {
-        setSyncStatus('saved');
+        if (cloudUserRef.current === userId) setSyncStatus('saved');
         return;
       }
       const run = (async () => {
+        if (cloudUserRef.current !== userId) return;
         setSyncStatus('saving');
         setSyncError(null);
         let version = serverVersionRef.current;
         try {
           for (const name of changed) {
+            // A sign-out or account switch must stop queued writes from the
+            // previous account. The server still enforces the session owner,
+            // but the client must not deliberately send stale data.
+            if (cloudUserRef.current !== userId) return;
             const result = await putAccountCollection(name, payload[name], version);
+            if (cloudUserRef.current !== userId) return;
             version = result.version;
             serverVersionRef.current = version;
             setServerVersion(version);
@@ -883,6 +901,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
           }
           setSyncStatus('saved');
         } catch (e: any) {
+          if (cloudUserRef.current !== userId) return;
           setSyncStatus(e?.code === 'VERSION_CONFLICT' ? 'conflict' : 'error');
           setSyncError(
             e?.code === 'VERSION_CONFLICT'
@@ -1031,6 +1050,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       // account and the password. The login response is not a configuration
       // payload and must never overwrite `setup`.
       const res = await passwordLogin(identifier, password);
+      cloudUserRef.current = null;
       setAuthError(null);
       setAuthUserState(res.user);
       await loadCloud(res.user);
@@ -1040,11 +1060,17 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     completeAccountSetup: async (input) => {
       const res = await completeOnboardingApi(input);
+      cloudUserRef.current = null;
       setAuthUserState(res.user);
       setAuthError(null);
       await loadCloud(res.user);
     },
     signOut: async (allDevices = false) => {
+      // Cancel a debounced save and invalidate any in-flight load before the
+      // session is revoked, so a late response cannot repopulate the UI.
+      if (saveT.current) clearTimeout(saveT.current);
+      cloudUserRef.current = null;
+      cloudLoadGeneration.current += 1;
       let serverError: string | null = null;
       try {
         if (allDevices) await logoutAllApi();
@@ -1105,6 +1131,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     deleteAccount: async (confirmUsername, password) => {
       await deleteAccountApi(confirmUsername, password);
+      if (saveT.current) clearTimeout(saveT.current);
+      cloudUserRef.current = null;
+      cloudLoadGeneration.current += 1;
       resetAccountState();
       setAuthUserState(null);
       setReady(false);
@@ -1115,7 +1144,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     exportAccountData: async () => {
       await downloadAccountExport();
-      setLastDiff('Account export downloaded. It contains your learning data but no password hashes or session tokens.');
+      setLastDiff('Account export downloaded. It contains your learning data but no passwords or sign-in tokens.');
     },
     archivePlaylistManaged: async (playlistId) => {
       if (mode === 'local') {
@@ -1722,7 +1751,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       return (
         <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
           <p className="text-lg font-semibold">Loading your cloud learning data…</p>
-          <p className="mt-1 text-sm text-slate-500">Nothing has been written to IndexedDB.</p>
+          <p className="mt-1 text-sm text-slate-500">Saved learning data is being loaded from your account.</p>
         </div>
       );
     }

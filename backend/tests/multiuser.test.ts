@@ -224,6 +224,32 @@ describe('account registration and sessions', () => {
     expect(String(stored?.passwordHash)).toMatch(/^\$argon2id\$/);
   });
 
+  it('enforces the password length boundaries during onboarding', async () => {
+    googleIdentity = { sub: 'google-sub-boundary', email: 'boundary@example.test', emailVerified: true, name: 'Boundary' };
+    const callbackRes = await callback(await startGoogle('register'));
+    expect(callbackRes.status).toBe(303);
+    const cookie = String(callbackRes.headers['set-cookie'][0]).split(';')[0];
+    const session = await request(app).get('/api/auth/session').set('Cookie', cookie);
+    const submit = (password: string) => request(app)
+      .post('/api/auth/onboarding')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', session.body.csrfToken)
+      .send({ username: 'boundary_user', displayName: 'Boundary', password, timezone: 'UTC' });
+
+    const tooShort = await submit('x'.repeat(11));
+    expect(tooShort.status).toBe(400);
+    expect(tooShort.body.code).toBe('WEAK_PASSWORD');
+
+    const tooLong = await submit('x'.repeat(129));
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body.code).toBe('INVALID_REQUEST');
+
+    const exactMinimum = await submit('long enough!');
+    expect(exactMinimum.status).toBe(200);
+    const loginRes = await request(app).post('/api/auth/login').send({ identifier: 'boundary_user', password: 'long enough!' });
+    expect(loginRes.status).toBe(200);
+  });
+
   it('does not create an account when an unknown Google identity uses sign-in', async () => {
     const state = await startGoogle('login');
     const callbackRes = await callback(state);
@@ -296,6 +322,21 @@ describe('account registration and sessions', () => {
     expect(cookie).toContain('HttpOnly');
     expect(cookie).not.toMatch(/;\s*Domain=/i);
     expect(cookie).toContain('Expires=');
+  });
+
+  it('puts only the opaque session identifier in the cookie, never account or learning data', async () => {
+    await seedUser('cookie_a', 'cookie@example.test', 'correct horse battery staple', 'google-sub-cookie');
+    const res = await request(app).post('/api/auth/login').send({ identifier: 'cookie_a', password: 'correct horse battery staple' });
+    expect(res.status).toBe(200);
+    const setCookie = String(res.headers['set-cookie'][0]);
+    const value = setCookie.split(';')[0].slice('lq_session='.length);
+    expect(value).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    expect(() => JSON.parse(value)).toThrow();
+    expect(setCookie).not.toContain('cookie@example.test');
+    expect(setCookie).not.toContain(res.body.user.userId);
+    expect(setCookie).not.toContain('correct horse battery staple');
+    expect(setCookie).not.toContain(P);
+    expect(setCookie).not.toContain('note-');
   });
 
   it('returns the same generic response for unknown and wrong-password logins', async () => {
@@ -375,7 +416,7 @@ describe('OAuth, email links, and password recovery security', () => {
   });
 
   it('returns an identical generic response for known and unknown password-recovery identifiers', async () => {
-    await seedUser('recover_a', 'recover@example.test', 'correct horse battery staple', 'google-sub-recover');
+    const knownAccount = await seedUser('recover_a', 'recover@example.test', 'correct horse battery staple', 'google-sub-recover');
     const known = await request(app).post('/api/auth/forgot').send({ identifier: 'recover_a' });
     const unknown = await request(app).post('/api/auth/forgot').send({ identifier: 'nobody@example.test' });
     expect(known.status).toBe(202);
@@ -383,7 +424,71 @@ describe('OAuth, email links, and password recovery security', () => {
     expect(known.body).toEqual(unknown.body);
     expect(known.body.challengeId).toBeUndefined();
     expect(known.body.resetToken).toBeUndefined();
+    expect(String(known.body.message)).toMatch(/if an eligible account matches/i);
+    expect(String(known.body.message)).toMatch(/receive a password-reset link/i);
     expect(email.actions).toHaveLength(1);
+    const records = await store.actionTokens.find({ purpose: 'password_reset' });
+    expect(records).toHaveLength(1);
+    expect(records[0].userId).toBe(knownAccount.userId);
+    expect(records[0].targetEmail).toBe('recover@example.test');
+  });
+
+  it('does not issue a link for an incomplete Google registration or a deleting account', async () => {
+    const pending = await createAccountFromGoogle(store, {
+      sub: 'google-sub-pending', email: 'pending@example.test', emailVerified: true, name: 'Pending',
+    });
+    const pendingRes = await request(app).post('/api/auth/forgot').send({ identifier: 'pending@example.test' });
+    expect(pendingRes.status).toBe(202);
+    expect(String(pendingRes.body.message)).toMatch(/if an eligible account matches/i);
+    expect(email.actions).toHaveLength(0);
+    expect(await store.actionTokens.count({ userId: pending.userId, purpose: 'password_reset' })).toBe(0);
+
+    const deleting = await seedUser('deleting_a', 'deleting@example.test', 'correct horse battery staple', 'google-sub-deleting');
+    await store.accounts.updateOne({ userId: deleting.userId }, { $set: { status: 'deleting' } });
+    const deletingRes = await request(app).post('/api/auth/forgot').send({ identifier: 'deleting_a' });
+    expect(deletingRes.status).toBe(202);
+    expect(email.actions).toHaveLength(0);
+    expect(await store.actionTokens.count({ userId: deleting.userId, purpose: 'password_reset' })).toBe(0);
+  });
+
+  it('keeps a generic response while invalidating the link when email delivery fails', async () => {
+    const account = await seedUser('mailfail_a', 'mailfail@example.test', 'correct horse battery staple', 'google-sub-mailfail');
+    const original = email.sendActionEmail.bind(email);
+    email.sendActionEmail = async () => {
+      throw Object.assign(new Error('simulated provider outage'), { status: 502, code: 'EMAIL_DELIVERY_FAILED' });
+    };
+    try {
+      const res = await request(app).post('/api/auth/forgot').send({ identifier: 'mailfail_a' });
+      expect(res.status).toBe(202);
+      expect(String(res.body.message)).toMatch(/if an eligible account matches/i);
+      expect(String(res.body.message)).not.toMatch(/delivered|sent to|inbox/i);
+      expect(await store.actionTokens.count({ userId: account.userId, purpose: 'password_reset', consumedAt: null })).toBe(0);
+    } finally {
+      email.sendActionEmail = original;
+    }
+  });
+
+  it('cannot reset with an arbitrary email plus a guessed or wrong-account token', async () => {
+    const a = await seedUser('guess_a', 'guessa@example.test', 'correct horse battery staple', 'google-sub-guessa');
+    const b = await seedUser('guess_b', 'guessb@example.test', 'correct horse battery staple', 'google-sub-guessb');
+    const guessed = await request(app).post('/api/auth/password/reset').send({
+      token: 'A'.repeat(43), newPassword: 'another long password value',
+    });
+    expect(guessed.status).toBe(400);
+    const unchanged = await request(app).post('/api/auth/login').send({ identifier: 'guess_a', password: 'correct horse battery staple' });
+    expect(unchanged.status).toBe(200);
+
+    await request(app).post('/api/auth/forgot').send({ identifier: 'guess_b' });
+    const bToken = actionToken(email.actions.at(-1)!.actionUrl);
+    const wrongAccount = await request(app).post('/api/auth/password/reset').send({
+      token: bToken, newPassword: 'another long password value',
+    });
+    expect(wrongAccount.status).toBe(204); // the token is valid for B...
+    const aLogin = await request(app).post('/api/auth/login').send({ identifier: 'guess_a', password: 'correct horse battery staple' });
+    expect(aLogin.status).toBe(200); // ...and never changes A's password.
+    const bLogin = await request(app).post('/api/auth/login').send({ identifier: 'guess_b', password: 'another long password value' });
+    expect(bLogin.status).toBe(200);
+    expect(a.userId).not.toBe(b.userId);
   });
 
   it('stores only an HMAC digest and delivers a fragment action link, never a numeric code', async () => {
@@ -543,6 +648,71 @@ describe('user isolation, data versions, migration, archive and delete', () => {
     expect((await authed(request(app).post(`/api/playlists/${P}/archive`), sb).send({ version: bState.body.version })).status).toBe(404);
     expect((await authed(request(app).delete(`/api/playlists/${P}`), sb).send({ version: bState.body.version, confirmTitle: 'Course P' })).status).toBe(404);
     expect((await authed(request(app).get(`/api/playlists/${P}/summary`), sb)).status).toBe(404);
+  });
+
+  it('round-trips every learning collection through the authenticated cloud repository', async () => {
+    const a = await seedUser('roundtrip_a', 'roundtrip@example.test', 'correct horse battery staple', 'google-sub-roundtrip');
+    const state = learningState([P]);
+    state.goals['2026-10-02'] = { dateKey: '2026-10-02', targetFocusSec: 3600, minViableSec: 600 };
+    state.achievements.first = '2026-10-02T00:00:00.000Z';
+    state.challenge = { mode: 'solo', targetRank: 3 };
+    state.challengeEnabled = true;
+    state.rankHistory.push({ at: '2026-10-02T00:00:00.000Z', rank: 2, of: 10 });
+    await putState(a.userId, state);
+
+    const s = await login('roundtrip_a', 'correct horse battery staple');
+    const res = await authed(request(app).get('/api/account/data'), s);
+    expect(res.status).toBe(200);
+    const loaded = res.body.state;
+    expect(loaded.playlists[P].title).toBe('Course P');
+    expect(loaded.meta[P].archived).toBe(false);
+    expect(loaded.progress[`${P}::e1`].notes).toBe(`note-${P}`);
+    expect(loaded.ranges[0].id).toBe(`range-${P}`);
+    expect(loaded.checkpoints[0].id).toBe(`cp-${P}`);
+    expect(loaded.modules[0].id).toBe(`mod-${P}`);
+    expect(loaded.sessions[0].id).toBe(`sess-${P}`);
+    expect(loaded.goals['2026-10-02'].targetFocusSec).toBe(3600);
+    expect(loaded.xp.some((x: any) => x.id === `xp-${P}`)).toBe(true);
+    expect(loaded.achievements.first).toBe('2026-10-02T00:00:00.000Z');
+    expect(loaded.segments[0].id).toBe(`seg-${P}`);
+    expect(loaded.playSessions[0].id).toBe(`ps-${P}`);
+    expect(loaded.queue[P]).toEqual([1, 2]);
+    expect(loaded.flexGoals[0].id).toBe(`goal-${P}`);
+    expect(loaded.challenge).toEqual({ mode: 'solo', targetRank: 3 });
+    expect(loaded.challengeEnabled).toBe(true);
+    expect(loaded.rankHistory).toEqual([{ at: '2026-10-02T00:00:00.000Z', rank: 2, of: 10 }]);
+    expect(loaded.settings).toEqual({ verifiedThreshold: 0.9 });
+    expect(loaded.prefs.timezone).toBe('UTC');
+    expect(loaded.activeId).toBe(P);
+  });
+
+  it('shows data saved by one authenticated client to a second client for the same account', async () => {
+    const a = await seedUser('cross_a', 'crossa@example.test', 'correct horse battery staple', 'google-sub-crossa');
+    await putState(a.userId, learningState([P]));
+    // Two independent logins model two devices; neither replaces the other.
+    const desktop = await login('cross_a', 'correct horse battery staple');
+    const laptop = await login('cross_a', 'correct horse battery staple');
+    const before = await authed(request(app).get('/api/account/data'), desktop);
+    expect(before.status).toBe(200);
+    expect(before.body.state.progress[`${P}::e1`].notes).toBe(`note-${P}`);
+
+    const changed = {
+      ...before.body.state.progress,
+      [`${P}::e1`]: {
+        ...before.body.state.progress[`${P}::e1`],
+        notes: 'written on the desktop',
+        completedAt: '2026-10-05T00:00:00.000Z',
+      },
+    };
+    const saved = await authed(request(app).put('/api/account/data/progress'), desktop)
+      .send({ version: before.body.version, items: changed });
+    expect(saved.status).toBe(200);
+
+    const second = await authed(request(app).get('/api/account/data'), laptop);
+    expect(second.status).toBe(200);
+    expect(second.body.state.progress[`${P}::e1`].notes).toBe('written on the desktop');
+    expect(second.body.state.progress[`${P}::e1`].completedAt).toBe('2026-10-05T00:00:00.000Z');
+    expect(second.body.version).toBe(saved.body.version);
   });
 
   it('rejects stale versions and client-supplied ownership fields', async () => {

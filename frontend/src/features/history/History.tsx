@@ -432,7 +432,7 @@ function ManualEntry({ onSaved }: { onSaved?: (dateKey: string) => string }) {
       activePlaybackSec: Math.round(mins * 60), contentSec: tlEnd - tlStart,
       uniqueGainSec: 0, pauseSec: 0, note: note || undefined,
     });
-    setMsg(`Saved as self-reported (never shown as verified playback). ${onSaved?.(date) ?? ''}`.trim());
+    setMsg(`Recorded as self-reported (never shown as verified playback). ${onSaved?.(date) ?? ''}`.trim());
     setNote('');
   };
 

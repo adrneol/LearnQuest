@@ -161,7 +161,7 @@ function SettingsSection() {
     }
     const ok = await confirmDialog({
       title: 'Permanently delete this LearnQuest account?',
-      body: 'This removes the account, learning data, sessions, and all related records from MongoDB. It cannot be undone through LearnQuest. Export a copy first.',
+      body: 'This permanently removes the account and all of its learning data. It cannot be undone through LearnQuest. Export a copy first.',
       confirmLabel: 'Delete account permanently',
       danger: true,
     });
@@ -196,7 +196,7 @@ function SettingsSection() {
 
       <Card>
         <h2 className="text-base font-bold">Account data</h2>
-        <p className="mt-1 text-sm text-slate-400">Download a JSON export with account profile and all learning data. It never includes password hashes, email action tokens, or session tokens.</p>
+        <p className="mt-1 text-sm text-slate-400">Download a JSON export with your account profile and learning data. It never includes passwords or sign-in tokens.</p>
         <div className="mt-2 flex flex-wrap gap-2">
           <Btn onClick={exportData}><Download size={14} /> Export account data</Btn>
           <Btn disabled={busy} onClick={() => { void s.listAccountSessions().then(() => s.refreshSession()); }}><RefreshCw size={14} /> Refresh account state</Btn>
@@ -206,7 +206,7 @@ function SettingsSection() {
       <Card className="border-red-500/25">
         <h2 className="flex items-center gap-1.5 text-base font-bold text-red-200"><Trash2 size={16} /> Delete account</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Deletion requires your exact username and recent reauthentication. It removes MongoDB learning records, sessions, and the account.
+          Deletion requires your exact username and recent reauthentication. It permanently removes your account and all of its learning records.
           Other accounts are never affected. This cannot be undone through LearnQuest.
         </p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -285,7 +285,7 @@ function SecuritySection() {
     try {
       const result = await s.requestEmailChange(newEmail.trim(), emailPassword || undefined);
       setEmailRequest({ email: result.email, expiresInMin: result.expiresInMin });
-      setEmailMessage(`A secure verification link was sent to ${result.email}. It expires in ${result.expiresInMin} minutes; your current email remains active until you open it.`);
+      setEmailMessage(`Check ${result.email} for a verification link. It expires in ${result.expiresInMin} minutes; your current email remains active until it is opened.`);
       setEmailPassword('');
     } catch (e: any) {
       setEmailError(e?.message ?? 'Email change could not be started.');
@@ -297,7 +297,7 @@ function SecuritySection() {
   const signOutAll = async () => {
     const ok = await confirmDialog({
       title: 'Sign out of every device?',
-      body: 'All server-side sessions, including this one, will be revoked. You will need to sign in again.',
+      body: 'All active sessions, including this one, will be signed out. You will need to sign in again.',
       confirmLabel: 'Sign out all devices',
       danger: true,
     });
@@ -308,7 +308,7 @@ function SecuritySection() {
     <div className="space-y-4">
       <Card>
         <h2 className="flex items-center gap-1.5 text-base font-bold"><KeyRound size={16} /> Password</h2>
-        <p className="mt-1 text-xs text-slate-400">Passwords are hashed with Argon2id. The current password is required when one exists; a recent Google sign-in is required otherwise.</p>
+        <p className="mt-1 text-xs text-slate-400">Choose a strong password of at least 12 characters. Your current password is required when one is set; otherwise sign in with Google again.</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           {user.hasPassword && (
             <Field label="Current password">

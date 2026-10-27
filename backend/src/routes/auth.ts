@@ -7,9 +7,9 @@ import type { EmailService } from '../email/brevo.js';
 import type { GoogleOAuthService, GoogleAuthIntent } from '../auth/google.js';
 import {
   boundedInt, completeOnboarding, createAccountFromGoogle, findAccountByGoogleSub,
-  findAccountById, findAccountByIdentifier, safeAccount, setAccountPassword,
-  updateAccountPreferences, validatePassword, validateTimezone, http,
-  type Account, type SafeAccount,
+  findAccountById, findAccountByIdentifier, isPasswordResetEligible, safeAccount,
+  setAccountPassword, updateAccountPreferences, validatePassword, validateTimezone,
+  http, type Account, type SafeAccount,
 } from '../auth/accounts.js';
 import {
   burnPasswordCheck, hashCode, normalizeEmail, verifyCode,
@@ -357,15 +357,18 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     try {
       await requireSetup(store);
       if (!email.configured) {
-        throw http(503, 'Password recovery email is not configured yet. Ask the administrator to set Brevo credentials.', 'SETUP_REQUIRED');
+        throw http(503, 'Password recovery is temporarily unavailable. Try again later.', 'SETUP_REQUIRED');
       }
       const body = parseBody(forgotSchema, req.body);
       const generic = {
         ok: true as const,
-        message: `If an account matches that username or email, a password reset link has been sent. The link expires in ${env.emailActionTtlMin} minutes and can be used once.`,
+        message: `If an eligible account matches that username or email, you'll receive a password-reset link. It expires in ${env.emailActionTtlMin} minutes and can be used once.`,
       };
       const account = await findAccountByIdentifier(store, body.identifier);
-      if (!account || account.status !== 'active') {
+      // A pending registration is not an eligible account: it has not chosen a
+      // username/password and must finish Google onboarding instead. The public
+      // response remains identical so this check is not an enumeration oracle.
+      if (!isPasswordResetEligible(account)) {
         res.status(202).json(generic);
         return;
       }
@@ -412,7 +415,11 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
       }
       const account = await findAccountById(store, record.userId);
-      if (!account || account.status !== 'active' || account.emailNormalized !== record.emailNormalized) {
+      if (
+        !isPasswordResetEligible(account)
+        || account.emailNormalized !== record.emailNormalized
+        || account.emailNormalized !== record.accountEmailNormalized
+      ) {
         throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
       }
       const newHash = await hashCode(body.newPassword);

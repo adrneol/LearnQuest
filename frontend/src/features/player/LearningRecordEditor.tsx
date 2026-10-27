@@ -234,7 +234,11 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
         </Btn>
         <span className={`text-xs ${status === 'error' ? 'text-red-300' : status === 'dirty' ? 'text-amber-300' : 'text-slate-400'}`} role="status" aria-live="polite">
           {status === 'dirty' && 'Unsaved changes — saving automatically…'}
-          {status === 'saved' && <span className="inline-flex items-center gap-1"><Check size={12} /> Learning record saved.</span>}
+          {status === 'saved' && (
+            s.mode === 'cloud'
+              ? <span className="inline-flex items-center gap-1"><Check size={12} /> Learning record updated. Cloud save status is shown in the header.</span>
+              : <span className="inline-flex items-center gap-1"><Check size={12} /> Learning record saved.</span>
+          )}
           {status === 'error' && (error ?? 'Could not save.')}
           {status === 'idle' && 'Saved changes never mark the video complete or verified.'}
         </span>

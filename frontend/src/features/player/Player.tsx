@@ -252,7 +252,7 @@ function PlayerInner() {
       s.markVerified(snap.playlistId, currentPos, currentEntry.videoId);
       if (!wasVerified) notify(`Video #${currentPos} verified complete.`);
     } else {
-      notify(`Playback saved: +${formatSecondsHHMMSS(gain)} unique coverage.`);
+      notify(`Playback recorded: +${formatSecondsHHMMSS(gain)} unique coverage.`);
     }
     prevUnique.current = Math.round(sum.uniqueSec);
   };

@@ -522,7 +522,7 @@ function AppInner() {
 
         <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] text-slate-600">
           {s.mode === 'cloud'
-            ? 'Cloud account: learning data is stored on the LearnQuest server and scoped to your authenticated account. Exports and backups are available in Reports and Account.'
+            ? 'Your learning data is stored with your account. Exports and backups are available in Reports and Account.'
             : 'Local test mode: progress lives in this browser (IndexedDB). Production builds use authenticated cloud persistence.'}
         </footer>
       </div>

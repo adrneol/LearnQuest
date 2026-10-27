@@ -255,6 +255,8 @@ Run each from its own directory (`frontend/` or `backend/`):
   network access; the automated suites use in-memory fakes. The production
   proxy/session chain, Render Node `24.22.1` runtime, and live email delivery
   were not observable from this environment. See
+  [`docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md`](./docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md)
+  and the prior
   [`docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md`](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
   for the exact verification boundary and owner-side checks.
 - Timed in-browser playback events, overnight soak runs, live quota metering,
@@ -273,7 +275,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 |---|---|
 | Setup/configuration screen | Fill the listed names in `backend/.env`, restart, retry |
 | Google sign-in fails | Check the OAuth client, exact redirect URI, `GOOGLE_CLIENT_ID`/secret, and consent-screen test users |
-| Recovery email not received | Verify the Brevo sender/domain and API key; check spam; wait for the resend cooldown; request a new link (older links are invalidated) |
+| Recovery email not received | Check Brevo Transactional Email Logs for the recipient and status; verify sender/domain authentication (a verified Gmail sender can still fail DKIM/DMARC alignment), API key permissions, and spam; wait for the resend cooldown; request a new link (older links are invalidated). An unknown or ineligible account intentionally receives no message. |
 | MongoDB auth/data errors | Check `MONGODB_URI`, Atlas network access, and database user permissions; no local fallback is used |
 | API key missing | Follow Configuration; restart backend; Recheck in Settings |
 | Invalid/restricted key | Allow YouTube Data API v3 + backend host in Google Cloud; restart |
@@ -290,7 +292,8 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
 - [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup.
-- [docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — current auth, email-link, proxy, and verification report.
+- [docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md](./docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md) — current onboarding UX, password recovery, Brevo diagnostics, and cloud-persistence report.
+- [docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — prior auth, email-link, proxy, and verification report.
 - [docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — prior multi-user platform report (historical; superseded by the auth/security repair above).
 - [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — prior remediation report and verification matrix.
 - [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.

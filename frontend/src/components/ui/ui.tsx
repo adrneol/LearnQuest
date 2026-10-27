@@ -9,13 +9,13 @@ export function Btn({
 }: {
   children: React.ReactNode; onClick?: () => void; variant?: 'primary' | 'ghost' | 'danger'; className?: string; type?: 'button' | 'submit'; disabled?: boolean; title?: string;
 }) {
-  const base = 'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] disabled:opacity-50';
+  const base = 'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
   const styles =
     variant === 'primary'
-      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/40'
+      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/40 disabled:hover:bg-violet-600'
       : variant === 'danger'
-        ? 'bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25'
-        : 'bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200';
+        ? 'bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 disabled:hover:bg-red-500/15'
+        : 'bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200 disabled:hover:bg-white/5';
   return (
     <button type={type} disabled={disabled} title={title} onClick={onClick} className={`${base} ${styles} ${className}`}>
       {children}

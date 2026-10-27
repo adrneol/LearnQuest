@@ -78,6 +78,44 @@ export interface ServerState {
   prefs: any;
 }
 
+/**
+ * The server's account payload must never be mistaken for an empty account.
+ * A partial/malformed response is an error, not permission to initialize
+ * blank collections and let the writer overwrite real cloud data.
+ */
+const ACCOUNT_STATE_KEYS = [
+  'playlists', 'meta', 'activeId', 'progress', 'ranges', 'checkpoints', 'modules',
+  'sessions', 'goals', 'xp', 'achievements', 'segments', 'playSessions', 'queue',
+  'flexGoals', 'challenge', 'challengeEnabled', 'rankHistory', 'settings', 'prefs',
+] as const;
+
+function invalidAccountData(): ApiError {
+  return new ApiError(
+    'The account service returned incomplete learning data. Nothing was overwritten; retry after the deployment finishes.',
+    502,
+    'INVALID_ACCOUNT_DATA',
+  );
+}
+
+function validateAccountDataResponse(value: unknown): { state: ServerState; version: number } {
+  if (!isObject(value) || !isObject(value.state) || typeof value.version !== 'number' || !Number.isFinite(value.version)) {
+    throw invalidAccountData();
+  }
+  const state = value.state;
+  for (const key of ACCOUNT_STATE_KEYS) {
+    if (!(key in state)) throw invalidAccountData();
+  }
+  for (const key of ['playlists', 'meta', 'progress', 'goals', 'achievements', 'queue'] as const) {
+    if (!isObject(state[key])) throw invalidAccountData();
+  }
+  for (const key of ['ranges', 'checkpoints', 'modules', 'sessions', 'xp', 'segments', 'playSessions', 'flexGoals', 'rankHistory'] as const) {
+    if (!Array.isArray(state[key])) throw invalidAccountData();
+  }
+  if (state.activeId !== null && typeof state.activeId !== 'string') throw invalidAccountData();
+  if (typeof state.challengeEnabled !== 'boolean') throw invalidAccountData();
+  return { state: state as unknown as ServerState, version: value.version };
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -339,7 +377,7 @@ export async function deleteAccount(confirmUsername: string, password?: string):
 }
 
 export async function fetchAccountData(): Promise<{ state: ServerState; version: number }> {
-  return apiRequest('/account/data', { timeoutMs: 30_000 });
+  return validateAccountDataResponse(await apiRequest('/account/data', { timeoutMs: 30_000 }));
 }
 
 export async function putAccountCollection(
@@ -347,11 +385,19 @@ export async function putAccountCollection(
   items: unknown,
   version: number,
 ): Promise<{ version: number; collection: string; savedAt: string }> {
-  return apiRequest(`/account/data/${encodeURIComponent(collection)}`, {
+  const result = await apiRequest<unknown>(`/account/data/${encodeURIComponent(collection)}`, {
     method: 'PUT',
     body: { version, items },
     timeoutMs: 30_000,
   });
+  if (!isObject(result) || typeof result.version !== 'number' || !Number.isFinite(result.version)) {
+    throw new ApiError(
+      'The account service did not confirm the save version. Reload your account data before continuing.',
+      502,
+      'INVALID_SAVE_RESPONSE',
+    );
+  }
+  return result as unknown as { version: number; collection: string; savedAt: string };
 }
 
 export async function importAccountBackup(payload: unknown, version?: number): Promise<{ version: number }> {

@@ -11,6 +11,23 @@ import {
 } from './adapter.js';
 
 /**
+ * Match MongoDB's immutable `_id` behavior. The previous fake silently accepted
+ * a `$set` containing `_id`, which hid a production-only onboarding failure
+ * ("would modify the immutable field '_id'").
+ */
+function assertMutableUpdate(update: Doc): void {
+  const set = update.$set && typeof update.$set === 'object' && !Array.isArray(update.$set)
+    ? update.$set
+    : update;
+  if (Object.prototype.hasOwnProperty.call(set, '_id')) {
+    throw Object.assign(
+      new Error("Performing an update on the path '_id' would modify the immutable field '_id'"),
+      { code: 66, codeName: 'ImmutableField' },
+    );
+  }
+}
+
+/**
  * Test-only in-memory adapter. A copy is created per `createMemoryDb()` call;
  * no module-level state is shared between test files or app instances.
  */
@@ -37,6 +54,7 @@ class MemoryCollection implements CollectionAdapter {
   }
 
   async updateOne(query: Doc, update: Doc, opts?: { upsert?: boolean }): Promise<UpdateResult> {
+    assertMutableUpdate(update);
     const idx = this.docs.findIndex((d) => matchesQuery(d, query));
     if (idx < 0) {
       if (!opts?.upsert) return { matchedCount: 0, modifiedCount: 0 };
@@ -50,6 +68,7 @@ class MemoryCollection implements CollectionAdapter {
   }
 
   async findOneAndUpdate(query: Doc, update: Doc, opts?: { upsert?: boolean }): Promise<Doc | null> {
+    assertMutableUpdate(update);
     const idx = this.docs.findIndex((d) => matchesQuery(d, query));
     if (idx < 0) {
       if (!opts?.upsert) return null;

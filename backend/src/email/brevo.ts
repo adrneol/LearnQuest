@@ -15,9 +15,18 @@ export interface SecurityNoticeInput {
   message: string;
 }
 
+/**
+ * A provider acceptance receipt. It proves that Brevo accepted the API
+ * request; it does not prove inbox delivery. Never treat it as a delivery
+ * confirmation.
+ */
+export interface EmailDeliveryReceipt {
+  messageId: string | null;
+}
+
 export interface EmailService {
   readonly configured: boolean;
-  sendActionEmail(input: ActionEmailInput): Promise<void>;
+  sendActionEmail(input: ActionEmailInput): Promise<EmailDeliveryReceipt | void>;
   sendSecurityNotice(input: SecurityNoticeInput): Promise<void>;
 }
 
@@ -160,9 +169,26 @@ This is an automated security notice from LearnQuest. If you did not make this c
   return { subject, html, text };
 }
 
-async function brevoSend(payload: Record<string, unknown>): Promise<void> {
+/** Keep diagnostics to a short, known-safe alphabet. Never log content. */
+function safeDiagnostic(value: unknown, max = 200): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > max) return null;
+  return /^[A-Za-z0-9<>@._:+-]+$/.test(trimmed) ? trimmed : null;
+}
+
+async function providerDiagnosticCode(res: Response): Promise<string | null> {
+  try {
+    const body = await res.json() as Record<string, unknown> | null;
+    return safeDiagnostic(body?.code, 80);
+  } catch {
+    return null;
+  }
+}
+
+async function brevoSend(payload: Record<string, unknown>, event: string): Promise<EmailDeliveryReceipt> {
   if (!env.brevoConfigured) {
-    throw Object.assign(new Error('Email delivery is not configured. Set BREVO_API_KEY and BREVO_SENDER_EMAIL.'), { status: 503, code: 'SETUP_REQUIRED' });
+    throw Object.assign(new Error('Email delivery is not configured yet.'), { status: 503, code: 'SETUP_REQUIRED' });
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10_000);
@@ -178,14 +204,46 @@ async function brevoSend(payload: Record<string, unknown>): Promise<void> {
       signal: ctrl.signal,
     });
     if (!res.ok) {
-      // Never include the provider response body: it may echo recipient data.
-      throw Object.assign(new Error('The email provider rejected the message. Check Brevo sender verification and API-key permissions.'), { status: 502, code: 'EMAIL_DELIVERY_FAILED' });
+      // Never include the provider response body in the error or log: it can
+      // echo recipient data. Only the HTTP status, a short provider code, and
+      // a request identifier are safe diagnostic fields.
+      const providerCode = await providerDiagnosticCode(res);
+      const providerRequestId = safeDiagnostic(res.headers.get('x-sib-request-id'), 120);
+      console.error(JSON.stringify({
+        level: 'error',
+        event: 'email_provider_rejected',
+        kind: event,
+        status: res.status,
+        providerCode,
+        providerRequestId,
+      }));
+      throw Object.assign(new Error('The email provider rejected the message. Check the sender address and provider configuration.'), { status: 502, code: 'EMAIL_DELIVERY_FAILED' });
     }
-  } catch (e: any) {
-    if (e?.name === 'AbortError') {
+    let messageId: string | null = null;
+    try {
+      const body = await res.json() as Record<string, unknown> | null;
+      messageId = safeDiagnostic(body?.messageId, 200);
+    } catch {
+      // Some providers return an empty body on acceptance. The HTTP status is
+      // still authoritative for "accepted", not "delivered".
+    }
+    console.info(JSON.stringify({
+      level: 'info',
+      event: 'email_provider_accepted',
+      kind: event,
+      messageId,
+    }));
+    return { messageId };
+  } catch (e: unknown) {
+    const name = (e as { name?: string })?.name;
+    const code = (e as { code?: string })?.code;
+    const status = (e as { status?: number })?.status;
+    if (name === 'AbortError') {
+      console.error(JSON.stringify({ level: 'error', event: 'email_provider_timeout', kind: event }));
       throw Object.assign(new Error('The email provider timed out. Try again shortly.'), { status: 504, code: 'EMAIL_TIMEOUT' });
     }
-    if (e?.code === 'EMAIL_DELIVERY_FAILED' || e?.status === 503) throw e;
+    if (code === 'EMAIL_DELIVERY_FAILED' || status === 503) throw e;
+    console.error(JSON.stringify({ level: 'error', event: 'email_provider_unreachable', kind: event }));
     throw Object.assign(new Error('The email could not be delivered. Try again shortly.'), { status: 502, code: 'EMAIL_DELIVERY_FAILED' });
   } finally {
     clearTimeout(timer);
@@ -199,13 +257,13 @@ export function createBrevoEmailService(): EmailService {
     },
     async sendActionEmail(input) {
       const email = buildActionEmail(input);
-      await brevoSend({
+      return brevoSend({
         sender: { email: env.brevoSenderEmail, name: env.brevoSenderName },
         to: [{ email: input.to }],
         subject: email.subject,
         htmlContent: email.html,
         textContent: email.text,
-      });
+      }, input.purpose === 'password_reset' ? 'password_reset' : 'email_change');
     },
     async sendSecurityNotice(input) {
       const email = buildSecurityNoticeEmail(input);
@@ -215,7 +273,7 @@ export function createBrevoEmailService(): EmailService {
         subject: email.subject,
         htmlContent: email.html,
         textContent: email.text,
-      });
+      }, 'security_notice');
     },
   };
 }

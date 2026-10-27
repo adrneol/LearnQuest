@@ -352,7 +352,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
 
   router.post('/email/change', requireCsrf, requireRecentAuth, async (req: AuthedRequest, res, next) => {
     try {
-      if (!email.configured) throw http(503, 'Email delivery is not configured. Ask the administrator to set Brevo credentials.', 'SETUP_REQUIRED');
+      if (!email.configured) throw http(503, 'Email changes are temporarily unavailable. Try again later.', 'SETUP_REQUIRED');
       const account = req.auth!.account;
       const body = parseBody(emailChangeSchema, req.body);
       const newEmail = body.newEmail.trim();
@@ -390,7 +390,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         ok: true,
         email: newEmail,
         expiresInMin: issued.expiresInMin,
-        message: `A verification link was sent to ${newEmail}. Your current email remains active until it is opened.`,
+        message: `Check ${newEmail} for a verification link. Your current email remains active until it is opened.`,
       });
     } catch (e) {
       next(e);
