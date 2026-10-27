@@ -1,7 +1,7 @@
 import { createApp } from './app.js';
 import { env, assertProductionConfig, configStatus } from './config/env.js';
-import { closeMongo, getMongoAdapter, getMongoDb, mongoTargetDescription, pingMongo } from './db/mongo.js';
-import { describeMongoFailure } from './db/mongoErrors.js';
+import { closeMongo, getMongoAdapter, mongoTargetDescription } from './db/mongo.js';
+import { createMongoSupervisor } from './db/mongoSupervisor.js';
 import { createDataStore } from './store.js';
 import { resumePendingAccountDeletions } from './services/accountDeletion.js';
 
@@ -10,42 +10,56 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
   assertProductionConfig();
   const status = configStatus();
   const store = createDataStore(getMongoAdapter());
-  const server = createApp({ store }).listen(env.port, async () => {
-    console.log(`LearnQuest API listening on :${env.port} (CORS: ${env.corsOrigin.join(',')})`);
-    if (status.setupRequired) {
-      console.log(`LearnQuest setup required — missing: ${status.missing.join(', ')}. Auth stays fail-closed until configured.`);
-    }
-    if (env.mongodbConfigured) {
+
+  const supervisor = createMongoSupervisor({
+    configured: env.mongodbConfigured,
+    label: `MongoDB (${mongoTargetDescription()})`,
+    log: (message) => console.log(message),
+    logError: (message) => console.error(message),
+    onFirstReady: async () => {
+      // This callback is deliberately outside the reconnect loop. It runs at
+      // most once per process, after the first fully ready connection, and
+      // preserves the existing startup deletion-recovery policy. A later
+      // network reconnect never resumes destructive maintenance.
       try {
-        await pingMongo();
-      } catch (error) {
-        console.error(`MongoDB connection check failed (${mongoTargetDescription()}): ${describeMongoFailure(error)}. Auth/data endpoints will return a setup/unavailable error; no local fallback is enabled.`);
-        return;
-      }
-      try {
-        await getMongoDb();
-        console.log(`MongoDB connected and indexes verified (${mongoTargetDescription()}).`);
-      } catch (error) {
-        console.error(`MongoDB connection succeeded but index initialization failed (${mongoTargetDescription()}): ${describeMongoFailure(error)}. Auth/data endpoints will fail closed; no local fallback is enabled.`);
-        return;
-      }
-      try {
-        // Complete deletion sagas interrupted by a crash/restart. Only
-        // accounts already marked `deleting` are eligible; active accounts are
-        // never touched by this sweep.
         const resumed = await resumePendingAccountDeletions(store);
         if (resumed.attempted > 0) {
           console.log(`Account-deletion sweep: attempted=${resumed.attempted} completed=${resumed.completed} failed=${resumed.failed}.`);
         }
-      } catch (error) {
-        console.error(`MongoDB connected but the account-deletion sweep failed (${mongoTargetDescription()}): ${describeMongoFailure(error)}. No deletion is reported complete; the next startup may retry.`);
+      } catch {
+        console.error('MongoDB is ready but the account-deletion sweep failed. No deletion is reported complete; review pending deletion jobs before the next restart.');
       }
-    } else {
-      console.log('MongoDB is not configured. Auth and account data endpoints are disabled.');
-    }
+    },
   });
+
+  const app = createApp({
+    store,
+    readiness: supervisor,
+    onMongoFailure: (error) => supervisor.markUnavailable(error),
+  });
+
+  const server = app.listen(env.port, () => {
+    console.log(`LearnQuest API listening on :${env.port} (CORS: ${env.corsOrigin.join(',')})`);
+    if (status.setupRequired) {
+      console.log(`LearnQuest setup required — missing: ${status.missing.join(', ')}. Auth stays fail-closed until configured.`);
+    }
+    if (!env.mongodbConfigured) {
+      console.log('MongoDB is not configured. Auth and account data endpoints are disabled.');
+      return;
+    }
+    // The listener is live immediately; readiness is reported separately at
+    // /api/ready and becomes true only after ping + index initialization.
+    void supervisor.start().catch(() => {
+      console.error('MongoDB supervisor did not start cleanly; readiness remains unavailable.');
+    });
+  });
+
+  let shuttingDown = false;
   const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`Received ${signal}; closing LearnQuest API.`);
+    supervisor.stop();
     server.close(() => {
       void closeMongo().finally(() => process.exit(0));
     });

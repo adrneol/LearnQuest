@@ -163,7 +163,9 @@ export function classifyMongoError(error: unknown): MongoFailureClass {
     || name.includes('mongonetworkerror')
     || name.includes('mongoserverselectionerror')
   ) return 'NETWORK_TIMEOUT';
-  if (name.includes('mongoservererror') || name.includes('mongonetworkerror')) return 'PING_FAILED';
+  // A generic MongoServerError is usually a command outcome (validation,
+  // duplicate key, write conflict), not proof that the database is down.
+  if (name.includes('mongonetworkerror')) return 'PING_FAILED';
   return 'UNKNOWN_ERROR';
 }
 
@@ -172,7 +174,41 @@ export function isRetryableMongoFailure(classification: MongoFailureClass): bool
     || classification === 'DNS_SRV_FAILURE'
     || classification === 'TLS_FAILURE'
     || classification === 'PING_FAILED'
+    || classification === 'CLIENT_LIFECYCLE_ERROR'
     || classification === 'UNKNOWN_ERROR';
+}
+
+/**
+ * True only for driver-shaped failures. This lets the HTTP error handler map
+ * database failures to a retryable 503 without exposing a raw driver message,
+ * while ordinary application errors keep their existing status behavior.
+ */
+export function isMongoDriverFailure(error: unknown): boolean {
+  const sanitized = sanitizeMongoError(error);
+  if (/^Mongo/i.test(sanitized.name)
+    || /^Mongo/i.test(sanitized.causeName ?? '')
+    || /^Mongo/i.test(sanitized.reasonName ?? '')) {
+    return true;
+  }
+  return [sanitized.code, sanitized.causeCode, sanitized.reasonCode]
+    .some((code) => /^ERR_(SSL|TLS)/i.test(code ?? ''));
+}
+
+/**
+ * Availability failures are the subset of driver errors that mean the service
+ * cannot use MongoDB. A duplicate-key or validation failure is a request
+ * conflict, not an outage, and must keep its normal route-level handling.
+ */
+export function isMongoAvailabilityFailure(error: unknown): boolean {
+  if (!isMongoDriverFailure(error)) return false;
+  const sanitized = sanitizeMongoError(error);
+  const codes = [sanitized.code, sanitized.causeCode, sanitized.reasonCode];
+  // A duplicate-key result is a request conflict, not an outage.
+  if (codes.some((code) => code === '11000' || code === '11001')) return false;
+  const classification = classifyMongoError(error);
+  if (classification !== 'UNKNOWN_ERROR') return true;
+  return /^Mongo(Network|ServerSelection|Topology|Client)/i.test(sanitized.name)
+    || codes.some((code) => /^ERR_(SSL|TLS)/i.test(code ?? ''));
 }
 
 /**

@@ -189,6 +189,7 @@ async function main(): Promise<void> {
   const result: Record<string, unknown> = {
     diagnostic: 'mongo-read-only-connectivity',
     readOnly: true,
+    runtime: { node: process.version },
     database: { expected: 'learnquest', matches: false },
   };
 

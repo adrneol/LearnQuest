@@ -4,15 +4,41 @@ import { validatePlaylistQuery, isRefreshRequested } from '../schemas/playlistSc
 import { fetchPlaylistSnapshot } from '../services/youtube/youtubeService.js';
 import { recordCacheHit, recordCacheMiss, recordDedupHit, recordImport } from '../diagnostics/apiStats.js';
 import type { MemoryCache } from '../cache/memoryCache.js';
+import type { MongoReadinessSnapshot, MongoReadinessSource } from '../db/mongoSupervisor.js';
 
-export function createPlaylistController(cache: MemoryCache) {
+/**
+ * When a caller supplies an in-memory test store there is no managed database.
+ * Report that explicitly instead of claiming that MongoDB is ready.
+ */
+function readinessSnapshot(readiness?: MongoReadinessSource): MongoReadinessSnapshot {
+  return readiness?.snapshot() ?? {
+    managed: false,
+    configured: env.mongodbConfigured,
+    ready: false,
+    state: 'unmanaged',
+    consecutiveFailures: 0,
+    lastFailure: null,
+    nextRetryInMs: null,
+    readyAt: null,
+  };
+}
+
+export function createPlaylistController(cache: MemoryCache, readiness?: MongoReadinessSource) {
   // Dedupe equivalent in-flight fetches: concurrent refreshes for the same
   // playlist share one upstream request instead of hammering YouTube quota.
   const inflight = new Map<string, Promise<{ snapshot: import('../types/index.js').NormalizedSnapshot }>>();
   async function getHealth(_req: Request, res: Response): Promise<void> {
     const config = configStatus();
+    const database = readinessSnapshot(readiness);
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
+      // `ok` and `liveness` describe the HTTP process. Database readiness is
+      // reported separately and never implied by a successful health check.
       ok: true,
+      liveness: true,
+      ready: database.ready,
+      database,
+      readinessPath: '/api/ready',
       hasKey: Boolean(env.youtubeApiKey),
       version: VERSION,
       time: new Date().toISOString(),
@@ -20,6 +46,34 @@ export function createPlaylistController(cache: MemoryCache) {
       authEnabled: config.authEnabled,
       configured: config.configured,
       missing: config.missing,
+    });
+  }
+
+  async function getReadiness(_req: Request, res: Response): Promise<void> {
+    const database = readinessSnapshot(readiness);
+    if (!database.ready) {
+      const retryAfterSec = database.nextRetryInMs === null
+        ? 5
+        : Math.max(1, Math.ceil(database.nextRetryInMs / 1_000));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Retry-After', String(retryAfterSec));
+      res.status(503).json({
+        ok: false,
+        ready: false,
+        database,
+        retryAfterSec,
+        version: VERSION,
+        time: new Date().toISOString(),
+      });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      ready: true,
+      database,
+      version: VERSION,
+      time: new Date().toISOString(),
     });
   }
 
@@ -59,5 +113,5 @@ export function createPlaylistController(cache: MemoryCache) {
     }
   }
 
-  return { getHealth, getPlaylist };
+  return { getHealth, getReadiness, getPlaylist };
 }

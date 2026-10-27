@@ -20,6 +20,28 @@ describe('MongoDB connection lifecycle', () => {
     await closeMongo();
   });
 
+  it('closes the shared client during shutdown and permits a fresh connection afterward', async () => {
+    const first = {
+      db: () => ({ command: async () => ({ ok: 1 }) }),
+      close: vi.fn(async () => undefined),
+    };
+    const second = {
+      db: () => ({ command: async () => ({ ok: 1 }) }),
+      close: vi.fn(async () => undefined),
+    };
+    connectMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+
+    const { pingMongo, closeMongo } = await import('../src/db/mongo.js');
+    await pingMongo();
+    await closeMongo();
+    expect(first.close).toHaveBeenCalledTimes(1);
+
+    await pingMongo();
+    expect(connectMock).toHaveBeenCalledTimes(2);
+    await closeMongo();
+    expect(second.close).toHaveBeenCalledTimes(1);
+  });
+
   it('retries after a failed connection instead of caching the rejection forever', async () => {
     connectMock.mockRejectedValueOnce(
       Object.assign(new Error('tlsv1 alert internal error'), {

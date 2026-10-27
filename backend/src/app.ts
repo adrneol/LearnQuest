@@ -8,10 +8,12 @@ import { createAuthRouter } from './routes/auth.js';
 import { createAccountRouter } from './routes/account.js';
 import { createPlaylistManagementRouter } from './routes/playlists.js';
 import { createApiLimiter } from './middleware/rateLimit.js';
-import { errorHandler, notFound } from './middleware/errors.js';
+import { createErrorHandler, notFound } from './middleware/errors.js';
+import { requireMongoReady } from './middleware/mongoReadiness.js';
 import { createMemoryCache } from './cache/memoryCache.js';
 import { createDataStore, type DataStore } from './store.js';
 import { getMongoAdapter } from './db/mongo.js';
+import type { MongoReadinessSource } from './db/mongoSupervisor.js';
 import { createBrevoEmailService, type EmailService } from './email/brevo.js';
 import { createGoogleOAuthService, type GoogleOAuthService } from './auth/google.js';
 import { requireTrustedOrigin } from './auth/middleware.js';
@@ -20,6 +22,10 @@ export interface AppDependencies {
   store?: DataStore;
   email?: EmailService;
   google?: GoogleOAuthService;
+  /** Production supplies the process supervisor; in-memory tests may omit it. */
+  readiness?: MongoReadinessSource;
+  /** Called when a route observes a driver failure, so recovery can start. */
+  onMongoFailure?: (error: unknown) => void;
 }
 
 export function createApp(deps: AppDependencies = {}) {
@@ -66,11 +72,28 @@ export function createApp(deps: AppDependencies = {}) {
   }));
   app.use(requireTrustedOrigin);
   app.use('/api', createApiLimiter());
+
+  // Account and learning-data routes must fail closed when MongoDB is not
+  // ready. /api/auth/config is public configuration and does not require a
+  // database; it remains available so the login screen can explain setup.
+  if (deps.readiness) {
+    const databaseReady = requireMongoReady(deps.readiness);
+    app.use('/api/auth', (req, res, next) => {
+      if (req.path === '/config') {
+        next();
+        return;
+      }
+      databaseReady(req, res, next);
+    });
+    app.use('/api/account', databaseReady);
+    app.use('/api/playlists', databaseReady);
+  }
+
   app.use('/api/auth', createAuthRouter({ store, email, google }));
   app.use('/api/account', createAccountRouter({ store, email }));
   app.use('/api/playlists', createPlaylistManagementRouter(store));
-  app.use('/api', createApiRouter(cache));
+  app.use('/api', createApiRouter(cache, deps.readiness));
   app.use(notFound);
-  app.use(errorHandler);
+  app.use(createErrorHandler({ onMongoFailure: deps.onMongoFailure }));
   return app;
 }

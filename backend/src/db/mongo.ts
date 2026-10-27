@@ -211,8 +211,13 @@ async function connectMongoDb(): Promise<Db> {
   }
   if (!dbPromise) {
     const clientAttempt = MongoClient.connect(env.mongodbUri, {
+      appName: 'learnquest-api',
+      // Keep every connection phase bounded. The supervisor adds controlled
+      // backoff between attempts; these values bound one attempt only.
       serverSelectionTimeoutMS: 5_000,
       connectTimeoutMS: 5_000,
+      socketTimeoutMS: 45_000,
+      waitQueueTimeoutMS: 10_000,
       maxPoolSize: 10,
       retryWrites: true,
     });
@@ -225,7 +230,7 @@ async function connectMongoDb(): Promise<Db> {
     void dbAttempt.catch(async () => {
       if (dbPromise !== dbAttempt) return;
       dbPromise = null;
-      clientPromise = null;
+      if (clientPromise === clientAttempt) clientPromise = null;
       const client = await clientAttempt.catch(() => null);
       if (client) await client.close().catch(() => undefined);
     });
@@ -241,7 +246,9 @@ async function connectMongoDb(): Promise<Db> {
  */
 export async function pingMongo(): Promise<void> {
   const db = await connectMongoDb();
-  await db.command({ ping: 1 });
+  // The driver's server-selection and socket timeouts bound the connection;
+  // timeoutMS additionally bounds the ping operation itself.
+  await db.command({ ping: 1 }, { timeoutMS: 5_000 });
 }
 
 /** Lazily connect once, then ensure the application's indexes exist. */
@@ -325,11 +332,14 @@ export function getMongoAdapter(options: { ensureIndexes?: boolean } = {}): DbAd
 }
 
 export async function closeMongo(): Promise<void> {
-  const client = clientPromise ? await clientPromise.catch(() => null) : null;
-  await client?.close();
+  // Detach state before awaiting so a caller that starts a fresh connection
+  // during shutdown cannot have its promise cleared by this older close.
+  const clientAttempt = clientPromise;
   clientPromise = null;
   dbPromise = null;
   indexesPromise = null;
   defaultAdapter = null;
   readOnlyAdapter = null;
+  const client = clientAttempt ? await clientAttempt.catch(() => null) : null;
+  await client?.close();
 }

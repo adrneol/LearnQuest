@@ -1,0 +1,142 @@
+# LEARNQUEST — MONGODB TLS CONNECTIVITY RECHECK AND RECOVERY
+
+Repository: `E:\progressGameTracker`
+
+Latest connectivity audit:
+`docs/user-doc/audit2/12_LEARNQUEST_MONGODB_CONNECTIVITY_RECOVERY_2026-10-28.md`
+
+Existing audit archive index:
+`docs/user-doc/audit2/README.md`
+
+## EXECUTION POLICY
+
+Use the strongest available DeepSeek model and `#max` reasoning variant where supported. Preserve that variant for additional model runs if available.
+
+This is a continuation of the existing work, not a rebuild.
+
+Inspect the current repository status and latest audit before making any changes. Preserve all uncommitted code, reports, environment variables, credentials, and data.
+
+Never print secrets or connection strings. Do not commit, push, reset, clean, stash, or switch branches.
+
+Never disable TLS verification, set `rejectUnauthorized=false`, downgrade security to force a connection, rotate credentials without evidence, widen Atlas access to all IP addresses as a permanent workaround, or invent a replacement MongoDB URI.
+
+Do not run a destructive migration, legacy collection retirement, account deletion, or normal application startup that could trigger maintenance before assessing its side effects.
+
+## PHASE 1 — INSPECT EXISTING CONNECTIVITY FIXES
+
+Read report 12 completely and inspect:
+
+- `backend/src/db/mongoErrors.ts`
+- `backend/src/scripts/diagnoseMongo.ts`
+- `backend/src/db/mongo.ts`
+- `backend/src/server.ts`
+- `backend/package.json`
+- Database configuration and environment parsing.
+- `git status --short --branch` and relevant diffs.
+
+The previous report states that:
+- The URI structure and database name are valid.
+- MongoDB SRV and TXT DNS lookups succeed.
+- All tested Atlas TLS handshakes fail with `internal_error`.
+- Forcing TLS 1.2 and TLS 1.3 did not resolve it.
+- Public TLS controls succeeded.
+- The connection failure is classified as `TLS_FAILURE`.
+- Failed connection attempts are now retryable.
+- Startup performs a connection ping before index initialization and pending-deletion recovery.
+
+Verify these claims against the current implementation. Do not assume the source code changed or that the external issue has been resolved.
+
+## PHASE 2 — RUN A SAFE READ-ONLY DIAGNOSTIC
+
+Run the existing diagnostic from `backend/`:
+
+`npm run diagnose:mongo -- --probe-tls`
+
+Do not start a new ordinary development server just to test the database.
+
+The diagnostic must use the existing environment loader and MongoDB driver while never displaying the URI, host, username, password, or other secrets.
+
+Use the results to distinguish:
+- `CONNECTED`
+- `DNS_SRV_FAILURE`
+- `TLS_FAILURE`
+- `NETWORK_TIMEOUT`
+- `AUTHENTICATION_FAILED`
+- `ATLAS_ACCESS_DENIED`
+- `INVALID_URI`
+- Other supported, evidence-based classifications.
+
+If the diagnostic succeeds, verify that the connection and ping succeeded and close the client cleanly.
+
+If the diagnostic fails, record only sanitized information: error category/code, TLS alert, elapsed time, DNS/SRV status, and whether retrying is appropriate.
+
+Do not mislabel an application error as a TLS error or a TLS handshake failure as an authentication error.
+
+Do not repeatedly retry the same failing endpoint without a change in conditions.
+
+## PHASE 3 — IMPLEMENT ONLY DEMONSTRATED CODE FIXES
+
+If a reproducible source-code defect is found, fix it and add a regression test.
+
+If the same `TLS_FAILURE` persists and the source code is already correctly classifying the error, do not make speculative changes to the MongoDB URI, TLS options, credentials, or driver.
+
+In that case, complete the local review and give the owner exact external recovery steps instead of falsely claiming a code fix solved the problem.
+
+Include these conditional steps in the final report:
+
+1. Confirm in MongoDB Atlas that the cluster is active and has no cluster-specific alert.
+2. Retest from a different network, preferably a mobile hotspot, without the existing VPN or TLS-inspecting proxy if one is being used.
+3. Run the same read-only diagnostic from `backend/` after changing networks.
+4. If the alternate network works, investigate the original network's VPN, proxy, endpoint protection, or TLS inspection.
+5. If the alternate network produces the same TLS alert, contact Atlas support with the timestamp and sanitized error `ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR`.
+6. Check Atlas Network Access using a narrow public-IP allowlist entry. Do this as a separate check because an allowlist problem usually becomes apparent after TLS, not as this specific handshake alert.
+7. Only investigate database credentials if a genuine authentication error is observed after TLS succeeds.
+
+Never ask the owner to reveal the connection string or password.
+
+## PHASE 4 — VERIFY STARTUP AND DATABASE SAFETY
+
+Inspect whether startup would initialize indexes or resume pending account-deletion jobs after connectivity returns.
+
+Do not execute account deletion, migration, legacy retirement, or other destructive work.
+
+Do not run the normal backend against the configured database merely to hide the unavailable message. Confirm that any maintenance side effect is understood and safe before recommending normal startup.
+
+The backend must remain fail-closed while MongoDB is unreachable. Never introduce a local fallback that silently changes the source of truth.
+
+## PHASE 5 — DISTINGUISH LOCAL FROM PRODUCTION
+
+The last report says local MongoDB TLS failed and the live Render deployment was still at version `0.2.0`, with authentication endpoints returning 404. It also reports Vercel API proxy endpoints returning 404.
+
+If public read-only checks are available, recheck those deployment facts separately. Do not conflate the local TLS problem with a stale remote deployment.
+
+Do not deploy automatically or change production credentials.
+
+## PHASE 6 — TEST AND REPORT
+
+Run relevant targeted tests. Run full backend tests and backend typecheck/build if source code changes. Run frontend tests/build only when relevant code changes or a required full verification is due.
+
+Do not weaken tests or expose secrets in output.
+
+Create exactly one new audit report:
+
+`docs/user-doc/audit2/13_LEARNQUEST_MONGODB_TLS_RECHECK_2026-10-28.md`
+
+Update the existing `docs/user-doc/audit2/README.md` in place. Do not create additional Markdown reports, progress reports, summary reports, or a second archive index.
+
+The report must state:
+- What was found in the previous implementation.
+- The new diagnostic result and sanitized evidence.
+- Whether source code changed and why.
+- Whether MongoDB actually connected and pinged successfully.
+- Whether the root cause remains external or was resolved.
+- Actual test and build results.
+- Local versus live deployment status.
+- Exact next steps for the owner.
+- Final Git status.
+
+Do not create report 13 if report 13 already exists from a partial earlier run; inspect it and continue it without creating a duplicate.
+
+Do not claim success unless the connection diagnostic actually reports a successful connection and ping.
+
+Begin by inspecting the repository, then run the read-only diagnostic and complete the remaining work.

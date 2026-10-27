@@ -1,0 +1,236 @@
+# LEARNQUEST — MONGODB STARTUP, TLS CONNECTIVITY, AND AUTOMATIC RECOVERY REPAIR
+
+Repository: `E:\progressGameTracker`
+
+Latest audit: `docs/user-doc/audit2/13_LEARNQUEST_MONGODB_TLS_RECHECK_2026-10-28.md`
+
+Existing archive index: `docs/user-doc/audit2/README.md`
+
+Local backend port: 3001
+
+Database name: `learnquest`
+
+## EXECUTION RULES
+
+Use the strongest available DeepSeek model with the `#max` reasoning variant wherever supported. Preserve maximum reasoning effort for subsequent agent invocations if supported.
+
+Inspect the current working tree, latest report, MongoDB connection code, and startup sequence before editing.
+
+Continue the existing implementation; do not restart the project from scratch.
+
+Preserve all existing code, reports, environment files, secrets, and uncommitted work.
+
+Never print connection strings, credentials, API keys, passwords, action tokens, session tokens, or raw secret-bearing exceptions.
+
+Do not commit, push, reset, clean, stash, or switch branches.
+
+Do not delete accounts, apply migrations, retire legacy collections, modify live account records, or run destructive commands against Atlas.
+
+Do not disable TLS certificate validation, set `rejectUnauthorized=false`, downgrade transport security, weaken Atlas access restrictions, or invent a new URI to force a connection.
+
+Do not report MongoDB as connected unless the driver actually connects and the ping succeeds.
+
+Implement every safe, locally verifiable improvement. Do not stop after producing a plan.
+
+## PHASE 1 — REPRODUCE AND CLASSIFY THE CURRENT FAILURE
+
+The latest observed startup message is:
+
+`MongoDB connection check failed (database "learnquest"): classification=TLS_FAILURE retryable=true error=MongoServerSelectionError cause=MongoNetworkError tlsAlert=internal_error`
+
+The local server reports that it is listening on port 3001, while authentication and learning-data requests remain unavailable.
+
+Inspect the actual code in:
+
+- `backend/src/db/mongo.ts`
+- `backend/src/db/mongoErrors.ts`
+- `backend/src/scripts/diagnoseMongo.ts`
+- `backend/src/server.ts`
+- `backend/src/config/env.ts`
+- `backend/src/store.ts`
+- Relevant backend tests and package scripts.
+
+Inspect `git status --short --branch` and the current diff before editing.
+
+Run the existing read-only MongoDB diagnostic once:
+
+`npm run diagnose:mongo -- --probe-tls`
+
+Run it from `backend/`.
+
+Do not print the URI or hostname. Preserve only sanitized diagnostic evidence, such as the classification, DNS/SRV success, TLS alert, error category, and elapsed time.
+
+Determine whether the current failure is caused by:
+- Incorrect runtime or unsupported Node.js version.
+- A MongoDB driver lifecycle or connection-management defect.
+- A TLS/network configuration defect.
+- Atlas cluster or endpoint behavior.
+- The local network, VPN, proxy, endpoint protection, or TLS inspection.
+- Another reproducible cause.
+
+The previous report states that SRV/TXT resolution succeeded, all tested Atlas handshakes returned `internal_error`, and public TLS controls succeeded. Verify what remains true rather than assuming the previous result has changed.
+
+Do not conclude that an external problem is definitely the cause until the available evidence has been reviewed.
+
+## PHASE 2 — AUDIT AND SAFELY CORRECT THE NODE.JS RUNTIME
+
+The previous report says the local runtime was Node `24.11.0`, while `backend/package.json` requires `>=24.22.1 <25`.
+
+Verify the actual local runtime, package engine requirement, `.node-version`, lockfiles, installed MongoDB driver version, and Render runtime declaration.
+
+Determine whether this mismatch is likely material to the failure. Do not assume it explains the TLS alert.
+
+If a compatible Node version is already installed and the project can use it safely, verify how to run the project with that version without changing global machine settings unexpectedly.
+
+If the required runtime is not available locally, document the exact installation or version-manager action the owner needs to take. Do not silently lower the declared engine requirement to hide the mismatch.
+
+Re-run the MongoDB diagnostic under the supported runtime when available. Compare sanitized results. Never claim the runtime fixed the connection unless the TLS handshake and MongoDB ping both succeed.
+
+## PHASE 3 — IMPLEMENT A SAFE, RESILIENT STARTUP LIFECYCLE
+
+The app currently opens its HTTP listener even when MongoDB is unavailable. This allows the frontend and backend to start, but data operations must remain unavailable until database readiness is established.
+
+Inspect the entire lifecycle:
+- Initial connection and ping.
+- Cached MongoDB connection promises.
+- Index initialization.
+- Database store initialization.
+- Health and readiness endpoints.
+- Request-time connection retries.
+- Server shutdown and MongoDB client cleanup.
+- Existing pending-account-deletion recovery.
+
+Fix any demonstrated defects in the current lifecycle.
+
+### Required behavior
+
+1. Distinguish HTTP liveness from MongoDB readiness. A running HTTP process must not claim that database operations are ready when the ping fails.
+2. Keep authentication and data endpoints fail-closed when MongoDB is unavailable.
+3. Preserve sanitized failure messages and avoid exposing driver internals or secrets.
+4. Ensure rejected connection promises are not cached permanently.
+5. Use bounded, sensible connection timeouts.
+6. Avoid an aggressive retry loop that hammers Atlas or floods logs.
+7. If automatic reconnection is implemented, use controlled exponential backoff with a reasonable maximum interval, clear cancellation, and clean shutdown handling.
+8. Once connectivity returns, establish readiness only after the required connection checks and schema/index prerequisites succeed.
+9. Ensure a recovered connection cannot cause partially initialized stores, inconsistent readiness, duplicate startup tasks, or concurrent initialization races.
+10. Do not silently switch to local-only storage or fabricate an empty account when the database is unavailable.
+
+### Destructive startup work
+
+The previous report identifies a startup path that may resume pending account-deletion jobs.
+
+Do not introduce an automatic retry path that blindly triggers account deletion, migration, or legacy retirement.
+
+Inspect and preserve the existing deletion safety guarantees. Review how startup recovery is authorized and how unexpected deletion jobs can be discovered before enabling a maintenance path.
+
+Separate connection recovery from destructive maintenance. If the database reconnects, ordinary reads and writes must not depend on running an unrelated destructive migration or deleting accounts.
+
+Any change to the automatic deletion-recovery policy must be justified, tested, and documented. Never skip a legitimate deletion record silently or claim that its data was deleted when it remains.
+
+## PHASE 4 — HEALTH, READINESS, AND ERROR RECOVERY
+
+Review the existing health endpoint and deployment configuration before changing its semantics.
+
+Use separate meanings for:
+- **Liveness:** Is the HTTP process running?
+- **Readiness:** Can the service safely perform operations requiring MongoDB?
+
+Do not accidentally make Render continually restart a live service just because its database is temporarily unavailable. Check `render.yaml` and the actual configured health-check path.
+
+When MongoDB becomes unavailable:
+- Readiness must report unavailable.
+- Account and learning-data operations must fail safely with a clear service-unavailable response.
+- Existing unsaved client changes must not be silently discarded or reported as saved.
+- No default local account or mock database may be created.
+
+When MongoDB becomes available again:
+- The connection supervisor should be able to recover without requiring a process restart, provided that the existing architecture can do so safely.
+- Readiness must become healthy only after the required checks and initialization finish.
+- Failed operations should be retryable when appropriate.
+- Retries must not duplicate learning records, award XP twice, or overwrite newer state.
+
+Add regression tests for unavailable, reconnecting, recovered, and repeatedly failing database states.
+
+## PHASE 5 — RE-TEST THE ACTUAL FAILURE AFTER CHANGES
+
+If a source defect is found, reproduce it in a test and fix it.
+
+If a supported runtime resolves the issue, preserve the diagnostic evidence.
+
+If the same TLS alert persists under the supported runtime, do not change TLS security settings to force success. Complete the safe code changes and give the owner exact next steps for comparing an alternate network and the Atlas endpoint.
+
+If the current network cannot be changed from the CLI, state that explicitly. Do not simulate a mobile-hotspot test or claim that an external condition was fixed.
+
+The diagnostic must remain read-only. It must not initialize indexes, inspect account data, trigger deletion jobs, apply a migration, or write to the database.
+
+## PHASE 6 — VERIFY THE REAL RECONNECTION BEHAVIOR
+
+Use mocked or isolated tests to prove that:
+- The first connection failure is classified correctly.
+- A failed connection can be retried.
+- Repeated failures do not create concurrent runaway retries.
+- Retry delays are bounded.
+- Reconnection after an injected failure restores readiness.
+- Index/store initialization occurs only once after successful connection.
+- Server shutdown cancels pending retries and closes resources.
+- A failed database request cannot overwrite cloud state with empty defaults.
+- No account-data endpoint fabricates successful results while MongoDB is unavailable.
+- Health liveness is distinct from database readiness.
+- Unexpected pending deletion jobs are not processed merely by a reconnect retry.
+
+If real Atlas is still unreachable, clearly state that live reconnection has not been verified. Unit tests alone cannot prove the TLS handshake succeeds.
+
+## PHASE 7 — CHECK PRODUCTION SEPARATELY
+
+The previous audit reported:
+- Render still serving version `0.2.0`.
+- Local code at version `0.3.0`.
+- Render `/api/auth/config` returning 404.
+- Vercel `/api/health` and `/api/auth/config` returning 404.
+
+Perform safe, read-only public checks if network access permits, and distinguish production deployment state from local MongoDB connectivity.
+
+Do not deploy automatically, modify production secrets, change Vercel/Render settings, or claim the remote application has been updated.
+
+If production is stale, list the exact deployment actions required separately from the local TLS/network recovery.
+
+## PHASE 8 — TESTS AND DOCUMENTATION
+
+Run appropriate targeted backend tests first, followed by the full backend tests, typecheck, lint, and production build if source code was modified.
+
+Run frontend tests/build if frontend code changed or the lifecycle changes affect its API contract.
+
+Inspect actual test commands and results rather than copying historical counts.
+
+Do not weaken assertions or ignore genuine failures.
+
+Create or continue exactly one new audit report:
+
+`docs/user-doc/audit2/14_LEARNQUEST_MONGODB_STARTUP_RECOVERY_2026-10-28.md`
+
+If this report already exists from an interrupted run, continue it rather than creating another copy.
+
+Update the existing `docs/user-doc/audit2/README.md` in place to include report 14. Do not create separate implementation, progress, summary, or final reports.
+
+The report must include:
+- Current Git baseline and changes.
+- The actual connection failure and sanitized evidence.
+- Whether the Node runtime mismatch contributed.
+- Exact source files changed and why.
+- Startup/readiness/retry behavior.
+- Safety review of index initialization and pending-deletion recovery.
+- Actual tests, typecheck, lint, and build results.
+- Whether the diagnostic reached `CONNECTED` with a successful ping.
+- Local versus production verification.
+- Exact remaining owner actions.
+- Final Git status.
+
+Do not report the TLS issue as resolved unless the real connection succeeds.
+
+## FINAL ACCEPTANCE CRITERIA
+
+The task is complete when all safe local repairs are implemented and tested, startup behavior is clear and resilient, readiness does not mislead the user, and any remaining external TLS issue is precisely classified with actionable owner steps.
+
+If the database remains unreachable, report the blocker honestly. Never disable security checks, delete data, or fabricate successful connectivity to make the application appear healthy.
+
+Begin now by inspecting the current code and the previous report, then reproduce the connection failure and execute the safe repairs.

@@ -5,6 +5,9 @@ services:
     rootDir: backend
     buildCommand: npm ci && npm run build
     startCommand: npm run start
+    # Liveness only. /api/ready reports MongoDB readiness separately; pointing
+    # Render's health check at readiness would restart a live service during a
+    # temporary database outage.
     healthCheckPath: /api/health
     envVars:
       - key: YOUTUBE_API_KEY

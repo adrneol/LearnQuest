@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyMongoError,
   describeMongoFailure,
+  isMongoAvailabilityFailure,
   isRetryableMongoFailure,
   mongoDiagnosticSignals,
   sanitizeMongoError,
@@ -43,6 +44,7 @@ describe('sanitized MongoDB failure classification', () => {
     const auth = namedError('MongoServerError', 'Authentication failed.', { code: 18 });
     expect(classifyMongoError(auth)).toBe('AUTHENTICATION_FAILED');
     expect(isRetryableMongoFailure('AUTHENTICATION_FAILED')).toBe(false);
+    expect(isRetryableMongoFailure('CLIENT_LIFECYCLE_ERROR')).toBe(true);
 
     const authorization = namedError('MongoServerError', 'not authorized on learnquest', { code: 13 });
     expect(classifyMongoError(authorization)).toBe('AUTHORIZATION_FAILED');
@@ -73,6 +75,15 @@ describe('sanitized MongoDB failure classification', () => {
     expect(serialized).not.toContain('example.invalid');
     expect(serialized).not.toContain('mongodb+srv');
     expect(serialized).not.toContain('retryWrites');
+  });
+
+  it('does not classify a duplicate-key conflict as a database outage', () => {
+    const duplicate = namedError('MongoServerError', 'E11000 duplicate key error', { code: 11000 });
+    const validation = namedError('MongoServerError', 'Document failed validation', { code: 121 });
+    const outage = namedError('MongoServerSelectionError', 'connection closed');
+    expect(isMongoAvailabilityFailure(duplicate)).toBe(false);
+    expect(isMongoAvailabilityFailure(validation)).toBe(false);
+    expect(isMongoAvailabilityFailure(outage)).toBe(true);
   });
 
   it('extracts a TLS alert from a nested cause only as a description', () => {
