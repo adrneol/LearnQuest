@@ -106,9 +106,25 @@ Google Cloud immediately and update the replacement in Render.
   notifies the previous address.
 - **Account settings** stores learning preferences (timezone, default session
   length, break, minimum viable session) in your account, offers a JSON export
-  of account data, and supports permanent account deletion after typing your
-  exact username and recent reauthentication. Export first; deletion cannot be
-  undone through LearnQuest.
+  of account data, and supports permanent account deletion. Deletion requires
+  your current password (or a fresh Google reauthentication if the account is
+  Google-only), a recent reauthentication window, and the exact phrase
+  `DELETE MY ACCOUNT`. Export first; deletion cannot be undone through
+  LearnQuest.
+
+### Your first visit: a valid empty account
+A brand-new account does **not** need a playlist, note, focus session, or
+progress record before it can open LearnQuest. After onboarding and a
+successful cloud read, you land on the normal dashboard with a welcome
+empty-state card and an **Add your first playlist** action. Empty playlists,
+progress, notes, sessions, goals, and XP are real defaults, not fake records.
+If the cloud read genuinely fails, you see a retry/error screen instead; the
+app never turns a failed read into an apparently empty account and never
+overwrites cloud data with defaults.
+
+If you started Google registration but have not finished choosing a username,
+display name, and password, signing in again resumes **onboarding**. A pending
+registration is not shown as a completed dashboard.
 
 ### Import a playlist
 1. Copy a YouTube playlist URL (contains `?list=PL…`) or just the `PL…` ID.
@@ -399,8 +415,16 @@ network, no real leaderboard.
   records win on identical IDs; the local source is retained on failure and can
   be retried. A different account never inherits it.
 - Practical habit: export a backup weekly (or before playlist refreshes and
-  major cleanups) and keep two recent copies. Deleting your account removes
-  its account records and sessions permanently.
+  major cleanups) and keep two recent copies. **Delete my account** removes
+  the account, every account-owned learning record, sessions, sign-in links,
+  migration/version metadata, and the temporary deletion job. The server
+  verifies zero remaining records before returning success. If cleanup is
+  interrupted, it reports that deletion is incomplete and resumes safely on a
+  later request or server restart; it never claims the account is gone while
+  records remain. Provider-managed backups and email-provider logs follow
+  their own retention policies and are not erased by the LearnQuest cascade.
+  See `docs/DEPLOYMENT_MULTIUSER.md` for the owner-side backup/retention
+  checklist.
 
 ## I. Troubleshooting and FAQs
 
@@ -410,6 +434,9 @@ network, no real leaderboard.
 | Google sign-in fails | Check the OAuth web client, exact redirect URI, consent-screen test user, and `GOOGLE_CLIENT_ID`/secret |
 | Recovery or verification email missing | Check the email provider's transactional email log for the recipient and status; verify sender/domain authentication (a verified Gmail sender can still fail DKIM/DMARC alignment), API key permissions, and spam; wait for the resend cooldown; request a new link (older links stop working). An unknown or ineligible account intentionally receives no message. See `docs/DEPLOYMENT_MULTIUSER.md` |
 | Account storage errors | Check the connection string, database user, and network allow-list. No local fallback is used |
+| “Your account data is unavailable” or “incomplete learning data” | The client rejects incomplete account-data responses. If onboarding is unfinished, finish it; otherwise press Retry. Confirm the deployed frontend/backend are from the same release. A genuine read failure is shown as an error, never as an empty account |
+| New account sends me back to onboarding | The Google registration is still pending (no completed username/password). Finish the onboarding form; no learning data is loaded or overwritten before then |
+| Can't delete my account | Enter the current password (Google-only accounts need a fresh Google sign-in), reauthenticate recently, and type `DELETE MY ACCOUNT` exactly. An interrupted cleanup is reported as incomplete, not success |
 | Cloud save conflict | Another session changed the account. Use the conflict banner to reload before editing again |
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |
 | API key missing/invalid/restricted | Re-check key + restrictions in Google Cloud; restart backend; Recheck in Settings |

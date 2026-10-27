@@ -43,8 +43,18 @@ const USER: AuthUser = {
 const EMPTY_STATE = {
   playlists: {}, meta: {}, activeId: null, progress: {}, ranges: [], checkpoints: [],
   modules: [], sessions: [], goals: {}, xp: [], achievements: {}, segments: [],
-  playSessions: [], queue: {}, flexGoals: [], challenge: null, challengeEnabled: false,
-  rankHistory: [], settings: null, prefs: null,
+  playSessions: [], queue: {}, flexGoals: [],
+  challenge: {
+    seed: 20261013,
+    cohortSize: 100,
+    tierDist: { Ultra: 2, High: 8, Good: 20, Normal: 30, Average: 25, 'Below Average': 15 },
+    windowDays: 14,
+    dailyCapHours: 6,
+  },
+  challengeEnabled: false,
+  rankHistory: [],
+  settings: { verifiedThreshold: 0.9 },
+  prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, reducedMotion: false, minViableMin: 10 },
 };
 
 function json(body: unknown, status = 200): Response {

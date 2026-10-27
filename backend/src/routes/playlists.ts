@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { DataStore } from '../store.js';
-import { noStore, requireAuth, requireCsrf, type AuthedRequest } from '../auth/middleware.js';
+import { noStore, requireAuth, requireCsrf, requireOnboarded, type AuthedRequest } from '../auth/middleware.js';
 import { http } from '../auth/accounts.js';
 import {
   archivePlaylist, deletePlaylistPermanently, playlistSummary,
@@ -17,6 +17,7 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
   const router = Router();
   router.use(requireAuth(store));
   router.use(noStore);
+  router.use(requireOnboarded);
 
   const validId = (id: string): string => {
     if (!/^[A-Za-z0-9_-]{3,128}$/.test(id)) throw http(400, 'Invalid playlist ID.', 'INVALID_PLAYLIST_ID');

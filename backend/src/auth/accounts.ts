@@ -247,7 +247,9 @@ export async function completeOnboarding(
     // the driver includes the immutable `_id`, and updating that path fails
     // with "Would modify the immutable field '_id'". List only mutable fields.
     const result = await store.accounts.updateOne(
-      { userId: account.userId, status: 'active' },
+      // The onboarding predicate prevents a racing second submission from
+      // overwriting an account that has already been completed.
+      { userId: account.userId, status: 'active', onboardingComplete: false },
       {
         $set: {
           username: updated.username,
@@ -267,6 +269,12 @@ export async function completeOnboarding(
     );
     if (result.matchedCount === 0) {
       throw http(409, 'This account is no longer available. Start registration again.', 'ACCOUNT_UNAVAILABLE');
+    }
+    if (result.modifiedCount === 0) {
+      // A successful $set is expected to change the hash/version/timestamps.
+      // No modification means the pending record changed underneath us; never
+      // report setup completion when the persisted state was not confirmed.
+      throw http(409, 'This account changed while setup was being saved. Reload and finish setup again.', 'ACCOUNT_CHANGED');
     }
     return updated;
   }).catch((e) => {

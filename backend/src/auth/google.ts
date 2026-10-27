@@ -21,7 +21,7 @@ export interface GoogleOAuthResult {
 
 export interface GoogleOAuthService {
   readonly configured: boolean;
-  start(intent: GoogleAuthIntent): Promise<{ url: string; state: string }>;
+  start(intent: GoogleAuthIntent, userId?: string | null): Promise<{ url: string; state: string }>;
   complete(code: string, state: string): Promise<GoogleOAuthResult>;
 }
 
@@ -31,6 +31,8 @@ interface GoogleStateDoc {
   nonce: string;
   verifier: string;
   intent: GoogleAuthIntent;
+  /** Optional owner link for cascade deletion; never a credential. */
+  userId?: string;
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
@@ -88,7 +90,7 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
     get configured() {
       return env.googleConfigured;
     },
-    async start(intent) {
+    async start(intent, userId) {
       if (!env.googleConfigured) {
         throw Object.assign(new Error('Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.'), { status: 503, code: 'SETUP_REQUIRED' });
       }
@@ -104,6 +106,7 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
         nonce,
         verifier,
         intent,
+        ...(userId ? { userId } : {}),
         createdAt: new Date(now).toISOString(),
         expiresAt: new Date(now + 10 * 60_000).toISOString(),
         usedAt: null,

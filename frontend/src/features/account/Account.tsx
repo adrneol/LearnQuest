@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Download, KeyRound, LogOut, Mail, RefreshCw, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { AlertTriangle, Download, KeyRound, LogOut, Mail, RefreshCw, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { confirmDialog } from '../../components/ui/dialog.js';
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
@@ -121,8 +121,7 @@ function SettingsSection() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmName, setConfirmName] = useState('');
-  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const save = async () => {
     setBusy(true);
@@ -153,29 +152,6 @@ function SettingsSection() {
     }
   };
 
-  const removeAccount = async () => {
-    setError(null);
-    if (!user.username || confirmName !== user.username) {
-      setError('Type your exact username to enable account deletion.');
-      return;
-    }
-    const ok = await confirmDialog({
-      title: 'Permanently delete this LearnQuest account?',
-      body: 'This permanently removes the account and all of its learning data. It cannot be undone through LearnQuest. Export a copy first.',
-      confirmLabel: 'Delete account permanently',
-      danger: true,
-    });
-    if (!ok) return;
-    setBusy(true);
-    try {
-      await s.deleteAccount(confirmName, deletePassword || undefined);
-    } catch (e: any) {
-      setError(e?.message ?? 'Account deletion failed. Nothing was reported as deleted; retry.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="space-y-4">
       <Card>
@@ -203,24 +179,163 @@ function SettingsSection() {
         </div>
       </Card>
 
-      <Card className="border-red-500/25">
-        <h2 className="flex items-center gap-1.5 text-base font-bold text-red-200"><Trash2 size={16} /> Delete account</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Deletion requires your exact username and recent reauthentication. It permanently removes your account and all of its learning records.
-          Other accounts are never affected. This cannot be undone through LearnQuest.
+      <Card className="border-red-500/40 bg-red-950/10">
+        <h2 className="flex items-center gap-1.5 text-base font-bold text-red-200"><Trash2 size={16} /> Danger zone</h2>
+        <p className="mt-1 text-sm text-slate-300">
+          Permanently delete this LearnQuest account and every learning record owned by it. Other accounts are never affected.
+          LearnQuest cannot undo this after it completes.
         </p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <Field label="Type your exact username">
-            <input className={inputCls} value={confirmName} onChange={(e) => setConfirmName(e.target.value)} autoComplete="off" />
-          </Field>
-          <Field label={user.hasPassword ? 'Current password' : 'Google reauthentication is required'}>
-            <input className={inputCls} type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} autoComplete="current-password" disabled={!user.hasPassword} />
-          </Field>
-        </div>
-        <Btn variant="danger" className="mt-3" onClick={removeAccount} disabled={busy || !confirmName || (user.hasPassword && !deletePassword)}>
-          <Trash2 size={14} /> Delete my account permanently
+        <Btn variant="danger" className="mt-3" onClick={() => setDeleteDialogOpen(true)} disabled={busy}>
+          <Trash2 size={14} /> Delete my account
         </Btn>
       </Card>
+
+      {deleteDialogOpen && (
+        <DeleteAccountDialog
+          user={user}
+          onCancel={() => setDeleteDialogOpen(false)}
+          onDelete={async (phrase, password) => {
+            await s.deleteAccount(phrase, password);
+          }}
+          onGoogleReauth={() => { void s.signInWithGoogle('login'); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Deliberate destructive confirmation. Both the current password (verified by
+ * the server against the stored Argon2id hash) and the exact typed phrase are
+ * required. For a Google-only account, a recent Google session is required
+ * instead of inventing a password prompt.
+ */
+function DeleteAccountDialog({
+  user,
+  onCancel,
+  onDelete,
+  onGoogleReauth,
+}: {
+  user: NonNullable<ReturnType<typeof useStore>['authUser']>;
+  onCancel: () => void;
+  onDelete: (phrase: string, password?: string) => Promise<void>;
+  onGoogleReauth: () => void;
+}) {
+  const phrase = 'DELETE MY ACCOUNT';
+  const [confirmation, setConfirmation] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const phraseRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    (user.hasPassword ? passwordRef.current : phraseRef.current)?.focus();
+  }, [user.hasPassword]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, onCancel]);
+
+  const phraseMatches = confirmation.trim() === phrase;
+  const canDelete = !busy && phraseMatches && (!user.hasPassword || password.length > 0);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!phraseMatches) {
+      setError(`Type ${phrase} exactly to confirm.`);
+      return;
+    }
+    if (user.hasPassword && !password) {
+      setError('Enter your current password.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await onDelete(confirmation.trim(), user.hasPassword ? password : undefined);
+    } catch (err: any) {
+      setError(err?.message ?? 'Account deletion did not complete. The account was not reported as deleted; retry safely.');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4 backdrop-blur-sm" role="presentation">
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-account-title"
+        aria-describedby="delete-account-body"
+        className="w-full max-w-lg rounded-2xl border border-red-500/40 bg-[#161327] p-5 text-slate-200 shadow-2xl"
+      >
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 rounded-xl bg-red-500/15 p-2 text-red-300"><AlertTriangle size={20} /></span>
+          <div>
+            <h2 id="delete-account-title" className="text-lg font-bold text-red-100">Permanently delete this account?</h2>
+            <p id="delete-account-body" className="mt-1 text-sm text-slate-300">
+              This is permanent and cannot be undone through LearnQuest. All playlists, progress, notes, review history,
+              focus sessions, checkpoints, goals, XP, achievements, settings, sessions, and sign-in links owned by
+              <b className="text-slate-100"> {user.email}</b> will be removed.
+            </p>
+          </div>
+        </div>
+
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-400">
+          <li>Export a backup first if you might want a personal copy of your learning data.</li>
+          <li>Other LearnQuest accounts are not affected.</li>
+          <li>The server verifies recent authentication before deleting anything.</li>
+        </ul>
+
+        <form onSubmit={submit} className="mt-4 space-y-3" aria-busy={busy}>
+          {user.hasPassword ? (
+            <Field label="Current password">
+              <input
+                ref={passwordRef}
+                className={inputCls}
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                disabled={busy}
+              />
+            </Field>
+          ) : (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+              <p>This account uses Google sign-in. Deletion requires a fresh Google authentication within the server's recent-auth window.</p>
+              <Btn type="button" className="mt-2" onClick={onGoogleReauth} disabled={busy}>Reauthenticate with Google</Btn>
+            </div>
+          )}
+          <Field label={`Type ${phrase} to confirm`}>
+            <input
+              ref={phraseRef}
+              className={inputCls}
+              value={confirmation}
+              onChange={(e) => setConfirmation(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={busy}
+              aria-describedby="delete-phrase-help"
+            />
+          </Field>
+          <p id="delete-phrase-help" className={`text-xs ${confirmation.length > 0 && !phraseMatches ? 'text-red-300' : 'text-slate-500'}`}>
+            {confirmation.length > 0 && !phraseMatches
+              ? `The phrase is not exact. Type ${phrase} exactly (leading/trailing spaces are ignored).`
+              : `Exact phrase, including spaces: ${phrase}`}
+          </p>
+          {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Btn type="button" onClick={onCancel} disabled={busy}>Cancel</Btn>
+            <Btn type="submit" variant="danger" disabled={!canDelete}>
+              <Trash2 size={14} /> {busy ? 'Deleting…' : 'Delete permanently'}
+            </Btn>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

@@ -52,11 +52,16 @@ export function Onboarding({ onGo }: { onGo: (t: Tab) => void }) {
     }
   };
 
+  const greeting = s.authUser?.displayName || s.authUser?.username;
   return (
     <Card className="border-violet-500/30">
-      <h1 className="text-xl font-bold">Turn any YouTube playlist into a learning quest</h1>
+      <p className="text-[11px] font-bold uppercase tracking-widest text-cyan-300">Your account is ready</p>
+      <h1 className="mt-1 text-xl font-bold">
+        {greeting ? `Welcome to LearnQuest, ${greeting}.` : 'Welcome to LearnQuest.'}
+      </h1>
       <p className="mt-1 text-sm text-slate-400">
-        Paste a public playlist URL. Durations are fetched per video (never averaged) and every total is computed from real data.
+        Add your first public YouTube playlist to begin. Durations are fetched per video (never averaged), and every
+        total is computed from real data. Nothing is saved until the server confirms the write.
       </p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <input
@@ -67,7 +72,7 @@ export function Onboarding({ onGo }: { onGo: (t: Tab) => void }) {
           aria-label="Playlist URL or ID"
         />
         <Btn variant="primary" onClick={add} disabled={busy || !url.trim()}>
-          <Plus size={15} /> {busy ? 'Fetching…' : 'Add playlist'}
+          <Plus size={15} /> {busy ? 'Fetching…' : 'Add your first playlist'}
         </Btn>
       </div>
       {err && <p className="mt-2 text-sm text-red-300">{err} You can also import a JSON snapshot in Reports.</p>}

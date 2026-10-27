@@ -16,16 +16,17 @@ import {
   consumeEmailActionToken, invalidateEmailAction, issueEmailActionToken, latestEmailAction,
 } from '../auth/actionTokens.js';
 import {
-  clearSessionCookie, noStore, requireAuth, requireCsrf, requireRecentAuth,
+  clearSessionCookie, noStore, requireAuth, requireCsrf, requireOnboarded, requireRecentAuth,
   type AuthedRequest,
 } from '../auth/middleware.js';
 import {
   USER_COLLECTIONS, type UserCollectionName,
 } from '../store.js';
 import {
-  deleteAllUserData, emptyUserState, getUserStateExport, readUserState, replaceAllUserState,
-  replaceUserCollection, validateStatePayload, type UserState,
+  emptyUserState, getUserStateExport, readUserState, replaceAllUserState,
+  replaceUserCollection, validateStatePayload, type UserState, type UserStateDefaults,
 } from '../services/userData.js';
+import { deleteAccountPermanently } from '../services/accountDeletion.js';
 
 const profileSchema = z.object({
   username: z.string().max(64).optional(),
@@ -59,14 +60,27 @@ const emailConfirmSchema = z.object({
   token: z.string().min(20).max(512),
 }).strict();
 const deleteSchema = z.object({
-  confirmUsername: z.string().max(64),
+  confirmPhrase: z.string().max(64),
   password: z.string().max(128).optional(),
 }).strict();
+const DELETE_CONFIRMATION_PHRASE = 'DELETE MY ACCOUNT';
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
   if (!result.success) throw http(400, 'The request body is invalid.', 'INVALID_REQUEST');
   return result.data;
+}
+
+/** A new account's display defaults come from its verified account profile. */
+function stateDefaultsFor(account: Account): UserStateDefaults {
+  return {
+    prefs: {
+      timezone: account.timezone,
+      sessionLenMin: account.sessionLenMin,
+      breakMin: account.breakMin,
+      minViableMin: account.minViableMin,
+    },
+  };
 }
 
 function arrayMergeById(existing: any[], incoming: any[], idOf: (x: any) => string, dedupeBy?: (x: any) => string) {
@@ -199,6 +213,10 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
 
   router.use(auth);
   router.use(noStore);
+  // A pending Google registration has no valid learning account yet. Returning
+  // an empty state here would present an incomplete account as a real empty
+  // dashboard and could let a writer initialize it out of order.
+  router.use(requireOnboarded);
 
   router.get('/', (req: AuthedRequest, res) => {
     res.json({ user: safeAccount(req.auth!.account) });
@@ -244,10 +262,23 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     }
   });
 
+  /**
+   * Canonical account-data contract. The response is always:
+   *   { ok, schemaVersion, loadedAt, state: { every domain }, version }
+   * `state` is never spread at the top level, and a missing domain is never
+   * inferred here. A fully successful read of an account with no records
+   * returns the canonical empty state with real defaults.
+   */
   router.get('/data', async (req: AuthedRequest, res, next) => {
     try {
-      const state = await readUserState(store, req.auth!.userId);
-      res.json({ ok: true, ...state });
+      const result = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
+      res.json({
+        ok: true,
+        schemaVersion: 1,
+        loadedAt: new Date().toISOString(),
+        state: result.state,
+        version: result.version,
+      });
     } catch (e) {
       next(e);
     }
@@ -269,7 +300,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     try {
       const body = parseBody(importSchema, req.body);
       const raw = extractBackupState(body.backup ?? body.state, body.backup);
-      const current = await readUserState(store, req.auth!.userId);
+      const current = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
       const baseVersion = body.version ?? current.version;
       const result = await replaceAllUserState(store, req.auth!.userId, raw, baseVersion);
       res.json({ ok: true, version: result.version, collections: USER_COLLECTIONS.length });
@@ -287,7 +318,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         return;
       }
       const incoming = validateStatePayload(extractBackupState(body.state, undefined));
-      const current = await readUserState(store, req.auth!.userId);
+      const current = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
       const merged = mergeMigrationState(current.state, incoming);
       const baseVersion = body.version ?? current.version;
       const result = await replaceAllUserState(store, req.auth!.userId, merged.state, baseVersion);
@@ -311,7 +342,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
   router.get('/export', async (req: AuthedRequest, res, next) => {
     try {
       const account = req.auth!.account;
-      const data = await getUserStateExport(store, req.auth!.userId);
+      const data = await getUserStateExport(store, req.auth!.userId, stateDefaultsFor(account));
       res.setHeader('Content-Disposition', `attachment; filename="learnquest-account-${new Date().toISOString().slice(0, 10)}.json"`);
       res.json({
         ...data,
@@ -401,23 +432,31 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     try {
       const account = req.auth!.account;
       const body = parseBody(deleteSchema, req.body);
-      if (!account.username || body.confirmUsername !== account.username) {
-        throw http(400, 'Type your exact username to confirm account deletion.', 'CONFIRMATION_MISMATCH');
+      if (body.confirmPhrase.trim() !== DELETE_CONFIRMATION_PHRASE) {
+        throw http(400, `Type ${DELETE_CONFIRMATION_PHRASE} exactly to confirm account deletion.`, 'CONFIRMATION_MISMATCH');
       }
       if (account.passwordHash) {
+        // The existing Argon2id hash is the authority; a client-side value is
+        // never accepted as proof.
         const ok = body.password ? await verifyCode(body.password, account.passwordHash) : false;
         if (!ok) throw http(401, 'The password is incorrect.', 'INVALID_CREDENTIALS');
-      } else if (!isRecentAuth(req.auth!.session)) {
-        throw http(403, 'Sign in with Google again before deleting this account.', 'REAUTH_REQUIRED');
+      } else {
+        // A Google-only account must have a fresh Google authentication. It
+        // cannot delete itself from an old session or with a typed phrase alone.
+        if (!isRecentAuth(req.auth!.session)
+          || (req.auth!.session.authMethod !== 'google_login' && req.auth!.session.authMethod !== 'google_register')) {
+          throw http(403, 'Sign in with Google again before deleting this account.', 'REAUTH_REQUIRED');
+        }
       }
-      await store.accounts.updateOne({ userId: account.userId }, { $set: { status: 'deleting', updatedAt: new Date().toISOString() } });
+
+      let deletionStarted = false;
       try {
-        await deleteAllUserData(store, account.userId);
-        await store.sessions.deleteMany({ userId: account.userId });
-        await store.accounts.deleteOne({ userId: account.userId });
+        deletionStarted = true;
+        await deleteAccountPermanently(store, account.userId);
       } catch (e) {
-        // Roll back the deletion marker so the still-signed-in owner can retry.
-        await store.accounts.updateOne({ userId: account.userId }, { $set: { status: 'active', updatedAt: new Date().toISOString() } });
+        // The saga revokes all sessions and leaves the account unavailable;
+        // clear the browser cookie even when cleanup must be resumed later.
+        if (deletionStarted) clearSessionCookie(res);
         throw e;
       }
       clearSessionCookie(res);

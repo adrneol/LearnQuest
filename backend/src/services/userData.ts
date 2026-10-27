@@ -70,12 +70,55 @@ export interface UserState {
   activeId: string | null;
 }
 
-export function emptyUserState(): UserState {
+/**
+ * Canonical defaults mirrored by `frontend/src/domain` and
+ * `frontend/src/app/store.tsx`. A new account is a complete account: an empty
+ * collection is different from an unreadable collection. These values are
+ * returned only after every required MongoDB read has completed successfully.
+ */
+export const DEFAULT_SETTINGS = Object.freeze({ verifiedThreshold: 0.9 });
+
+export const DEFAULT_PREFS = Object.freeze({
+  timezone: 'local',
+  sessionLenMin: 25,
+  breakMin: 5,
+  reducedMotion: false,
+  minViableMin: 10,
+});
+
+export const DEFAULT_CHALLENGE = Object.freeze({
+  seed: 20261013,
+  cohortSize: 100,
+  tierDist: Object.freeze({
+    Ultra: 2,
+    High: 8,
+    Good: 20,
+    Normal: 30,
+    Average: 25,
+    'Below Average': 15,
+  }),
+  windowDays: 14,
+  dailyCapHours: 6,
+});
+
+export interface UserStateDefaults {
+  /** Account preferences are authoritative for a brand-new account. */
+  prefs?: Partial<UserState['prefs']>;
+}
+
+function cloneDefaults<T>(value: T): T {
+  return structuredClone(value);
+}
+
+export function emptyUserState(defaults: UserStateDefaults = {}): UserState {
   return {
     playlists: {}, meta: {}, progress: {}, ranges: [], checkpoints: [], modules: [],
     sessions: [], goals: {}, xp: [], achievements: {}, segments: [], playSessions: [],
-    queue: {}, flexGoals: [], challenge: null, challengeEnabled: false, rankHistory: [],
-    settings: null, prefs: null, activeId: null,
+    queue: {}, flexGoals: [], challenge: cloneDefaults(DEFAULT_CHALLENGE),
+    challengeEnabled: false, rankHistory: [],
+    settings: cloneDefaults(DEFAULT_SETTINGS),
+    prefs: { ...cloneDefaults(DEFAULT_PREFS), ...(defaults.prefs ?? {}) },
+    activeId: null,
   };
 }
 
@@ -288,6 +331,18 @@ function validateSingleton(name: UserCollectionName, value: any): void {
   }
 }
 
+/** Validate one stored record value (a map entry, array item, or singleton). */
+export function validateRecordValue(name: UserCollectionName, input: unknown): void {
+  if (!USER_COLLECTIONS.includes(name)) throw httpError('Unknown user-data collection.', 400);
+  noOwnershipFields(input, name);
+  const kind = COLLECTION_KIND[name];
+  if (kind === 'singleton') {
+    validateSingleton(name, input);
+    return;
+  }
+  validateItem(name, input, 0);
+}
+
 /** Validate a collection payload and return it unchanged when valid. */
 export function validateCollectionPayload(name: UserCollectionName, input: unknown): unknown {
   if (!USER_COLLECTIONS.includes(name)) throw httpError('Unknown user-data collection.', 400);
@@ -312,7 +367,12 @@ export function validateCollectionPayload(name: UserCollectionName, input: unkno
   const ids = new Set<string>();
   input.forEach((item, i) => {
     validateItem(name, item, i);
-    const id = String(item.id);
+    // Only item types that define a stable id use it for duplicate detection.
+    // Rank snapshots have no id and rely on the writer's ordered fallback key.
+    const rawId = isObj(item) ? item.id : undefined;
+    const id = (typeof rawId === 'string' && rawId.length > 0) || (typeof rawId === 'number' && Number.isFinite(rawId))
+      ? String(rawId)
+      : `order:${i}`;
     if (ids.has(id)) throw httpError(`${name} contains a duplicate id.`, 400);
     ids.add(id);
   });
@@ -374,6 +434,25 @@ function playlistIdOf(value: unknown): string | undefined {
 }
 
 /**
+ * Array items normally carry a stable `id`. `rankHistory` snapshots do not, so
+ * a fallback derived from the timestamp (or position) prevents every snapshot
+ * from sharing the legacy `"undefined"` key and colliding with the unique
+ * `(userId, key)` index. A full collection rewrite keeps the values ordered.
+ */
+function arrayItemKey(item: unknown, index: number): string {
+  if (isObj(item)) {
+    const id = item.id;
+    if ((typeof id === 'string' && id.length > 0) || (typeof id === 'number' && Number.isFinite(id))) {
+      return String(id);
+    }
+    if (typeof item.at === 'string' && item.at.length > 0 && item.at.length <= 100) {
+      return `${item.at}#${index}`;
+    }
+  }
+  return `order:${index}`;
+}
+
+/**
  * Replace one collection. The adapter has no cross-document transaction, so
  * keep the previous rows and restore them if any delete/insert step fails.
  * This turns a mid-write disconnect into a failed request with the previous
@@ -411,7 +490,7 @@ async function writeCollection(store: DataStore, userId: string, name: UserColle
       const item = items[i];
       await col.insertOne({
         userId,
-        key: String(item.id),
+        key: arrayItemKey(item, i),
         value: item,
         playlistId: playlistIdOf(item),
         updatedAt: now,
@@ -448,26 +527,104 @@ async function releaseVersion(store: DataStore, userId: string, version: number)
   }
 }
 
-export async function readUserState(store: DataStore, userId: string): Promise<{ state: UserState; version: number }> {
-  const state = emptyUserState();
-  const version = await getStateVersion(store, userId);
+function dataReadError(): Error & { status: number; code?: string } {
+  return httpError(
+    'Your account data could not be read completely. Nothing was overwritten; retry the load.',
+    503,
+    'DATA_READ_FAILED',
+  );
+}
+
+function dataIntegrityError(name: UserCollectionName): Error & { status: number; code?: string } {
+  return httpError(
+    `Stored account data for "${name}" is malformed or incompatible. Nothing was overwritten. Contact the account owner with this domain name so the records can be reviewed before retrying.`,
+    502,
+    'DATA_INTEGRITY_ERROR',
+  );
+}
+
+function isDataDomainError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'DATA_READ_FAILED' || code === 'DATA_INTEGRITY_ERROR';
+}
+
+function storedValue(doc: any, name: UserCollectionName): unknown {
+  if (!doc || !Object.prototype.hasOwnProperty.call(doc, 'value') || doc.value === undefined) {
+    throw dataIntegrityError(name);
+  }
+  return doc.value;
+}
+
+/**
+ * Read every required domain. A missing optional singleton is the legitimate
+ * new-account state and receives its canonical default. A failed query rejects
+ * the whole operation; it is never converted into an empty collection. A
+ * present but malformed record raises an explicit integrity error and leaves
+ * the stored records untouched.
+ */
+export async function readUserState(
+  store: DataStore,
+  userId: string,
+  defaults: UserStateDefaults = {},
+): Promise<{ state: UserState; version: number }> {
+  const state = emptyUserState(defaults);
+  let version: number;
+  try {
+    version = await getStateVersion(store, userId);
+  } catch (error) {
+    if (isDataDomainError(error)) throw error;
+    throw dataReadError();
+  }
+
   await Promise.all(USER_COLLECTIONS.map(async (name) => {
-    const col = store.data(name);
-    const kind = COLLECTION_KIND[name];
-    if (kind === 'singleton') {
-      const doc = await col.findOne({ userId, key: 'singleton' });
-      (state as any)[name] = doc ? doc.value : null;
-      return;
+    try {
+      const col = store.data(name);
+      const kind = COLLECTION_KIND[name];
+      if (kind === 'singleton') {
+        const doc = await col.findOne({ userId, key: 'singleton' });
+        if (!doc || doc.value === null) {
+          // Missing/null singleton: the canonical default already in `state`.
+          return;
+        }
+        const value = storedValue(doc, name);
+        try {
+          validateSingleton(name, value);
+        } catch {
+          throw dataIntegrityError(name);
+        }
+        (state as any)[name] = value;
+        return;
+      }
+      if (kind === 'map') {
+        const docs = await col.find({ userId });
+        const out: Record<string, unknown> = {};
+        for (const doc of docs) {
+          if (typeof doc?.key !== 'string' && typeof doc?.key !== 'number') throw dataIntegrityError(name);
+          const value = storedValue(doc, name);
+          try {
+            validateRecordValue(name, value);
+          } catch {
+            throw dataIntegrityError(name);
+          }
+          out[String(doc.key)] = value;
+        }
+        (state as any)[name] = out;
+        return;
+      }
+      const docs = await col.find({ userId }, { sort: { order: 1 } });
+      (state as any)[name] = docs.map((doc) => {
+        const value = storedValue(doc, name);
+        try {
+          validateRecordValue(name, value);
+        } catch {
+          throw dataIntegrityError(name);
+        }
+        return value;
+      });
+    } catch (error) {
+      if (isDataDomainError(error)) throw error;
+      throw dataReadError();
     }
-    if (kind === 'map') {
-      const docs = await col.find({ userId });
-      const out: Record<string, unknown> = {};
-      for (const doc of docs) out[String(doc.key)] = doc.value;
-      (state as any)[name] = out;
-      return;
-    }
-    const docs = await col.find({ userId }, { sort: { order: 1 } });
-    (state as any)[name] = docs.map((d) => d.value);
   }));
   return { state, version };
 }
@@ -524,8 +681,8 @@ export async function replaceAllUserState(
   return { version, state };
 }
 
-export async function getUserStateExport(store: DataStore, userId: string) {
-  const { state, version } = await readUserState(store, userId);
+export async function getUserStateExport(store: DataStore, userId: string, defaults: UserStateDefaults = {}) {
+  const { state, version } = await readUserState(store, userId, defaults);
   return { schemaVersion: 3, dataVersion: version, exportedAt: new Date().toISOString(), state };
 }
 
@@ -836,6 +993,7 @@ export async function playlistSummary(store: DataStore, userId: string, playlist
 
 export async function deleteAllUserData(store: DataStore, userId: string): Promise<void> {
   for (const name of USER_COLLECTIONS) await store.data(name).deleteMany({ userId });
+  await store.userData.deleteMany({ userId });
   await store.deletions.deleteMany({ userId });
   await store.migrations.deleteMany({ userId });
   await store.stateVersions.deleteMany({ userId });

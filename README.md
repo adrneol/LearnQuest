@@ -36,6 +36,14 @@ scoped to the signed-in account. A local IndexedDB path remains for automated te
 - **Accounts** — Google-only registration, Argon2id password sign-in,
   single-use Brevo email links for password recovery and email verification,
   server-side sessions, account export and deletion.
+- **Valid empty accounts** — a fully onboarded account with no playlists or
+  learning records receives the canonical empty state and a welcome dashboard,
+  not a fabricated failure. A pending Google registration is sent back to
+  onboarding instead of loading account data.
+- **Deliberate account deletion** — current password (or fresh Google
+  reauthentication for Google-only accounts), recent reauthentication, and the
+  exact phrase `DELETE MY ACCOUNT` are verified server-side before a resumable,
+  verified cascade removes every account-owned record.
 - **Reports** — versioned (v3) JSON backups, CSV exports, validated atomic restore.
 
 ## How it works
@@ -54,7 +62,10 @@ progressGameTracker/
   authenticated account API, and stores learning collections in MongoDB.
   Password hashes use Argon2id; email action tokens are stored only as
   HMAC digests, are purpose-bound and atomically single-use; sessions are
-  server-side and rotated on privilege changes.
+  server-side and rotated on privilege changes. Current reads and writes use
+  the legacy per-domain `lq_data_*` collections. `lq_user_data` is the
+  documented consolidated target with a unique `(userId, domain, key)` index;
+  the app does not dual-write until an owner-approved migration is verified.
 - The **frontend** parses durations and computes every total, percentage,
   goal, efficiency figure, and simulated score in one domain engine
   (`frontend/src/domain`). In production it defaults to cloud mode and never
@@ -193,6 +204,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 | `npm run build` | Production build (`frontend/dist`, `backend/dist`) |
 | `npm run start` | _(backend)_ Serve the built API (`node dist/server.js`) |
 | `npm run preview` | _(frontend)_ Preview the production build locally |
+| `npm run migrate:user-data -- --help` | _(backend)_ Versioned `lq_data_*` → `lq_user_data` migration. Dry-run by default; `--apply --confirm lq-data-to-user-data-v1` is only for an owner-approved maintenance window after a backup. |
 
 ## Production deployment
 
@@ -234,6 +246,19 @@ Run each from its own directory (`frontend/` or `backend/`):
   and scoped by the authenticated `userId`. The browser is not treated as the
   source of truth for an authenticated account, and a failed cloud read never
   falls back to an apparently empty local database.
+- `GET /api/account/data` returns the canonical envelope
+  `{ ok, schemaVersion: 1, loadedAt, state, version }`. `state` always contains
+  every learning domain. A successful read with no records returns the real
+  empty defaults; a failed or malformed query returns an explicit error and
+  preserves existing records. Pending onboarding is rejected with
+  `409 ONBOARDING_REQUIRED` and routed back to the onboarding screen.
+- Current reads and writes use the legacy per-domain `lq_data_*` collections.
+  The target layout is one `lq_user_data` collection keyed by
+  `(userId, domain, key)`, with `value`, `updatedAt`, `order`, and optional
+  `playlistId`/`version`. It is created and indexed now but is **not** the
+  live source of truth. No data has been migrated or retired. See
+  [the migration and storage audit](./docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md)
+  for the dry-run procedure and Atlas queries.
 - Passwords are hashed with Argon2id. Raw passwords, password hashes, raw
   email action tokens, and session tokens are never included in account
   exports.
@@ -244,8 +269,14 @@ Run each from its own directory (`frontend/` or `backend/`):
   Existing cloud records win on identical IDs; the local source is retained
   on failure and can be retried safely. A claim marker prevents another
   account from inheriting the same local data.
-- Export JSON backups from Reports or the account menu. Deleting the account
-  removes account-owned MongoDB records and sessions; it cannot be undone.
+- Export JSON backups from Reports or the account menu. **Delete my account**
+  requires the current password (or a fresh Google reauthentication for a
+  Google-only account), a recent reauthentication window, CSRF/origin
+  validation, and the exact phrase `DELETE MY ACCOUNT`. The backend marks the
+  account unavailable, removes every discovered account-owned record across
+  legacy and consolidated collections, verifies zero remaining counts, and
+  only then reports success. Interrupted cleanup is resumable and never
+  reported as complete early. Deletion cannot be undone through LearnQuest.
 - Small UI-only preferences and an interrupted-focus timer snapshot remain in
   `localStorage` on the device.
 
@@ -253,12 +284,20 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 - Live MongoDB, Google, and Brevo integrations require real credentials and
   network access; the automated suites use in-memory fakes. The production
-  proxy/session chain, Render Node `24.22.1` runtime, and live email delivery
-  were not observable from this environment. See
-  [`docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md`](./docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md)
+  proxy/session chain, Render Node `24.22.1` runtime, live email delivery, and
+  the live Atlas contents were not observable from this environment. The
+  publicly reachable Render/Vercel deployment observed during this pass was
+  stale: `/api/auth/config`, `/api/auth/session`, and `/api/account/data`
+  returned 404 and the frontend bundle did not contain the current auth UI.
+  Redeploy the matching backend and frontend before judging live behavior. See
+  [the dated audit report](./docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md)
   and the prior
-  [`docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md`](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
+  [auth/security report](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
   for the exact verification boundary and owner-side checks.
+- The `lq_user_data` migration was **not** run against Atlas. Its dry-run tool,
+  checksums, idempotent copy path, and regression tests are local only. Legacy
+  `lq_data_*` data remains authoritative and intact until the owner backs it
+  up, reviews a dry-run, approves an apply, and verifies the result.
 - Timed in-browser playback events, overnight soak runs, live quota metering,
   2000+-video stress, and live storage-quota exhaustion are verified by
   unit/integration tests and inspection — not by live runs here. See
@@ -277,6 +316,8 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Google sign-in fails | Check the OAuth client, exact redirect URI, `GOOGLE_CLIENT_ID`/secret, and consent-screen test users |
 | Recovery email not received | Check Brevo Transactional Email Logs for the recipient and status; verify sender/domain authentication (a verified Gmail sender can still fail DKIM/DMARC alignment), API key permissions, and spam; wait for the resend cooldown; request a new link (older links are invalidated). An unknown or ineligible account intentionally receives no message. |
 | MongoDB auth/data errors | Check `MONGODB_URI`, Atlas network access, and database user permissions; no local fallback is used |
+| “Your account data is unavailable” | The client rejects incomplete account-data responses. If the account is pending onboarding, finish setup; otherwise retry the load. Genuine database failures return an explicit error and never become an empty account. Confirm the deployed backend and frontend match this repository |
+| Can't delete my account | The dialog requires the current password (or fresh Google reauthentication), a recent reauthentication, and the exact phrase `DELETE MY ACCOUNT`. If cleanup is interrupted, the server reports incomplete and retries safely; it never claims premature success |
 | API key missing | Follow Configuration; restart backend; Recheck in Settings |
 | Invalid/restricted key | Allow YouTube Data API v3 + backend host in Google Cloud; restart |
 | Quota exhausted | Wait for daily reset; use JSON import meanwhile |
@@ -291,8 +332,8 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Documentation
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
-- [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup.
-- [docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md](./docs/audits/LEARNQUEST_POST_REPAIR_UX_EMAIL_PERSISTENCE_2026-10-27.md) — current onboarding UX, password recovery, Brevo diagnostics, and cloud-persistence report.
+- [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup, plus the migration and deletion runbook.
+- [docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md](./docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md) — current empty-account, API-contract, MongoDB-layout, migration, and account-deletion report.
 - [docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — prior auth, email-link, proxy, and verification report.
 - [docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — prior multi-user platform report (historical; superseded by the auth/security repair above).
 - [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — prior remediation report and verification matrix.

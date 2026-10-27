@@ -77,6 +77,12 @@ function onboardingExpiry(): string {
   return new Date(Date.now() + GOOGLE_ONBOARDING_MINUTES * 60_000).toISOString();
 }
 
+function requireCompletedAccount(account: Account): void {
+  if (!account.onboardingComplete || !account.username) {
+    throw http(409, 'Finish your LearnQuest account setup before using this action.', 'ONBOARDING_REQUIRED');
+  }
+}
+
 export interface AuthRouterDeps {
   store: DataStore;
   email: EmailService;
@@ -147,7 +153,21 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         throw http(400, 'Choose whether to sign in or create an account.', 'INVALID_OAUTH_INTENT');
       }
       const intent: GoogleAuthIntent = rawIntent;
-      const { url } = await google.start(intent);
+      // If this browser already has a valid session, associate the short-lived
+      // OAuth state with that account so account deletion can remove it. The
+      // state still contains no profile or learning data.
+      let ownerUserId: string | null = null;
+      try {
+        const token = readSessionToken(req);
+        const session = token ? await findSessionByToken(store, token) : null;
+        if (session) {
+          const owner = await findAccountById(store, session.userId);
+          if (owner?.status === 'active') ownerUserId = owner.userId;
+        }
+      } catch {
+        // An optional owner link must not make the public sign-in start fail.
+      }
+      const { url } = await google.start(intent, ownerUserId);
       res.json({ url, intent });
     } catch (e) {
       next(e);
@@ -307,6 +327,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
   router.post('/reauth', auth, csrf, noStore, async (req: AuthedRequest, res, next) => {
     try {
       const account = req.auth!.account;
+      requireCompletedAccount(account);
       const body = parseBody(reauthSchema, req.body);
       if (account.passwordHash) {
         const ok = body.password ? await verifyCode(body.password, account.passwordHash) : false;
@@ -324,6 +345,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
   router.post('/password/change', auth, csrf, requireRecentAuth, noStore, async (req: AuthedRequest, res, next) => {
     try {
       const account = req.auth!.account;
+      requireCompletedAccount(account);
       const body = parseBody(passwordChangeSchema, req.body);
       validatePassword(body.newPassword);
       if (account.passwordHash) {

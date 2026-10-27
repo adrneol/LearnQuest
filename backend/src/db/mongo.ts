@@ -88,15 +88,43 @@ async function ensureUsernameIndex(db: Db): Promise<void> {
   });
   const partial = existing?.partialFilterExpression as
     { usernameNormalized?: { $type?: unknown } } | undefined;
-  const alreadyPartial = partial?.usernameNormalized?.$type === 'string';
+  const alreadyPartial = partial?.usernameNormalized?.$type === 'string' && existing?.unique !== false;
   if (existing && !alreadyPartial) {
+    // MongoDB will not allow two indexes with the same key pattern and
+    // different options, so the old index must be replaced. Keep enough of its
+    // definition to restore it if the new index cannot be created: no user
+    // document is modified by either operation.
+    const oldName = String(existing.name);
+    const oldOptions: Document = { unique: existing.unique !== false };
+    if (existing.sparse) oldOptions.sparse = true;
+    if (existing.partialFilterExpression) oldOptions.partialFilterExpression = existing.partialFilterExpression;
     try {
-      await accounts.dropIndex(String(existing.name));
+      await accounts.dropIndex(oldName);
     } catch (e: unknown) {
       // A concurrent deploy may have replaced it already; the createIndex
       // below is idempotent when the options now match.
       if ((e as { code?: number })?.code !== 27) throw e;
     }
+    try {
+      await accounts.createIndex(
+        { usernameNormalized: 1 },
+        {
+          name: 'username_normalized_partial_unique_v2',
+          unique: true,
+          partialFilterExpression: { usernameNormalized: { $type: 'string' } },
+        },
+      );
+    } catch (error) {
+      // Restore the previous constraint rather than leave the account
+      // collection without username uniqueness after a failed rollout.
+      try {
+        await accounts.createIndex({ usernameNormalized: 1 }, { name: oldName, ...oldOptions });
+      } catch {
+        // Preserve the original replacement error; the next startup retries.
+      }
+      throw error;
+    }
+    return;
   }
   await accounts.createIndex(
     { usernameNormalized: 1 },
@@ -109,6 +137,8 @@ async function ensureIndexes(db: Db): Promise<void> {
   await Promise.all([
     db.collection('lq_accounts').createIndex({ googleSub: 1 }, { unique: true, sparse: true }),
     db.collection('lq_accounts').createIndex({ emailNormalized: 1 }, { unique: true }),
+    // Used by the restartable account-deletion sweep; never a uniqueness rule.
+    db.collection('lq_accounts').createIndex({ status: 1 }, { name: 'account_status' }),
     db.collection('lq_sessions').createIndex({ tokenHash: 1 }, { unique: true }),
     db.collection('lq_sessions').createIndex({ userId: 1, revokedAt: 1 }),
     db.collection('lq_sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
@@ -119,10 +149,20 @@ async function ensureIndexes(db: Db): Promise<void> {
     db.collection('lq_action_tokens').createIndex({ userId: 1, purpose: 1, consumedAt: 1 }),
     db.collection('lq_action_tokens').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('lq_oauth_states').createIndex({ stateHash: 1 }, { unique: true }),
+    db.collection('lq_oauth_states').createIndex({ userId: 1 }, { sparse: true }),
     db.collection('lq_oauth_states').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('lq_deletions').createIndex({ userId: 1, playlistId: 1 }, { unique: true }),
+    // One resumable deletion saga per account. The document is removed after
+    // successful verification, so it never becomes a permanent account index.
+    db.collection('lq_account_deletions').createIndex({ userId: 1 }, { unique: true }),
+    db.collection('lq_account_deletions').createIndex({ status: 1, updatedAt: 1 }),
     db.collection('lq_migrations').createIndex({ userId: 1, migrationId: 1 }, { unique: true }),
     db.collection('lq_state_versions').createIndex({ userId: 1 }, { unique: true }),
+    // Consolidated learning-data target. Reads/writes remain on the legacy
+    // per-domain collections until the owner-approved migration is verified.
+    db.collection('lq_user_data').createIndex({ userId: 1, domain: 1, key: 1 }, { unique: true }),
+    db.collection('lq_user_data').createIndex({ userId: 1, domain: 1, playlistId: 1 }),
+    db.collection('lq_user_data').createIndex({ userId: 1, domain: 1, order: 1 }),
   ]);
   // One compound unique index for every per-user record collection.
   const names = [

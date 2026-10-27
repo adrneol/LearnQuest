@@ -98,7 +98,14 @@ function invalidAccountData(): ApiError {
 }
 
 function validateAccountDataResponse(value: unknown): { state: ServerState; version: number } {
-  if (!isObject(value) || !isObject(value.state) || typeof value.version !== 'number' || !Number.isFinite(value.version)) {
+  if (!isObject(value) || !isObject(value.state) || value.ok !== true) {
+    throw invalidAccountData();
+  }
+  const version = value.version;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) {
+    throw invalidAccountData();
+  }
+  if (value.schemaVersion !== undefined && value.schemaVersion !== 1) {
     throw invalidAccountData();
   }
   const state = value.state;
@@ -113,7 +120,24 @@ function validateAccountDataResponse(value: unknown): { state: ServerState; vers
   }
   if (state.activeId !== null && typeof state.activeId !== 'string') throw invalidAccountData();
   if (typeof state.challengeEnabled !== 'boolean') throw invalidAccountData();
-  return { state: state as unknown as ServerState, version: value.version };
+  // A complete account-data response always carries canonical singleton
+  // objects. `null` is an incomplete placeholder, not an empty account; the
+  // backend normalizes a missing singleton before responding.
+  if (!isObject(state.challenge) || typeof state.challenge.seed !== 'number'
+    || typeof state.challenge.cohortSize !== 'number' || !isObject(state.challenge.tierDist)) {
+    throw invalidAccountData();
+  }
+  if (!isObject(state.settings) || typeof state.settings.verifiedThreshold !== 'number'
+    || !Number.isFinite(state.settings.verifiedThreshold)
+    || state.settings.verifiedThreshold < 0.5 || state.settings.verifiedThreshold > 1) {
+    throw invalidAccountData();
+  }
+  if (!isObject(state.prefs) || typeof state.prefs.timezone !== 'string' || !state.prefs.timezone
+    || typeof state.prefs.sessionLenMin !== 'number' || typeof state.prefs.breakMin !== 'number'
+    || typeof state.prefs.minViableMin !== 'number') {
+    throw invalidAccountData();
+  }
+  return { state: state as unknown as ServerState, version };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -371,8 +395,12 @@ export async function confirmEmailChange(token: string): Promise<{ ok: boolean; 
   return apiRequest('/account/email/confirm', { method: 'POST', body: { token } });
 }
 
-export async function deleteAccount(confirmUsername: string, password?: string): Promise<void> {
-  await apiRequest('/account/delete', { method: 'POST', body: { confirmUsername, password } });
+export async function deleteAccount(confirmPhrase: string, password?: string): Promise<void> {
+  await apiRequest('/account/delete', {
+    method: 'POST',
+    body: { confirmPhrase: confirmPhrase.trim(), password },
+    timeoutMs: 60_000,
+  });
   setCsrfToken(null);
 }
 

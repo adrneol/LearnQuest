@@ -11,7 +11,8 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "migrate:user-data": "tsx src/scripts/migrateUserData.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",

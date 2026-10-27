@@ -125,14 +125,41 @@ describe('account screen', () => {
     await waitFor(() => expect(storeRef.current.revokeAccountSession).toHaveBeenCalledWith('s-other'));
   });
 
-  it('requires the exact username and password before account deletion is enabled', () => {
+  it('opens a deliberate dialog and requires both the current password and the exact phrase', async () => {
     render(<Account section="settings" onSection={() => undefined} />);
-    const deleteButton = screen.getByRole('button', { name: /Delete my account permanently/ });
-    expect(deleteButton).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Type your exact username'), { target: { value: 'learner' } });
-    expect(deleteButton).toBeDisabled();
+    const openButton = screen.getByRole('button', { name: /^Delete my account$/ });
+    expect(openButton).toBeInTheDocument();
+    expect(storeRef.current.deleteAccount).not.toHaveBeenCalled();
+
+    fireEvent.click(openButton);
+    const dialog = screen.getByRole('alertdialog', { name: /Permanently delete this account/ });
+    expect(dialog).toHaveTextContent(/cannot be undone/i);
+    expect(dialog).toHaveTextContent(/playlists, progress, notes/i);
+    const permanent = screen.getByRole('button', { name: /Delete permanently/ });
+    expect(permanent).toBeDisabled();
+
     fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'correct horse battery staple' } });
-    expect(deleteButton).toBeEnabled();
+    fireEvent.change(screen.getByLabelText(/Type DELETE MY ACCOUNT to confirm/), { target: { value: 'delete my account' } });
+    expect(permanent).toBeDisabled();
+    expect(screen.getByText(/The phrase is not exact/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Type DELETE MY ACCOUNT to confirm/), { target: { value: '  DELETE MY ACCOUNT  ' } });
+    expect(permanent).toBeEnabled();
+    fireEvent.click(permanent);
+    await waitFor(() => expect(storeRef.current.deleteAccount).toHaveBeenCalledWith(
+      'DELETE MY ACCOUNT',
+      'correct horse battery staple',
+    ));
+  });
+
+  it('cancels without deleting and requires fresh Google authentication when no password exists', () => {
+    storeRef.current.authUser.hasPassword = false;
+    render(<Account section="settings" onSection={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Delete my account$/ }));
+    expect(screen.getByRole('button', { name: /Reauthenticate with Google/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Current password')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(storeRef.current.deleteAccount).not.toHaveBeenCalled();
   });
 });

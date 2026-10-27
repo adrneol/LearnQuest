@@ -55,6 +55,25 @@ function snapshot(playlistId: string, title: string): any {
   };
 }
 
+function emptyState(): any {
+  return {
+    playlists: {}, meta: {}, activeId: null, progress: {}, ranges: [], checkpoints: [],
+    modules: [], sessions: [], goals: {}, xp: [], achievements: {}, segments: [],
+    playSessions: [], queue: {}, flexGoals: [],
+    challenge: {
+      seed: 20261013,
+      cohortSize: 100,
+      tierDist: { Ultra: 2, High: 8, Good: 20, Normal: 30, Average: 25, 'Below Average': 15 },
+      windowDays: 14,
+      dailyCapHours: 6,
+    },
+    challengeEnabled: false,
+    rankHistory: [],
+    settings: { verifiedThreshold: 0.9 },
+    prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, reducedMotion: false, minViableMin: 10 },
+  };
+}
+
 function stateFor(playlistId: string, note: string): any {
   const snap = snapshot(playlistId, playlistId === P ? 'Course P' : 'Course Q');
   return {
@@ -74,7 +93,14 @@ function stateFor(playlistId: string, note: string): any {
     },
     ranges: [], checkpoints: [], modules: [], sessions: [], goals: {}, xp: [],
     achievements: {}, segments: [], playSessions: [], queue: {}, flexGoals: [],
-    challenge: null, challengeEnabled: false, rankHistory: [],
+    challenge: {
+      seed: 20261013,
+      cohortSize: 100,
+      tierDist: { Ultra: 2, High: 8, Good: 20, Normal: 30, Average: 25, 'Below Average': 15 },
+      windowDays: 14,
+      dailyCapHours: 6,
+    },
+    challengeEnabled: false, rankHistory: [],
     settings: { verifiedThreshold: 0.9 },
     prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, minViableMin: 10 },
   };
@@ -218,6 +244,21 @@ describe('cloud persistence and source-of-truth boundaries', () => {
     expect(server.writes).toHaveLength(0);
   });
 
+  it('rejects null singleton placeholders as incomplete account data', async () => {
+    const server = makeServer();
+    server.state = { ...emptyState(), settings: null };
+    installFetch(server);
+    render(
+      <StoreProvider mode="cloud">
+        <Probe />
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Your account data is unavailable' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/incomplete learning data|nothing was overwritten/i);
+    expect(screen.queryByTestId('p-note')).toBeNull();
+    expect(server.writes).toHaveLength(0);
+  });
+
   it('does not fabricate an empty account state when the initial cloud read fails', async () => {
     const server = makeServer();
     server.failData = true;
@@ -254,6 +295,43 @@ describe('cloud persistence and source-of-truth boundaries', () => {
     act(() => hook.result.current.retryCloudSave());
     await waitFor(() => expect(hook.result.current.syncStatus).toBe('saved'));
     expect(server.state.progress[`${P}::eA`].notes).toBe('retry this save');
+  });
+
+  it('treats a brand-new fully onboarded account with zero learning records as a valid empty account', async () => {
+    const server = makeServer();
+    server.state = emptyState();
+    installFetch(server);
+    const hook = await readyHook();
+
+    expect(hook.result.current.loadError).toBeNull();
+    expect(hook.result.current.ready).toBe(true);
+    expect(hook.result.current.playlists).toEqual({});
+    expect(hook.result.current.activeId).toBeNull();
+    expect(hook.result.current.settings).toEqual({ verifiedThreshold: 0.9 });
+    expect(hook.result.current.challenge.seed).toBe(20261013);
+    expect(server.writes).toHaveLength(0);
+
+    act(() => hook.result.current.addSnapshot(snapshot(P, 'First Course')));
+    await waitFor(() => expect(server.state.playlists[P]).toBeTruthy());
+    await waitFor(() => expect(hook.result.current.syncStatus).toBe('saved'));
+    expect(server.state.activeId).toBe(P);
+    expect(server.writes.some((w) => w.collection === 'playlists')).toBe(true);
+  });
+
+  it('routes a pending onboarding account to setup without loading account data', async () => {
+    const server = makeServer();
+    server.user = { ...USER_A, username: null, onboardingComplete: false, hasPassword: false };
+    installFetch(server);
+    render(
+      <StoreProvider mode="cloud">
+        <Probe />
+      </StoreProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Finish your LearnQuest account' })).toBeInTheDocument();
+    expect(server.dataReads).toBe(0);
+    expect(server.writes).toHaveLength(0);
+    expect(screen.queryByTestId('p-note')).toBeNull();
   });
 
   it('never exposes the previous account state after signing out and signing in as another user', async () => {

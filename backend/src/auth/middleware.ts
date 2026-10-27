@@ -66,6 +66,27 @@ export function requireAuth(store: DataStore): RequestHandler {
   };
 }
 
+/**
+ * Authenticated but not yet onboarded is not a valid learning account. It must
+ * finish the explicit Google registration flow, never receive an empty account
+ * state that a client could then write back as if it were real data.
+ */
+export function requireOnboarded(req: AuthedRequest, _res: Response, next: NextFunction): void {
+  try {
+    if (!req.auth) throw httpError('Sign in to continue.', 401, 'UNAUTHENTICATED');
+    if (!req.auth.account.onboardingComplete || !req.auth.account.username) {
+      throw httpError(
+        'Finish your LearnQuest account setup before using account data.',
+        409,
+        'ONBOARDING_REQUIRED',
+      );
+    }
+    next();
+  } catch (e) {
+    next(e);
+  }
+}
+
 export function requireCsrf(req: AuthedRequest, _res: Response, next: NextFunction): void {
   try {
     if (!req.auth) throw httpError('Sign in to continue.', 401, 'UNAUTHENTICATED');

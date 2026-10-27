@@ -169,7 +169,7 @@ interface Store {
   }>;
   listAccountSessions: () => Promise<AccountSession[]>;
   revokeAccountSession: (sessionId: string) => Promise<void>;
-  deleteAccount: (confirmUsername: string, password?: string) => Promise<void>;
+  deleteAccount: (confirmPhrase: string, password?: string) => Promise<void>;
   exportAccountData: () => Promise<void>;
   archivePlaylistManaged: (playlistId: string) => Promise<void>;
   restorePlaylistManaged: (playlistId: string) => Promise<void>;
@@ -746,7 +746,14 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setSetup(session);
       if (session.authenticated && session.user) {
         setAuthUserState(session.user);
-        await loadCloud(session.user);
+        if (session.user.onboardingComplete) {
+          await loadCloud(session.user);
+        } else {
+          // A pending Google registration is not an empty dashboard. Keep
+          // account data uninitialized until the onboarding API succeeds.
+          resetAccountState();
+          setReady(false);
+        }
       } else {
         resetAccountState();
         setAuthUserState(null);
@@ -1129,16 +1136,24 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       await revokeAccountSession(sessionId);
       setLastDiff('That session was signed out.');
     },
-    deleteAccount: async (confirmUsername, password) => {
-      await deleteAccountApi(confirmUsername, password);
+    deleteAccount: async (confirmPhrase, password) => {
+      // Stop a debounced write before the server starts deleting. If a
+      // validation step rejects the request, restore the writer for the still
+      // active account; after success every queued write must stay cancelled.
       if (saveT.current) clearTimeout(saveT.current);
+      const previousCloudUser = cloudUserRef.current;
       cloudUserRef.current = null;
+      try {
+        await deleteAccountApi(confirmPhrase, password);
+      } catch (e) {
+        cloudUserRef.current = previousCloudUser;
+        throw e;
+      }
       cloudLoadGeneration.current += 1;
       resetAccountState();
       setAuthUserState(null);
       setReady(false);
       setAuthReady(true);
-      cloudUserRef.current = null;
       try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* ignore */ }
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
     },

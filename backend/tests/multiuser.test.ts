@@ -224,6 +224,54 @@ describe('account registration and sessions', () => {
     expect(String(stored?.passwordHash)).toMatch(/^\$argon2id\$/);
   });
 
+  it('rejects a duplicate username and leaves the second registration pending', async () => {
+    await seedUser('taken_name', 'taken@example.test', 'correct horse battery staple', 'google-sub-taken');
+    googleIdentity = { sub: 'google-sub-duplicate', email: 'duplicate@example.test', emailVerified: true, name: 'Duplicate' };
+    const callbackRes = await callback(await startGoogle('register'));
+    expect(callbackRes.status).toBe(303);
+    const cookie = String(callbackRes.headers['set-cookie'][0]).split(';')[0];
+    const session = await request(app).get('/api/auth/session').set('Cookie', cookie);
+
+    const duplicate = await request(app)
+      .post('/api/auth/onboarding')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', session.body.csrfToken)
+      .send({ username: 'taken_name', displayName: 'Duplicate', password: 'correct horse battery staple', timezone: 'UTC' });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.code).toBe('USERNAME_TAKEN');
+
+    const pending = await store.accounts.findOne({ userId: session.body.user.userId });
+    expect(pending?.onboardingComplete).toBe(false);
+    expect(pending?.username).toBeNull();
+    expect((await store.accounts.findOne({ usernameNormalized: 'taken_name' }))?.onboardingComplete).toBe(true);
+  });
+
+  it('rejects an expired Google onboarding session without persisting setup', async () => {
+    googleIdentity = { sub: 'google-sub-expired', email: 'expired@example.test', emailVerified: true, name: 'Expired' };
+    const callbackRes = await callback(await startGoogle('register'));
+    expect(callbackRes.status).toBe(303);
+    const cookie = String(callbackRes.headers['set-cookie'][0]).split(';')[0];
+    const session = await request(app).get('/api/auth/session').set('Cookie', cookie);
+    const sessionDoc = await store.sessions.findOne({ userId: session.body.user.userId });
+    await store.sessions.updateOne(
+      { sessionId: sessionDoc!.sessionId },
+      { $set: { onboardingExpiresAt: new Date(Date.now() - 60_000).toISOString() } },
+    );
+
+    const expired = await request(app)
+      .post('/api/auth/onboarding')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', session.body.csrfToken)
+      .send({ username: 'expired_user', displayName: 'Expired', password: 'correct horse battery staple', timezone: 'UTC' });
+    expect(expired.status).toBe(403);
+    expect(expired.body.code).toBe('ONBOARDING_SESSION_INVALID');
+
+    const pending = await store.accounts.findOne({ userId: session.body.user.userId });
+    expect(pending?.onboardingComplete).toBe(false);
+    expect(pending?.username).toBeNull();
+    expect(await store.accounts.count({ usernameNormalized: 'expired_user' })).toBe(0);
+  });
+
   it('enforces the password length boundaries during onboarding', async () => {
     googleIdentity = { sub: 'google-sub-boundary', email: 'boundary@example.test', emailVerified: true, name: 'Boundary' };
     const callbackRes = await callback(await startGoogle('register'));
@@ -1070,11 +1118,11 @@ describe('user isolation, data versions, migration, archive and delete', () => {
     expect(exported.body.state.playlists[P]).toBeTruthy();
     expect(exported.body.account.email).toBe('exp@example.test');
     expect(JSON.stringify(exported.body)).not.toContain('passwordHash');
-    const wrongName = await authed(request(app).post('/api/account/delete'), s)
-      .send({ confirmUsername: 'wrong', password: 'correct horse battery staple' });
-    expect(wrongName.status).toBe(400);
+    const wrongPhrase = await authed(request(app).post('/api/account/delete'), s)
+      .send({ confirmPhrase: 'wrong phrase', password: 'correct horse battery staple' });
+    expect(wrongPhrase.status).toBe(400);
     const del = await authed(request(app).post('/api/account/delete'), s)
-      .send({ confirmUsername: 'exp_a', password: 'correct horse battery staple' });
+      .send({ confirmPhrase: 'DELETE MY ACCOUNT', password: 'correct horse battery staple' });
     expect(del.status).toBe(204);
     expect(await store.accounts.findOne({ userId: a.userId })).toBeNull();
     expect((await readUserState(store, a.userId)).state.playlists[P]).toBeUndefined();
