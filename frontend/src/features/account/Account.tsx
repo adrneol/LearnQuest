@@ -1,21 +1,43 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode,
+} from 'react';
 import { AlertTriangle, Download, KeyRound, LogOut, Mail, RefreshCw, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import { useStore } from '../../app/store.js';
-import { confirmDialog } from '../../components/ui/dialog.js';
+import { confirmDialog, Modal } from '../../components/ui/dialog.js';
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import type { AccountSession } from '../../services/api/authApi.js';
 import type { AccountSection } from './AccountMenu.js';
 
+const ACCOUNT_SECTIONS: AccountSection[] = ['profile', 'settings', 'security'];
+
 export function Account({ section, onSection }: { section: AccountSection; onSection: (s: AccountSection) => void }) {
   const s = useStore();
   const user = s.authUser;
   if (!user) return null;
+
+  const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const current = ACCOUNT_SECTIONS.indexOf(section);
+    const next = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? ACCOUNT_SECTIONS.length - 1
+        : event.key === 'ArrowRight'
+          ? (current + 1) % ACCOUNT_SECTIONS.length
+          : (current - 1 + ACCOUNT_SECTIONS.length) % ACCOUNT_SECTIONS.length;
+    const target = ACCOUNT_SECTIONS[next];
+    onSection(target);
+    window.setTimeout(() => document.getElementById(`account-tab-${target}`)?.focus(), 0);
+  };
+
   return (
     <div className="space-y-4">
       <Card className="border-violet-500/25">
-        <div className="flex flex-wrap items-center gap-3">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Account</p>
+        <div className="mt-1 flex flex-wrap items-center gap-3">
           <span className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-500 text-sm font-black">
             {(user.displayName || user.username || user.email).slice(0, 2).toUpperCase()}
           </span>
@@ -27,26 +49,37 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
             {s.syncStatus === 'saving' ? 'Saving to server…' : s.syncStatus === 'error' ? 'Save failed' : s.syncStatus === 'conflict' ? 'Save conflict' : s.syncStatus === 'saved' ? 'Cloud saves confirmed' : 'Cloud account'}
           </span>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Account sections">
-          <SectionBtn active={section === 'profile'} onClick={() => onSection('profile')} icon={<UserRound size={14} />}>Profile</SectionBtn>
-          <SectionBtn active={section === 'settings'} onClick={() => onSection('settings')} icon={<ShieldCheck size={14} />}>Account settings</SectionBtn>
-          <SectionBtn active={section === 'security'} onClick={() => onSection('security')} icon={<KeyRound size={14} />}>Security & sessions</SectionBtn>
+        <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Account sections" onKeyDown={onTabKeyDown}>
+          <SectionBtn id="account-tab-profile" active={section === 'profile'} onClick={() => onSection('profile')} icon={<UserRound size={14} />}>Profile</SectionBtn>
+          <SectionBtn id="account-tab-settings" active={section === 'settings'} onClick={() => onSection('settings')} icon={<ShieldCheck size={14} />}>Account settings</SectionBtn>
+          <SectionBtn id="account-tab-security" active={section === 'security'} onClick={() => onSection('security')} icon={<KeyRound size={14} />}>Security & sessions</SectionBtn>
         </div>
       </Card>
 
-      {section === 'profile' && <ProfileSection />}
-      {section === 'settings' && <SettingsSection />}
-      {section === 'security' && <SecuritySection />}
+      <div
+        role="tabpanel"
+        id={`account-panel-${section}`}
+        aria-labelledby={`account-tab-${section}`}
+        tabIndex={0}
+        className="space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a]"
+      >
+        {section === 'profile' && <ProfileSection />}
+        {section === 'settings' && <SettingsSection />}
+        {section === 'security' && <SecuritySection />}
+      </div>
     </div>
   );
 }
 
-function SectionBtn({ active, onClick, children, icon }: { active: boolean; onClick: () => void; children: ReactNode; icon: ReactNode }) {
+function SectionBtn({ id, active, onClick, children, icon }: { id: string; active: boolean; onClick: () => void; children: ReactNode; icon: ReactNode }) {
   return (
     <button
       type="button"
+      id={id}
       role="tab"
       aria-selected={active}
+      aria-controls={active ? `account-panel-${id.replace('account-tab-', '')}` : undefined}
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium ${active ? 'bg-violet-600 text-white' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}
     >
@@ -228,24 +261,14 @@ function DeleteAccountDialog({
   const [error, setError] = useState<string | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const phraseRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    (user.hasPassword ? passwordRef.current : phraseRef.current)?.focus();
-  }, [user.hasPassword]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onCancel]);
+  const submittingRef = useRef(false);
 
   const phraseMatches = confirmation.trim() === phrase;
   const canDelete = !busy && phraseMatches && (!user.hasPassword || password.length > 0);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     setError(null);
     if (!phraseMatches) {
       setError(`Type ${phrase} exactly to confirm.`);
@@ -255,88 +278,92 @@ function DeleteAccountDialog({
       setError('Enter your current password.');
       return;
     }
+    submittingRef.current = true;
     setBusy(true);
     try {
       await onDelete(confirmation.trim(), user.hasPassword ? password : undefined);
     } catch (err: any) {
       setError(err?.message ?? 'Account deletion did not complete. The account was not reported as deleted; retry safely.');
       setBusy(false);
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4 backdrop-blur-sm" role="presentation">
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="delete-account-title"
-        aria-describedby="delete-account-body"
-        className="w-full max-w-lg rounded-2xl border border-red-500/40 bg-[#161327] p-5 text-slate-200 shadow-2xl"
-      >
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 rounded-xl bg-red-500/15 p-2 text-red-300"><AlertTriangle size={20} /></span>
-          <div>
-            <h2 id="delete-account-title" className="text-lg font-bold text-red-100">Permanently delete this account?</h2>
-            <p id="delete-account-body" className="mt-1 text-sm text-slate-300">
-              This is permanent and cannot be undone through LearnQuest. All playlists, progress, notes, review history,
-              focus sessions, checkpoints, goals, XP, achievements, settings, sessions, and sign-in links owned by
-              <b className="text-slate-100"> {user.email}</b> will be removed.
-            </p>
-          </div>
-        </div>
+    <Modal
+      role="alertdialog"
+      title={(
+        <span className="flex items-center gap-2">
+          <span className="rounded-xl bg-red-500/15 p-2 text-red-300"><AlertTriangle size={20} /></span>
+          Permanently delete this account?
+        </span>
+      )}
+      description={(
+        <>
+          This is permanent and cannot be undone through LearnQuest. All playlists, progress, notes, review history,
+          focus sessions, checkpoints, goals, XP, achievements, settings, sessions, and sign-in links owned by
+          <b className="text-slate-100"> {user.email}</b> will be removed.
+        </>
+      )}
+      onClose={onCancel}
+      busy={busy}
+      initialFocusRef={user.hasPassword ? passwordRef : phraseRef}
+      closeLabel="Close delete-account dialog"
+      testId="delete-account-dialog"
+      panelClassName="max-w-lg border-red-500/40 bg-[#161327]"
+    >
+      <ul className="list-disc space-y-1 pl-5 text-xs text-slate-400">
+        <li>Export a backup first if you might want a personal copy of your learning data.</li>
+        <li>Other LearnQuest accounts are not affected.</li>
+        <li>The server verifies recent authentication before deleting anything.</li>
+      </ul>
 
-        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-400">
-          <li>Export a backup first if you might want a personal copy of your learning data.</li>
-          <li>Other LearnQuest accounts are not affected.</li>
-          <li>The server verifies recent authentication before deleting anything.</li>
-        </ul>
-
-        <form onSubmit={submit} className="mt-4 space-y-3" aria-busy={busy}>
-          {user.hasPassword ? (
-            <Field label="Current password">
-              <input
-                ref={passwordRef}
-                className={inputCls}
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                disabled={busy}
-              />
-            </Field>
-          ) : (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-              <p>This account uses Google sign-in. Deletion requires a fresh Google authentication within the server's recent-auth window.</p>
-              <Btn type="button" className="mt-2" onClick={onGoogleReauth} disabled={busy}>Reauthenticate with Google</Btn>
-            </div>
-          )}
-          <Field label={`Type ${phrase} to confirm`}>
+      <form onSubmit={submit} className="mt-4 space-y-3" aria-busy={busy}>
+        {user.hasPassword ? (
+          <Field label="Current password">
             <input
-              ref={phraseRef}
+              ref={passwordRef}
               className={inputCls}
-              value={confirmation}
-              onChange={(e) => setConfirmation(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               disabled={busy}
-              aria-describedby="delete-phrase-help"
             />
           </Field>
-          <p id="delete-phrase-help" className={`text-xs ${confirmation.length > 0 && !phraseMatches ? 'text-red-300' : 'text-slate-500'}`}>
-            {confirmation.length > 0 && !phraseMatches
-              ? `The phrase is not exact. Type ${phrase} exactly (leading/trailing spaces are ignored).`
-              : `Exact phrase, including spaces: ${phrase}`}
-          </p>
-          {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Btn type="button" onClick={onCancel} disabled={busy}>Cancel</Btn>
-            <Btn type="submit" variant="danger" disabled={!canDelete}>
-              <Trash2 size={14} /> {busy ? 'Deleting…' : 'Delete permanently'}
-            </Btn>
+        ) : (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+            <p>This account uses Google sign-in. Deletion requires a fresh Google authentication within the server's recent-auth window.</p>
+            <Btn type="button" className="mt-2" onClick={onGoogleReauth} disabled={busy}>Reauthenticate with Google</Btn>
           </div>
-        </form>
-      </div>
-    </div>
+        )}
+        <Field label={`Type ${phrase} to confirm`}>
+          <input
+            ref={phraseRef}
+            className={inputCls}
+            value={confirmation}
+            onChange={(e) => setConfirmation(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={busy}
+            aria-describedby="delete-phrase-help"
+          />
+        </Field>
+        <p id="delete-phrase-help" className={`text-xs ${confirmation.length > 0 && !phraseMatches ? 'text-red-300' : 'text-slate-500'}`}>
+          {confirmation.length > 0 && !phraseMatches
+            ? `The phrase is not exact. Type ${phrase} exactly (leading/trailing spaces are ignored).`
+            : `Exact phrase, including spaces: ${phrase}`}
+        </p>
+        {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Btn type="button" onClick={onCancel} disabled={busy}>Cancel</Btn>
+          <Btn type="submit" variant="danger" disabled={!canDelete}>
+            <Trash2 size={14} /> {busy ? 'Deleting…' : 'Delete permanently'}
+          </Btn>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

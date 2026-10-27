@@ -1,14 +1,22 @@
-import React from 'react';
+import React, { forwardRef } from 'react';
 
 export function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <section className={`glass rounded-2xl p-4 sm:p-5 shadow-xl ${className}`}>{children}</section>;
 }
 
-export function Btn({
+interface BtnProps {
+  children: React.ReactNode;
+  onClick?: () => void;
+  variant?: 'primary' | 'ghost' | 'danger';
+  className?: string;
+  type?: 'button' | 'submit';
+  disabled?: boolean;
+  title?: string;
+}
+
+export const Btn = forwardRef<HTMLButtonElement, BtnProps>(function Btn({
   children, onClick, variant = 'ghost', className = '', type = 'button', disabled, title,
-}: {
-  children: React.ReactNode; onClick?: () => void; variant?: 'primary' | 'ghost' | 'danger'; className?: string; type?: 'button' | 'submit'; disabled?: boolean; title?: string;
-}) {
+}, ref) {
   const base = 'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
   const styles =
     variant === 'primary'
@@ -17,11 +25,11 @@ export function Btn({
         ? 'bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 disabled:hover:bg-red-500/15'
         : 'bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200 disabled:hover:bg-white/5';
   return (
-    <button type={type} disabled={disabled} title={title} onClick={onClick} className={`${base} ${styles} ${className}`}>
+    <button ref={ref} type={type} disabled={disabled} title={title} onClick={onClick} className={`${base} ${styles} ${className}`}>
       {children}
     </button>
   );
-}
+});
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

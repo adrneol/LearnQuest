@@ -188,6 +188,7 @@ async function providerDiagnosticCode(res: Response): Promise<string | null> {
 
 async function brevoSend(payload: Record<string, unknown>, event: string): Promise<EmailDeliveryReceipt> {
   if (!env.brevoConfigured) {
+    console.error(JSON.stringify({ level: 'error', event: 'email_provider_not_configured', kind: event }));
     throw Object.assign(new Error('Email delivery is not configured yet.'), { status: 503, code: 'SETUP_REQUIRED' });
   }
   const ctrl = new AbortController();
@@ -203,12 +204,12 @@ async function brevoSend(payload: Record<string, unknown>, event: string): Promi
       body: JSON.stringify(payload),
       signal: ctrl.signal,
     });
+    const providerRequestId = safeDiagnostic(res.headers.get('x-sib-request-id'), 120);
     if (!res.ok) {
       // Never include the provider response body in the error or log: it can
       // echo recipient data. Only the HTTP status, a short provider code, and
       // a request identifier are safe diagnostic fields.
       const providerCode = await providerDiagnosticCode(res);
-      const providerRequestId = safeDiagnostic(res.headers.get('x-sib-request-id'), 120);
       console.error(JSON.stringify({
         level: 'error',
         event: 'email_provider_rejected',
@@ -231,7 +232,9 @@ async function brevoSend(payload: Record<string, unknown>, event: string): Promi
       level: 'info',
       event: 'email_provider_accepted',
       kind: event,
+      status: res.status,
       messageId,
+      providerRequestId,
     }));
     return { messageId };
   } catch (e: unknown) {
@@ -243,7 +246,12 @@ async function brevoSend(payload: Record<string, unknown>, event: string): Promi
       throw Object.assign(new Error('The email provider timed out. Try again shortly.'), { status: 504, code: 'EMAIL_TIMEOUT' });
     }
     if (code === 'EMAIL_DELIVERY_FAILED' || status === 503) throw e;
-    console.error(JSON.stringify({ level: 'error', event: 'email_provider_unreachable', kind: event }));
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'email_provider_unreachable',
+      kind: event,
+      errorClass: typeof code === 'string' && /^[A-Z0-9_]{2,40}$/.test(code) ? code : null,
+    }));
     throw Object.assign(new Error('The email could not be delivered. Try again shortly.'), { status: 502, code: 'EMAIL_DELIVERY_FAILED' });
   } finally {
     clearTimeout(timer);

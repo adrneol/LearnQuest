@@ -226,7 +226,10 @@ function printApply(report: UserDataMigrationApplyReport, verbose: boolean): voi
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const store = createDataStore(getMongoAdapter());
+  // A dry run must not create indexes or collections. The apply path uses the
+  // normal adapter so the unified collection's unique/lookup indexes exist
+  // before any record is copied.
+  const store = createDataStore(getMongoAdapter({ ensureIndexes: options.apply }));
   const report = options.apply
     ? await applyUserDataMigration(store, migrationOptions(options))
     : await inspectUserDataMigration(store, migrationOptions(options));

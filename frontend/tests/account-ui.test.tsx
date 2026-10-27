@@ -103,6 +103,24 @@ describe('account screen', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Profile saved');
   });
 
+  it('uses valid ARIA tab targets and supports arrow-key section navigation', () => {
+    const onSection = vi.fn();
+    render(<Account section="profile" onSection={onSection} />);
+
+    const profile = screen.getByRole('tab', { name: /Profile/ });
+    const settings = screen.getByRole('tab', { name: /Account settings/ });
+    expect(profile).toHaveAttribute('aria-selected', 'true');
+    expect(profile).toHaveAttribute('aria-controls', 'account-panel-profile');
+    expect(profile).toHaveAttribute('tabindex', '0');
+    expect(settings).toHaveAttribute('aria-selected', 'false');
+    expect(settings).not.toHaveAttribute('aria-controls');
+    expect(settings).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'account-panel-profile');
+
+    fireEvent.keyDown(profile, { key: 'ArrowRight' });
+    expect(onSection).toHaveBeenCalledWith('settings');
+  });
+
   it('switches sections and saves account-scoped learning preferences', async () => {
     const onSection = vi.fn();
     render(<Account section="settings" onSection={onSection} />);
@@ -123,6 +141,20 @@ describe('account screen', () => {
     expect(signOutButtons).toHaveLength(1);
     fireEvent.click(signOutButtons[0]);
     await waitFor(() => expect(storeRef.current.revokeAccountSession).toHaveBeenCalledWith('s-other'));
+  });
+
+  it('portals the account-deletion dialog to a viewport-centered overlay', () => {
+    const { container } = render(<Account section="settings" onSection={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Delete my account$/ }));
+    const dialog = screen.getByRole('alertdialog', { name: /Permanently delete this account/ });
+
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+    const overlay = dialog.parentElement!;
+    expect(overlay.className).toContain('fixed');
+    expect(overlay.className).toContain('inset-0');
+    expect(overlay.className).toContain('place-items-center');
+    expect(dialog.className).toContain('max-h-[calc(100dvh-1.5rem)]');
   });
 
   it('opens a deliberate dialog and requires both the current password and the exact phrase', async () => {
@@ -150,6 +182,30 @@ describe('account screen', () => {
       'DELETE MY ACCOUNT',
       'correct horse battery staple',
     ));
+  });
+
+  it('submits the deletion request only once while the first request is pending', async () => {
+    let resolveDelete!: () => void;
+    storeRef.current.deleteAccount = vi.fn(() => new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    }));
+    render(<Account section="settings" onSection={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Delete my account$/ }));
+    fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'correct horse battery staple' } });
+    fireEvent.change(screen.getByLabelText(/Type DELETE MY ACCOUNT to confirm/), { target: { value: 'DELETE MY ACCOUNT' } });
+    fireEvent.click(screen.getByRole('button', { name: /Delete permanently/ }));
+
+    const pending = await screen.findByRole('button', { name: /Deleting/ });
+    expect(pending).toBeDisabled();
+    const form = pending.closest('form');
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+    fireEvent.click(pending);
+
+    expect(storeRef.current.deleteAccount).toHaveBeenCalledTimes(1);
+    resolveDelete();
+    await Promise.resolve();
   });
 
   it('cancels without deleting and requires fresh Google authentication when no password exists', () => {

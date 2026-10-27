@@ -1,6 +1,7 @@
 import { createApp } from './app.js';
 import { env, assertProductionConfig, configStatus } from './config/env.js';
-import { closeMongo, getMongoAdapter, getMongoDb, mongoTargetDescription } from './db/mongo.js';
+import { closeMongo, getMongoAdapter, getMongoDb, mongoTargetDescription, pingMongo } from './db/mongo.js';
+import { describeMongoFailure } from './db/mongoErrors.js';
 import { createDataStore } from './store.js';
 import { resumePendingAccountDeletions } from './services/accountDeletion.js';
 
@@ -16,8 +17,19 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
     }
     if (env.mongodbConfigured) {
       try {
+        await pingMongo();
+      } catch (error) {
+        console.error(`MongoDB connection check failed (${mongoTargetDescription()}): ${describeMongoFailure(error)}. Auth/data endpoints will return a setup/unavailable error; no local fallback is enabled.`);
+        return;
+      }
+      try {
         await getMongoDb();
-        console.log(`MongoDB connected (${mongoTargetDescription()}).`);
+        console.log(`MongoDB connected and indexes verified (${mongoTargetDescription()}).`);
+      } catch (error) {
+        console.error(`MongoDB connection succeeded but index initialization failed (${mongoTargetDescription()}): ${describeMongoFailure(error)}. Auth/data endpoints will fail closed; no local fallback is enabled.`);
+        return;
+      }
+      try {
         // Complete deletion sagas interrupted by a crash/restart. Only
         // accounts already marked `deleting` are eligible; active accounts are
         // never touched by this sweep.
@@ -25,8 +37,8 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
         if (resumed.attempted > 0) {
           console.log(`Account-deletion sweep: attempted=${resumed.attempted} completed=${resumed.completed} failed=${resumed.failed}.`);
         }
-      } catch {
-        console.error(`MongoDB is configured but unreachable (${mongoTargetDescription()}). Auth/data endpoints will return a setup/unavailable error; no local fallback is enabled.`);
+      } catch (error) {
+        console.error(`MongoDB connected but the account-deletion sweep failed (${mongoTargetDescription()}): ${describeMongoFailure(error)}. No deletion is reported complete; the next startup may retry.`);
       }
     } else {
       console.log('MongoDB is not configured. Auth and account data endpoints are disabled.');

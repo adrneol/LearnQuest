@@ -230,6 +230,34 @@ describe('public authentication copy and recovery behavior', () => {
     expect(calls[0].body).toEqual({ identifier: 'nobody@example.test' });
   });
 
+  it('shows one generic recovery confirmation with a single expiry and resend countdown', async () => {
+    const config: AuthConfig = { ...CONFIG, emailActionTtlMin: 30 };
+    globalThis.fetch = (async () => json({
+      ok: true,
+      message: "If an eligible account matches that username or email, you'll receive a password-reset link.",
+    }, 202)) as any;
+    render(
+      <AuthScreens setup={config} authError={null} onPasswordLogin={vi.fn(async () => undefined)} onGoogle={vi.fn(async () => undefined)} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: 'learner@example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send password reset link' }));
+
+    expect(await screen.findByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
+    const text = document.body.textContent ?? '';
+    // The old regression rendered the result twice: once from the API notice
+    // and once from `mode === 'sent'`.
+    expect(text.match(/If an eligible account matches/g)).toHaveLength(1);
+    expect(text.match(/The link expires in 30 minutes and can be used once\./g)).toHaveLength(1);
+    expect(text).toContain('Back to sign in');
+    expect(screen.getByRole('status')).toHaveTextContent(/You can request another link in \d+s\./);
+    expect(text).not.toMatch(/email-based password recovery/i);
+    expect(text).not.toMatch(/six-digit|verification code/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
   it('does not mention the email provider when recovery is unavailable', () => {
     const config: AuthConfig = {
       ...CONFIG,

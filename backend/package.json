@@ -12,7 +12,10 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
-    "migrate:user-data": "tsx src/scripts/migrateUserData.ts"
+    "migrate:user-data": "tsx src/scripts/migrateUserData.ts",
+    "inspect:user-data": "tsx src/scripts/inspectUserData.ts",
+    "diagnose:mongo": "tsx src/scripts/diagnoseMongo.ts",
+    "retire:legacy-data": "tsx src/scripts/retireLegacyUserData.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",
@@ -40,6 +43,7 @@
     "vitest": "^4.1.12"
   },
   "overrides": {
-    "body-parser": "1.20.9"
+    "body-parser": "1.20.9",
+    "qs": "6.16.1"
   }
 }

@@ -9,7 +9,7 @@ the only registration path; password sign-in and single-use email-link recovery
 are available after registration.
 
 > Start with [A](#a-getting-started), then follow the journey in order.
-> Technical verification lives in [`docs/audits/`](./docs/audits/).
+> Technical verification lives in [`docs/user-doc/audit2/`](./docs/user-doc/audit2/).
 
 ## A. Getting started
 
@@ -375,7 +375,7 @@ network, no real leaderboard.
   inventing time.
 - Long-horizon behaviors (overnight soak, live clock-change runs) are
   implemented but were verified by unit/integration tests and inspection in
-  this environment — see `docs/audits/V7_FINAL_ACCEPTANCE.md`.
+  this environment — see `docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md`.
 
 ## H. Backup, restore, and data safety
 

@@ -51,6 +51,7 @@ import type {
 import { kvGet, kvSet, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
 import { notify } from '../services/notifications/notify.js';
+import { broadcastAuthSignOut, subscribeAuthSignOut, type AuthSyncReason } from './authSync.js';
 import {
   type AuthConfig, type AuthUser, type AccountSession,
   archivePlaylistApi, changePassword as changePasswordApi, completeOnboarding as completeOnboardingApi,
@@ -443,6 +444,13 @@ function rekeyModules(
 
 const DEFAULT_MODE: 'local' | 'cloud' = import.meta.env.MODE === 'test' ? 'local' : 'cloud';
 
+const REMOTE_SIGN_OUT_COPY: Record<AuthSyncReason, string> = {
+  'sign-out': 'You were signed out in another tab. Sign in again to continue.',
+  'password-reset': 'Your password was reset in another tab, so every session was signed out. Sign in again with your new password.',
+  'email-change': 'Your account email was changed in another tab, so every session was signed out. Sign in again with the new address.',
+  'account-deleted': 'This account was deleted in another tab. No LearnQuest data remains for it.',
+};
+
 interface EmailActionRoute {
   kind: 'reset' | 'verify';
   token: string | null;
@@ -574,6 +582,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const [setup, setSetup] = useState<AuthConfig | null>(null);
   const [authUser, setAuthUserState] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'conflict'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [serverVersion, setServerVersion] = useState(0);
@@ -591,6 +600,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // Invalidates an in-flight cloud load after sign-out or an account switch so
   // a late response can never apply the previous account's data.
   const cloudLoadGeneration = useRef(0);
+  // Invalidates in-flight session/login/onboarding responses after a local or
+  // cross-tab sign-out so a stale response cannot repopulate the account.
+  const authEpoch = useRef(0);
   // Client-generated session ids are a second idempotency barrier in memory:
   // two finish clicks in one tick cannot both pass the stale `sessions` closure.
   const sessionKeys = useRef<Set<string>>(new Set());
@@ -712,6 +724,24 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setCelebration(null);
   }, [applyState]);
 
+  const applyRemoteSignOut = useCallback((reason: AuthSyncReason) => {
+    // Invalidate every in-flight authentication/data request first. The
+    // broadcast is only a UI signal, but no late response may repopulate it.
+    authEpoch.current += 1;
+    if (saveT.current) clearTimeout(saveT.current);
+    cloudLoadGeneration.current += 1;
+    cloudUserRef.current = null;
+    resetAccountState();
+    setAuthUserState(null);
+    setReady(false);
+    setAuthReady(true);
+    setSessionNotice(REMOTE_SIGN_OUT_COPY[reason]);
+    setAuthError(null);
+    sessionKeys.current.clear();
+    try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* unavailable */ }
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+  }, [resetAccountState]);
+
   const loadCloud = useCallback(async (user: AuthUser) => {
     const generation = ++cloudLoadGeneration.current;
     setLoadError(null);
@@ -739,10 +769,12 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   }, [applyState]);
 
   const bootstrap = useCallback(async () => {
+    const epoch = authEpoch.current;
     setAuthReady(false);
     setAuthError(null);
     try {
       const session = await fetchSession();
+      if (epoch !== authEpoch.current) return;
       setSetup(session);
       if (session.authenticated && session.user) {
         setAuthUserState(session.user);
@@ -760,10 +792,11 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         setReady(false);
       }
     } catch (e: any) {
+      if (epoch !== authEpoch.current) return;
       setAuthError(e?.message ?? 'The LearnQuest account service is unreachable. Check the connection and retry.');
       setReady(false);
     } finally {
-      setAuthReady(true);
+      if (epoch === authEpoch.current) setAuthReady(true);
     }
   }, [loadCloud, resetAccountState]);
 
@@ -782,6 +815,15 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     window.addEventListener('lq:auth-expired', expired);
     return () => window.removeEventListener('lq:auth-expired', expired);
   }, [mode]);
+
+  // Same-origin tabs clear their authenticated UI immediately after an
+  // ordinary sign-out, password reset, verified email change, or deletion.
+  // The event contains no tokens or account data; each tab still relies on the
+  // server for its next authenticated request.
+  useEffect(() => {
+    if (mode !== 'cloud') return;
+    return subscribeAuthSignOut((reason) => applyRemoteSignOut(reason));
+  }, [mode, applyRemoteSignOut]);
 
   // Detect unclaimed legacy IndexedDB data only AFTER authentication. The
   // login screen never reads or displays learning records. A claim made by a
@@ -1056,9 +1098,14 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       // authenticated user or write account data until it confirms both the
       // account and the password. The login response is not a configuration
       // payload and must never overwrite `setup`.
+      const epoch = authEpoch.current;
       const res = await passwordLogin(identifier, password);
+      if (epoch !== authEpoch.current) {
+        throw new Error('A sign-out happened in another tab while this request was in progress. Sign in again.');
+      }
       cloudUserRef.current = null;
       setAuthError(null);
+      setSessionNotice(null);
       setAuthUserState(res.user);
       await loadCloud(res.user);
     },
@@ -1066,15 +1113,22 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       await startGoogleAuth(intent);
     },
     completeAccountSetup: async (input) => {
+      const epoch = authEpoch.current;
       const res = await completeOnboardingApi(input);
+      if (epoch !== authEpoch.current) {
+        throw new Error('A sign-out happened in another tab while setup was completing. Sign in again.');
+      }
       cloudUserRef.current = null;
       setAuthUserState(res.user);
       setAuthError(null);
+      setSessionNotice(null);
       await loadCloud(res.user);
     },
     signOut: async (allDevices = false) => {
-      // Cancel a debounced save and invalidate any in-flight load before the
-      // session is revoked, so a late response cannot repopulate the UI.
+      // Cancel a debounced save and invalidate any in-flight load or login
+      // before the session is revoked, so a late response cannot repopulate
+      // the UI after sign-out.
+      authEpoch.current += 1;
       if (saveT.current) clearTimeout(saveT.current);
       cloudUserRef.current = null;
       cloudLoadGeneration.current += 1;
@@ -1089,6 +1143,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         setAuthUserState(null);
         setReady(false);
         setAuthReady(true);
+        setSessionNotice(null);
         setSetup((prev) => prev);
         cloudUserRef.current = null;
         sessionKeys.current.clear();
@@ -1098,9 +1153,12 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
       }
       if (serverError) notify(`Signed out on this device. ${serverError}`);
+      else broadcastAuthSignOut('sign-out');
     },
     refreshSession: async () => {
+      const epoch = authEpoch.current;
       const res = await fetchSession();
+      if (epoch !== authEpoch.current) return;
       setSetup(res);
       if (res.authenticated && res.user) setAuthUserState(res.user);
       else {
@@ -1140,6 +1198,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       // Stop a debounced write before the server starts deleting. If a
       // validation step rejects the request, restore the writer for the still
       // active account; after success every queued write must stay cancelled.
+      authEpoch.current += 1;
       if (saveT.current) clearTimeout(saveT.current);
       const previousCloudUser = cloudUserRef.current;
       cloudUserRef.current = null;
@@ -1154,8 +1213,10 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setAuthUserState(null);
       setReady(false);
       setAuthReady(true);
+      setSessionNotice(null);
       try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* ignore */ }
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+      broadcastAuthSignOut('account-deleted');
     },
     exportAccountData: async () => {
       await downloadAccountExport();
@@ -1719,7 +1780,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       window.location.assign('/#/auth');
     };
     return actionRoute.kind === 'reset'
-      ? <PasswordResetScreen token={actionRoute.token} onExit={exit} />
+      ? <PasswordResetScreen token={actionRoute.token} onExit={exit} expiresInMin={setup?.emailActionTtlMin} />
       : <EmailVerificationScreen token={actionRoute.token} onExit={exit} />;
   }
 
@@ -1744,7 +1805,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       return (
         <AuthScreens
           setup={setup}
-          authError={authError}
+          authError={sessionNotice}
           onPasswordLogin={value.signInWithPassword}
           onGoogle={value.signInWithGoogle}
         />

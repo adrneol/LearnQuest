@@ -52,6 +52,14 @@ export function createMongoAdapter(db: Db): DbAdapter {
     collection(name: string): CollectionAdapter {
       return new MongoCollection(db.collection(name));
     },
+    async dropCollection(name: string): Promise<void> {
+      try {
+        await db.dropCollection(name);
+      } catch (e: unknown) {
+        // Dropping an already-absent collection is idempotent.
+        if ((e as { code?: number })?.code !== 26) throw e;
+      }
+    },
   };
 }
 
@@ -158,12 +166,16 @@ async function ensureIndexes(db: Db): Promise<void> {
     db.collection('lq_account_deletions').createIndex({ status: 1, updatedAt: 1 }),
     db.collection('lq_migrations').createIndex({ userId: 1, migrationId: 1 }, { unique: true }),
     db.collection('lq_state_versions').createIndex({ userId: 1 }, { unique: true }),
-    // Consolidated learning-data target. Reads/writes remain on the legacy
-    // per-domain collections until the owner-approved migration is verified.
+    // Consolidated learning-data target. Its repository cutover is selected
+    // explicitly by LQ_USER_DATA_STORE; legacy remains the default until an
+    // owner-approved migration has been verified.
     db.collection('lq_user_data').createIndex({ userId: 1, domain: 1, key: 1 }, { unique: true }),
     db.collection('lq_user_data').createIndex({ userId: 1, domain: 1, playlistId: 1 }),
     db.collection('lq_user_data').createIndex({ userId: 1, domain: 1, order: 1 }),
   ]);
+  // A unified deployment must not re-create retired legacy collections just by
+  // starting up. Only the selected backend receives its physical indexes.
+  if (env.userDataStore !== 'legacy') return;
   // One compound unique index for every per-user record collection.
   const names = [
     'playlists', 'meta', 'progress', 'ranges', 'checkpoints', 'modules', 'sessions',
@@ -188,69 +200,127 @@ async function ensureIndexes(db: Db): Promise<void> {
   ]);
 }
 
-/** Lazily connect once and reuse the driver's pool. */
-export async function getMongoDb(): Promise<Db> {
+/**
+ * Connect and return the database without creating indexes or collections.
+ * Used by the read-only migration dry run. `getMongoDb` below adds the
+ * idempotent index initialization used by the application and apply path.
+ */
+async function connectMongoDb(): Promise<Db> {
   if (!env.mongodbConfigured) {
     throw Object.assign(new Error('MongoDB is not configured. Set MONGODB_URI and MONGODB_DB_NAME.'), { status: 503, code: 'SETUP_REQUIRED' });
   }
   if (!dbPromise) {
-    clientPromise = MongoClient.connect(env.mongodbUri, {
+    const clientAttempt = MongoClient.connect(env.mongodbUri, {
       serverSelectionTimeoutMS: 5_000,
       connectTimeoutMS: 5_000,
       maxPoolSize: 10,
       retryWrites: true,
     });
-    dbPromise = clientPromise.then((client) => client.db(env.mongodbDbName));
+    clientPromise = clientAttempt;
+    const dbAttempt = clientAttempt.then((client) => client.db(env.mongodbDbName));
+    dbPromise = dbAttempt;
+    // Do not cache a rejected connection forever. A transient DNS, TLS, or
+    // network failure must be retryable by the next request without a process
+    // restart. Concurrent callers still share this one attempt.
+    void dbAttempt.catch(async () => {
+      if (dbPromise !== dbAttempt) return;
+      dbPromise = null;
+      clientPromise = null;
+      const client = await clientAttempt.catch(() => null);
+      if (client) await client.close().catch(() => undefined);
+    });
   }
-  const db = await dbPromise;
-  if (!indexesPromise) indexesPromise = ensureIndexes(db);
+  return dbPromise;
+}
+
+/**
+ * Bounded read-only connectivity check used by startup diagnostics. This does
+ * not create indexes or collections; `getMongoDb` performs the normal index
+ * initialization separately so a connection failure cannot be confused with a
+ * permission/index failure.
+ */
+export async function pingMongo(): Promise<void> {
+  const db = await connectMongoDb();
+  await db.command({ ping: 1 });
+}
+
+/** Lazily connect once, then ensure the application's indexes exist. */
+export async function getMongoDb(): Promise<Db> {
+  const db = await connectMongoDb();
+  if (!indexesPromise) {
+    const attempt = ensureIndexes(db);
+    indexesPromise = attempt;
+    // A failed index rollout may be transient (for example, a concurrent
+    // deployment or a lost connection). Allow the next request to retry.
+    void attempt.catch(() => {
+      if (indexesPromise === attempt) indexesPromise = null;
+    });
+  }
   await indexesPromise;
   return db;
 }
 
-let defaultAdapter: DbAdapter | null = null;
+function createLazyMongoAdapter(getDb: () => Promise<Db>): DbAdapter {
+  return {
+    collection(name: string): CollectionAdapter {
+      const lazy = {
+        async findOne(query: Doc) { return (await getDb()).collection(name).findOne(query as Filter<Document>) as Promise<Doc | null>; },
+        async find(query: Doc, opts?: FindOptions) {
+          let c = (await getDb()).collection(name).find(query as Filter<Document>);
+          if (opts?.sort) c = c.sort(opts.sort);
+          if (opts?.skip) c = c.skip(opts.skip);
+          if (opts?.limit !== undefined) c = c.limit(opts.limit);
+          return (await c.toArray()) as Doc[];
+        },
+        async insertOne(doc: Doc) {
+          const r = await (await getDb()).collection(name).insertOne(doc as Document);
+          return { ...doc, _id: r.insertedId };
+        },
+        async updateOne(query: Doc, update: Doc, opts?: { upsert?: boolean }): Promise<UpdateResult> {
+          const r = await (await getDb()).collection(name).updateOne(query as Filter<Document>, update as Document, { upsert: Boolean(opts?.upsert) });
+          return { matchedCount: r.matchedCount, modifiedCount: r.modifiedCount };
+        },
+        async findOneAndUpdate(query: Doc, update: Doc, opts?: { upsert?: boolean }) {
+          return (await (await getDb()).collection(name).findOneAndUpdate(query as Filter<Document>, update as Document, {
+            upsert: Boolean(opts?.upsert), returnDocument: 'after',
+          })) as Doc | null;
+        },
+        async deleteOne(query: Doc) {
+          return (await (await getDb()).collection(name).deleteOne(query as Filter<Document>)).deletedCount ?? 0;
+        },
+        async deleteMany(query: Doc) {
+          return (await (await getDb()).collection(name).deleteMany(query as Filter<Document>)).deletedCount ?? 0;
+        },
+        async count(query: Doc) {
+          return (await getDb()).collection(name).countDocuments(query as Filter<Document>);
+        },
+      } satisfies CollectionAdapter;
+      return lazy;
+    },
+    async dropCollection(name: string) {
+      try {
+        await (await getDb()).dropCollection(name);
+      } catch (e: unknown) {
+        if ((e as { code?: number })?.code !== 26) throw e;
+      }
+    },
+  };
+}
 
-/** Production adapter. Connection is opened on first repository call. */
-export function getMongoAdapter(): DbAdapter {
-  if (!defaultAdapter) {
-    defaultAdapter = {
-      collection(name: string): CollectionAdapter {
-        const lazy = {
-          async findOne(query: Doc) { return (await getMongoDb()).collection(name).findOne(query as Filter<Document>) as Promise<Doc | null>; },
-          async find(query: Doc, opts?: FindOptions) {
-            let c = (await getMongoDb()).collection(name).find(query as Filter<Document>);
-            if (opts?.sort) c = c.sort(opts.sort);
-            if (opts?.skip) c = c.skip(opts.skip);
-            if (opts?.limit !== undefined) c = c.limit(opts.limit);
-            return (await c.toArray()) as Doc[];
-          },
-          async insertOne(doc: Doc) {
-            const r = await (await getMongoDb()).collection(name).insertOne(doc as Document);
-            return { ...doc, _id: r.insertedId };
-          },
-          async updateOne(query: Doc, update: Doc, opts?: { upsert?: boolean }): Promise<UpdateResult> {
-            const r = await (await getMongoDb()).collection(name).updateOne(query as Filter<Document>, update as Document, { upsert: Boolean(opts?.upsert) });
-            return { matchedCount: r.matchedCount, modifiedCount: r.modifiedCount };
-          },
-          async findOneAndUpdate(query: Doc, update: Doc, opts?: { upsert?: boolean }) {
-            return (await (await getMongoDb()).collection(name).findOneAndUpdate(query as Filter<Document>, update as Document, {
-              upsert: Boolean(opts?.upsert), returnDocument: 'after',
-            })) as Doc | null;
-          },
-          async deleteOne(query: Doc) {
-            return (await (await getMongoDb()).collection(name).deleteOne(query as Filter<Document>)).deletedCount ?? 0;
-          },
-          async deleteMany(query: Doc) {
-            return (await (await getMongoDb()).collection(name).deleteMany(query as Filter<Document>)).deletedCount ?? 0;
-          },
-          async count(query: Doc) {
-            return (await getMongoDb()).collection(name).countDocuments(query as Filter<Document>);
-          },
-        } satisfies CollectionAdapter;
-        return lazy;
-      },
-    };
+let defaultAdapter: DbAdapter | null = null;
+let readOnlyAdapter: DbAdapter | null = null;
+
+/**
+ * Production adapter. Connection is opened on first repository call.
+ * `ensureIndexes: false` is reserved for explicit read-only tooling such as
+ * the migration dry run; it never creates a collection or index.
+ */
+export function getMongoAdapter(options: { ensureIndexes?: boolean } = {}): DbAdapter {
+  if (options.ensureIndexes === false) {
+    if (!readOnlyAdapter) readOnlyAdapter = createLazyMongoAdapter(connectMongoDb);
+    return readOnlyAdapter;
   }
+  if (!defaultAdapter) defaultAdapter = createLazyMongoAdapter(getMongoDb);
   return defaultAdapter;
 }
 
@@ -261,4 +331,5 @@ export async function closeMongo(): Promise<void> {
   dbPromise = null;
   indexesPromise = null;
   defaultAdapter = null;
+  readOnlyAdapter = null;
 }

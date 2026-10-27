@@ -459,6 +459,48 @@ function blockingIssuesForDomain(domain: DomainMigrationReport): number {
     + domain.conflictKeys;
 }
 
+/**
+ * Legacy data must belong to a live, active account. This prevents an
+ * orphaned record set from being promoted into the consolidated store and,
+ * together with the pre/post-insert checks in `copyDomain`, prevents a
+ * migration that races an account deletion from resurrecting that account's
+ * records after the deletion saga has verified zero residuals.
+ */
+async function accountMigrationIssue(
+  store: DataStore,
+  userId: string,
+): Promise<MigrationGlobalIssue | null> {
+  const account = (await store.accounts.findOne({ userId })) as { status?: string } | null;
+  if (!account) {
+    return {
+      collection: 'lq_accounts',
+      key: userId,
+      reason: 'Legacy learning data has no owning account. It was not migrated.',
+    };
+  }
+  if (account.status !== 'active') {
+    return {
+      collection: 'lq_accounts',
+      key: userId,
+      reason: `The owning account is not active (status "${String(account.status ?? 'unknown')}"). It was not migrated.`,
+    };
+  }
+  const deletionJob = await store.accountDeletions.findOne({ userId });
+  if (deletionJob) {
+    return {
+      collection: 'lq_account_deletions',
+      key: userId,
+      reason: 'An account-deletion job exists for this owner. Migration is blocked until the job is resolved.',
+    };
+  }
+  return null;
+}
+
+async function assertAccountMigratable(store: DataStore, userId: string): Promise<void> {
+  const issue = await accountMigrationIssue(store, userId);
+  if (issue) throw migrationError(issue.reason);
+}
+
 async function discoverUserIds(
   store: DataStore,
   domains: UserCollectionName[],
@@ -493,6 +535,13 @@ export async function inspectUserDataMigration(
   const discovery = scopedUserIds === null
     ? await discoverUserIds(store, domains, batchSize)
     : { userIds: scopedUserIds, globalIssues: [] as MigrationGlobalIssue[] };
+
+  const accountIssues: MigrationGlobalIssue[] = [];
+  for (const userId of discovery.userIds) {
+    const issue = await accountMigrationIssue(store, userId);
+    if (issue) accountIssues.push(issue);
+  }
+  const globalIssues = [...discovery.globalIssues, ...accountIssues];
 
   const users: UserMigrationReport[] = [];
   for (const userId of discovery.userIds) {
@@ -535,7 +584,7 @@ export async function inspectUserDataMigration(
     invalidSourceDocuments: users.reduce((sum, user) => sum + user.domains.reduce((n, domain) => n + domain.invalidSourceDocuments, 0), 0),
     invalidDestinationDocuments: users.reduce((sum, user) => sum + user.domains.reduce((n, domain) => n + domain.invalidDestinationDocuments, 0), 0),
     conflicts: users.reduce((sum, user) => sum + user.domains.reduce((n, domain) => n + domain.conflictKeys, 0), 0),
-    blockingIssues: users.reduce((sum, user) => sum + user.blockingIssues, 0) + discovery.globalIssues.length,
+    blockingIssues: users.reduce((sum, user) => sum + user.blockingIssues, 0) + globalIssues.length,
   };
 
   const warnings: string[] = [];
@@ -547,6 +596,11 @@ export async function inspectUserDataMigration(
   if (discovery.globalIssues.length > 0) {
     warnings.push(
       `${discovery.globalIssues.length} legacy record(s) have invalid ownership and block the migration.`,
+    );
+  }
+  if (accountIssues.length > 0) {
+    warnings.push(
+      `${accountIssues.length} legacy owner(s) are missing, inactive, or have a deletion job; those records are not migrated.`,
     );
   }
 
@@ -571,7 +625,7 @@ export async function inspectUserDataMigration(
         users.map((user) => ({ key: user.userId, checksum: user.matchedDestinationChecksum })),
       ),
     },
-    globalIssues: discovery.globalIssues,
+    globalIssues,
     warnings,
   };
 }
@@ -588,6 +642,9 @@ async function copyDomain(
   batchSize: number,
   stats: { copied: number; alreadyPresent: number },
 ): Promise<void> {
+  // Fail closed before reading/copying if the owner is already gone or being
+  // deleted. The per-record checks below close the remaining race window.
+  await assertAccountMigratable(store, userId);
   await scanCollection(store.data(domain), { userId }, batchSize, async (doc) => {
     const inspected = inspectSourceRecord(domain, userId, doc);
     if (!inspected.ok) {
@@ -606,6 +663,7 @@ async function copyDomain(
       stats.alreadyPresent += 1;
       return;
     }
+    await assertAccountMigratable(store, userId);
     try {
       await store.userData.insertOne(destinationDocument(domain, doc));
       stats.copied += 1;
@@ -620,6 +678,18 @@ async function copyDomain(
         );
       }
       stats.alreadyPresent += 1;
+      return;
+    }
+    // If deletion started while this record was being written, remove the
+    // newly copied record before surfacing the failure. A later deletion-saga
+    // retry also sees and removes it, but removing it here makes the race
+    // harmless even if the saga already completed its final verification.
+    try {
+      await assertAccountMigratable(store, userId);
+    } catch (error) {
+      await store.userData.deleteOne({ userId, domain, key: inspected.record.key });
+      stats.copied = Math.max(0, stats.copied - 1);
+      throw error;
     }
   });
 }

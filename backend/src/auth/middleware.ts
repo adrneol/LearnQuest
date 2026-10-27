@@ -5,6 +5,7 @@ import type { Account } from '../auth/accounts.js';
 import {
   findSessionByToken,
   isRecentAuth,
+  revokeSession,
   touchSession,
   verifyCsrf,
   type SessionRecord,
@@ -56,6 +57,18 @@ export function requireAuth(store: DataStore): RequestHandler {
       if (!account || account.status !== 'active') {
         clearSessionCookie(res);
         throw httpError('This account is unavailable. Sign in again.', 401, 'ACCOUNT_UNAVAILABLE');
+      }
+      // Password changes/resets advance the account's password version. This
+      // closes the verify-then-create race: a login that verified the old hash
+      // just before a reset cannot remain valid after the version advances.
+      if (
+        session.passwordVersion !== undefined
+        && session.passwordVersion !== null
+        && Number(session.passwordVersion) !== Number(account.passwordVersion ?? 0)
+      ) {
+        await revokeSession(store, token);
+        clearSessionCookie(res);
+        throw httpError('This session was signed out after a password change. Sign in again.', 401, 'SESSION_REVOKED');
       }
       const touched = await touchSession(store, session);
       req.auth = { account, session: touched, userId: account.userId };

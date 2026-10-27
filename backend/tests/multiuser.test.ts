@@ -7,6 +7,7 @@ import { createDataStore, type DataStore } from '../src/store.js';
 import { createAccountFromGoogle, completeOnboarding } from '../src/auth/accounts.js';
 import { assertProductionConfig } from '../src/config/env.js';
 import { hashCode } from '../src/auth/crypto.js';
+import { actionTokenDigest } from '../src/auth/actionTokens.js';
 import { validateGoogleClaims, createGoogleOAuthService } from '../src/auth/google.js';
 import type { ActionEmailInput, EmailService, SecurityNoticeInput } from '../src/email/brevo.js';
 import type { GoogleIdentity, GoogleAuthIntent, GoogleOAuthService } from '../src/auth/google.js';
@@ -633,6 +634,85 @@ describe('OAuth, email links, and password recovery security', () => {
     expect(newLogin.status).toBe(200);
     const reuse = await request(app).post('/api/auth/password/reset').send({ token, newPassword: 'another correct horse battery staple' });
     expect(reuse.status).toBe(400);
+  });
+
+  it('revokes every session and invalidates every outstanding reset artifact after a reset', async () => {
+    const a = await seedUser('reset_multi', 'resetmulti@example.test', 'correct horse battery staple', 'google-sub-reset-multi');
+    const b = await seedUser('reset_other', 'resetother@example.test', 'correct horse battery staple', 'google-sub-reset-other');
+    const aFirst = await login('reset_multi', 'correct horse battery staple');
+    const aSecond = await login('reset_multi', 'correct horse battery staple');
+    const bSession = await login('reset_other', 'correct horse battery staple');
+
+    const forgot = await request(app).post('/api/auth/forgot').send({ identifier: 'reset_multi' });
+    expect(forgot.status).toBe(202);
+    const usedToken = actionToken(email.actions.at(-1)!.actionUrl);
+
+    // A second outstanding reset record and legacy recovery artifacts must also
+    // become unusable when the valid link completes.
+    const extraToken = `extra-${'Z'.repeat(37)}`;
+    const now = new Date().toISOString();
+    await store.actionTokens.insertOne({
+      tokenId: 'extra-reset-token',
+      tokenHash: actionTokenDigest(extraToken),
+      userId: a.userId,
+      purpose: 'password_reset',
+      accountEmailNormalized: a.emailNormalized,
+      emailNormalized: a.emailNormalized,
+      targetEmail: a.email,
+      createdAt: now,
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      consumedAt: null,
+      lastSentAt: now,
+    });
+    await store.adapter.collection('lq_reset_grants').insertOne({
+      userId: a.userId,
+      grantId: 'legacy-grant-a',
+      tokenHash: 'not-a-token',
+      createdAt: now,
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      consumedAt: null,
+    });
+    await store.adapter.collection('lq_challenges').insertOne({
+      userId: a.userId,
+      challengeId: 'legacy-challenge-a',
+      purpose: 'password_reset',
+      digest: 'not-a-secret',
+      createdAt: now,
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      consumedAt: null,
+    });
+
+    const reset = await request(app).post('/api/auth/password/reset').send({
+      token: usedToken,
+      newPassword: 'new correct horse battery staple',
+    });
+    expect(reset.status).toBe(204);
+
+    for (const session of [aFirst, aSecond]) {
+      expect((await request(app).get('/api/account/data').set('Cookie', session.cookie)).status).toBe(401);
+    }
+    // Another account's live session is unaffected.
+    expect((await request(app).get('/api/account/data').set('Cookie', bSession.cookie)).status).toBe(200);
+
+    const outstanding = await request(app).post('/api/auth/password/reset').send({
+      token: extraToken,
+      newPassword: 'another long password value',
+    });
+    expect(outstanding.status).toBe(400);
+    const grant = await store.adapter.collection('lq_reset_grants').findOne({ userId: a.userId, grantId: 'legacy-grant-a' });
+    const challenge = await store.adapter.collection('lq_challenges').findOne({ userId: a.userId, challengeId: 'legacy-challenge-a' });
+    expect(grant?.consumedAt).toBeTruthy();
+    expect(challenge?.consumedAt).toBeTruthy();
+
+    expect((await request(app).post('/api/auth/login').send({
+      identifier: 'reset_multi',
+      password: 'correct horse battery staple',
+    })).status).toBe(401);
+    expect((await request(app).post('/api/auth/login').send({
+      identifier: 'reset_multi',
+      password: 'new correct horse battery staple',
+    })).status).toBe(200);
+    expect(b.userId).not.toBe(a.userId);
   });
 
   it('verifies a new email through a link, revokes sessions, notifies the old address, and keeps Google linked', async () => {

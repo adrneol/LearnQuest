@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DataStore } from '../store.js';
+import type { Account } from './accounts.js';
 import { env } from '../config/env.js';
 import { csrfToken, randomToken, safeEqual, sessionTokenHash } from './crypto.js';
 
@@ -12,6 +13,13 @@ export interface SessionRecord {
   tokenHash: string;
   csrfToken: string;
   authMethod: SessionAuthMethod;
+  /**
+   * Account password version observed when this session was issued. A
+   * password reset/change increments the account version, so a login that
+   * raced the change cannot keep an old-password session valid even if session
+   * revocation runs after session creation.
+   */
+  passwordVersion: number;
   /** Only for a short-lived Google registration onboarding session. */
   onboardingExpiresAt: string | null;
   onboardingGoogleSub: string | null;
@@ -29,6 +37,7 @@ export interface SessionOptions {
   userAgent?: string;
   ipHash?: string;
   authMethod?: SessionAuthMethod;
+  passwordVersion?: number;
   onboardingExpiresAt?: string | null;
   onboardingGoogleSub?: string | null;
 }
@@ -53,6 +62,14 @@ export async function createSession(
   if (!env.sessionConfigured) throw Object.assign(new Error('Session configuration is incomplete.'), { status: 503, code: 'SETUP_REQUIRED' });
   const token = randomToken(32);
   const now = Date.now();
+  let passwordVersion = opts?.passwordVersion;
+  if (!Number.isSafeInteger(passwordVersion)) {
+    // Default to the account's current version so sessions created outside the
+    // login routes (tests, admin repairs) stay valid for post-onboarding
+    // accounts whose version has already advanced past zero.
+    const account = (await store.accounts.findOne({ userId })) as Account | null;
+    passwordVersion = Number(account?.passwordVersion ?? 0);
+  }
   const absolute = now + sessionMaxAgeSec() * 1000;
   const idle = now + env.sessionIdleHours * 3600 * 1000;
   const session: SessionRecord = {
@@ -61,6 +78,7 @@ export async function createSession(
     tokenHash: sessionTokenHash(token),
     csrfToken: csrfToken(),
     authMethod: opts?.authMethod ?? 'password',
+    passwordVersion: Number.isSafeInteger(passwordVersion) ? Number(passwordVersion) : 0,
     onboardingExpiresAt: opts?.onboardingExpiresAt ?? null,
     onboardingGoogleSub: opts?.onboardingGoogleSub ?? null,
     createdAt: new Date(now).toISOString(),

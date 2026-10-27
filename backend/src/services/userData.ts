@@ -459,7 +459,7 @@ function arrayItemKey(item: unknown, index: number): string {
  * collection intact instead of a partially emptied account.
  */
 async function writeCollection(store: DataStore, userId: string, name: UserCollectionName, value: unknown): Promise<void> {
-  const col = store.data(name);
+  const col = store.domainData(name);
   const previous = await col.find({ userId });
   const now = new Date().toISOString();
   const kind = COLLECTION_KIND[name];
@@ -512,7 +512,7 @@ async function writeCollection(store: DataStore, userId: string, name: UserColle
 }
 
 async function restoreCollection(store: DataStore, userId: string, name: UserCollectionName, docs: any[]): Promise<void> {
-  const col = store.data(name);
+  const col = store.domainData(name);
   await col.deleteMany({ userId });
   for (const doc of docs) await col.insertOne(doc);
 }
@@ -578,7 +578,7 @@ export async function readUserState(
 
   await Promise.all(USER_COLLECTIONS.map(async (name) => {
     try {
-      const col = store.data(name);
+      const col = store.domainData(name);
       const kind = COLLECTION_KIND[name];
       if (kind === 'singleton') {
         const doc = await col.findOne({ userId, key: 'singleton' });
@@ -656,7 +656,7 @@ export async function replaceAllUserState(
   const state = validateStatePayload(raw);
   const previous = new Map<UserCollectionName, any[]>();
   for (const name of USER_COLLECTIONS) {
-    previous.set(name, await store.data(name).find({ userId }));
+    previous.set(name, await store.domainData(name).find({ userId }));
   }
   const version = await reserveVersion(store, userId, expectedVersion);
   try {
@@ -687,14 +687,14 @@ export async function getUserStateExport(store: DataStore, userId: string, defau
 }
 
 async function getPlaylistDoc(store: DataStore, userId: string, playlistId: string) {
-  return store.data('playlists').findOne({ userId, key: playlistId });
+  return store.domainData('playlists').findOne({ userId, key: playlistId });
 }
 
 async function summaryForPlaylist(store: DataStore, userId: string, playlistId: string) {
   const names: UserCollectionName[] = ['progress', 'ranges', 'checkpoints', 'modules', 'sessions', 'segments', 'playSessions'];
   const out: Record<string, number> = {};
-  for (const n of names) out[n] = await store.data(n).count({ userId, playlistId });
-  const goalCount = await store.data('flexGoals').count({ userId, playlistId });
+  for (const n of names) out[n] = await store.domainData(n).count({ userId, playlistId });
+  const goalCount = await store.domainData('flexGoals').count({ userId, playlistId });
   out.flexGoals = goalCount;
   return out;
 }
@@ -710,8 +710,8 @@ export async function archivePlaylist(
   if (!snap) throw httpError('Playlist not found for this account.', 404, 'NOT_FOUND');
   const version = await reserveVersion(store, userId, expectedVersion);
   const now = new Date().toISOString();
-  const existingMeta = await store.data('meta').findOne({ userId, key: playlistId });
-  await store.data('meta').updateOne(
+  const existingMeta = await store.domainData('meta').findOne({ userId, key: playlistId });
+  await store.domainData('meta').updateOne(
     { userId, key: playlistId },
     {
       $set: {
@@ -725,18 +725,18 @@ export async function archivePlaylist(
     },
     { upsert: true },
   );
-  const activeDoc = await store.data('activeId').findOne({ userId, key: 'singleton' });
+  const activeDoc = await store.domainData('activeId').findOne({ userId, key: 'singleton' });
   const activeId = activeDoc?.value ?? null;
   let fallback: string | null = activeId;
   if (archived && activeId === playlistId) {
     const [remaining, metas] = await Promise.all([
-      store.data('playlists').find({ userId }, { sort: { order: 1 } }),
-      store.data('meta').find({ userId }),
+      store.domainData('playlists').find({ userId }, { sort: { order: 1 } }),
+      store.domainData('meta').find({ userId }),
     ]);
     const archivedIds = new Set(metas.filter((m) => m.value?.archived).map((m) => String(m.key)));
     const next = remaining.map((d) => String(d.key)).find((id) => id !== playlistId && !archivedIds.has(id));
     fallback = next ?? null;
-    await store.data('activeId').updateOne(
+    await store.domainData('activeId').updateOne(
       { userId, key: 'singleton' },
       { $set: { userId, key: 'singleton', value: fallback, updatedAt: now, order: 0 } },
       { upsert: true },
@@ -780,7 +780,7 @@ export interface PlaylistDeleteResult {
 async function displayedPlaylistTitle(store: DataStore, userId: string, playlistId: string): Promise<string | null> {
   const snap = await getPlaylistDoc(store, userId, playlistId);
   if (!snap) return null;
-  const meta = await store.data('meta').findOne({ userId, key: playlistId });
+  const meta = await store.domainData('meta').findOne({ userId, key: playlistId });
   return meta?.value?.customTitle ?? snap.value?.title ?? 'Untitled playlist';
 }
 
@@ -804,7 +804,7 @@ export async function deletePlaylistPermanently(
 ): Promise<PlaylistDeleteResult> {
   const existingJob = await store.deletions.findOne({ userId, playlistId });
   if (existingJob?.status === 'completed') {
-    const activeDoc = await store.data('activeId').findOne({ userId, key: 'singleton' });
+    const activeDoc = await store.domainData('activeId').findOne({ userId, key: 'singleton' });
     return {
       playlistId,
       title: String(existingJob.title ?? 'Untitled playlist'),
@@ -829,15 +829,15 @@ export async function deletePlaylistPermanently(
     throw httpError('The playlist changed since this dialog opened. Close it and review the current title before deleting.', 409, 'TITLE_MISMATCH');
   }
 
-  const checkpointDocs = await store.data('checkpoints').find({ userId, playlistId });
+  const checkpointDocs = await store.domainData('checkpoints').find({ userId, playlistId });
   const remainingCheckpointIds = new Set(checkpointDocs.map((d) => String(d.key)));
-  const allGoalDocs = await store.data('flexGoals').find({ userId });
+  const allGoalDocs = await store.domainData('flexGoals').find({ userId });
   const remainingGoalIds = new Set(
     allGoalDocs
       .filter((d) => deletionRelatedGoal(d.value, playlistId, remainingCheckpointIds))
       .map((d) => String(d.key)),
   );
-  const sessionDocs = await store.data('sessions').find({ userId, playlistId });
+  const sessionDocs = await store.domainData('sessions').find({ userId, playlistId });
   const remainingFocusKeys = new Set(
     sessionDocs.map((d) => `focus:${String(d.value?.clientId || d.value?.id || d.key)}`),
   );
@@ -911,7 +911,7 @@ export async function deletePlaylistPermanently(
 
   for (const step of plan) {
     try {
-      counts[step.name] = (counts[step.name] ?? 0) + await store.data(step.name).deleteMany(step.filter);
+      counts[step.name] = (counts[step.name] ?? 0) + await store.domainData(step.name).deleteMany(step.filter);
     } catch (e) {
       await store.deletions.updateOne(
         { userId, playlistId },
@@ -931,7 +931,7 @@ export async function deletePlaylistPermanently(
     let deletedGoals = 0;
     for (const doc of allGoalDocs) {
       if (goalIds.has(String(doc.key))) {
-        deletedGoals += await store.data('flexGoals').deleteOne({ userId, key: doc.key });
+        deletedGoals += await store.domainData('flexGoals').deleteOne({ userId, key: doc.key });
       }
     }
     counts.flexGoals = (counts.flexGoals ?? 0) + deletedGoals;
@@ -946,10 +946,10 @@ export async function deletePlaylistPermanently(
   // XP is deleted only when its dedup key gives a reliable playlist/checkpoint/
   // goal/focus association. Day and other account-wide XP remain.
   try {
-    const xpDocs = await store.data('xp').find({ userId });
+    const xpDocs = await store.domainData('xp').find({ userId });
     for (const doc of xpDocs) {
       if (xpBelongs(doc, playlistId, checkpointIds, goalIds, focusKeys)) {
-        counts.xp = (counts.xp ?? 0) + await store.data('xp').deleteOne({ userId, _id: doc._id });
+        counts.xp = (counts.xp ?? 0) + await store.domainData('xp').deleteOne({ userId, _id: doc._id });
       }
     }
   } catch (e) {
@@ -961,11 +961,11 @@ export async function deletePlaylistPermanently(
   }
 
   // Choose a valid remaining active playlist.
-  const remaining = await store.data('playlists').find({ userId }, { sort: { order: 1 } });
-  const metas = await store.data('meta').find({ userId });
+  const remaining = await store.domainData('playlists').find({ userId }, { sort: { order: 1 } });
+  const metas = await store.domainData('meta').find({ userId });
   const archived = new Set(metas.filter((m) => m.value?.archived).map((m) => String(m.key)));
   const fallback = remaining.map((d) => String(d.key)).find((id) => !archived.has(id)) ?? null;
-  await store.data('activeId').updateOne(
+  await store.domainData('activeId').updateOne(
     { userId, key: 'singleton' },
     { $set: { userId, key: 'singleton', value: fallback, updatedAt: new Date().toISOString(), order: 0 } },
     { upsert: true },
@@ -981,7 +981,7 @@ export async function deletePlaylistPermanently(
 export async function playlistSummary(store: DataStore, userId: string, playlistId: string) {
   const snap = await getPlaylistDoc(store, userId, playlistId);
   if (!snap) return null;
-  const meta = await store.data('meta').findOne({ userId, key: playlistId });
+  const meta = await store.domainData('meta').findOne({ userId, key: playlistId });
   return {
     playlistId,
     // The UI displays the user's custom title. Typed-title confirmation must
@@ -992,7 +992,10 @@ export async function playlistSummary(store: DataStore, userId: string, playlist
 }
 
 export async function deleteAllUserData(store: DataStore, userId: string): Promise<void> {
-  for (const name of USER_COLLECTIONS) await store.data(name).deleteMany({ userId });
+  for (const name of USER_COLLECTIONS) {
+    await store.data(name).deleteMany({ userId });
+    await store.domainData(name).deleteMany({ userId });
+  }
   await store.userData.deleteMany({ userId });
   await store.deletions.deleteMany({ userId });
   await store.migrations.deleteMany({ userId });

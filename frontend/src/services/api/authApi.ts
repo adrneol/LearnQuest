@@ -15,6 +15,8 @@ export interface AuthConfig {
   missing: string[];
   cookieSecure: boolean;
   appOrigin: string;
+  emailActionTtlMin?: number;
+  userDataStore?: 'legacy' | 'unified';
 }
 
 export interface AuthUser {
@@ -201,6 +203,12 @@ export function validateAuthConfig(value: unknown): AuthConfig {
       : (() => { throw new ApiError('The account service returned an invalid missing-configuration list.', 502, 'INVALID_AUTH_CONFIG'); })(),
     cookieSecure: readBoolean(value.cookieSecure, 'cookieSecure'),
     appOrigin: readString(value.appOrigin, 'appOrigin'),
+    ...(typeof value.emailActionTtlMin === 'number' && Number.isFinite(value.emailActionTtlMin) && value.emailActionTtlMin > 0
+      ? { emailActionTtlMin: value.emailActionTtlMin }
+      : {}),
+    ...(value.userDataStore === 'legacy' || value.userDataStore === 'unified'
+      ? { userDataStore: value.userDataStore }
+      : {}),
   };
 }
 

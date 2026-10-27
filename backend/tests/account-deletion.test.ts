@@ -29,6 +29,7 @@ const ENV: Record<string, string> = {
   AUTH_RATE_LIMIT_PER_MIN: '10000',
   EMAIL_ACTION_RATE_LIMIT_PER_15MIN: '10000',
   REAUTH_WINDOW_MIN: '10',
+  LQ_USER_DATA_STORE: 'legacy',
 };
 const savedEnv: Record<string, string | undefined> = {};
 for (const key of Object.keys(ENV)) savedEnv[key] = process.env[key];
@@ -351,6 +352,21 @@ describe('complete account deletion', () => {
       for (const [name, count] of Object.entries(await remainingOwned(a.userId))) {
         expect(count, `${name} still contains account-owned records after resume`).toBe(0);
       }
+    }
+  });
+
+  it('deletes both the legacy and consolidated layouts when unified mode is selected', async () => {
+    const a = await account('del_unified');
+    await seedOwnedRecords(a.userId);
+    expect(await store.data('progress').count({ userId: a.userId })).toBe(1);
+    expect(await store.userData.count({ userId: a.userId })).toBe(1);
+
+    process.env.LQ_USER_DATA_STORE = 'unified';
+    const result = await deleteAccountPermanently(store, a.userId);
+
+    expect(result.deleted).toBe(true);
+    for (const [name, count] of Object.entries(await remainingOwned(a.userId))) {
+      expect(count, `${name} still contains account-owned records after unified deletion`).toBe(0);
     }
   });
 

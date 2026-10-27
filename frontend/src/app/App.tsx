@@ -129,6 +129,12 @@ function tabFromHash(): Tab {
   return (ALL_IDS.has(h as Tab) ? h : 'dash') as Tab;
 }
 
+function accountSectionFromHash(): AccountSection {
+  const parts = window.location.hash.replace(/^#\/?/, '').split('/');
+  if (parts[0] !== 'account') return 'profile';
+  return parts[1] === 'settings' || parts[1] === 'security' ? parts[1] : 'profile';
+}
+
 function SyncIndicator() {
   const s = useStore();
   if (s.mode !== 'cloud') return null;
@@ -155,7 +161,7 @@ function AppInner() {
   const s = useStore();
   const [tab, setTab] = useState<Tab>(() => tabFromHash());
   const [drawer, setDrawer] = useState(false);
-  const [accountSection, setAccountSection] = useState<AccountSection>('profile');
+  const [accountSection, setAccountSection] = useState<AccountSection>(() => accountSectionFromHash());
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lq-nav-collapsed') === '1');
   const [health, setHealth] = useState<{ ok: boolean; hasKey: boolean }>({ ok: false, hasKey: false });
   const menuBtnRef = useRef<HTMLButtonElement>(null);
@@ -190,7 +196,10 @@ function AppInner() {
 
   // hash routing: back/forward buttons work
   useEffect(() => {
-    const onHash = () => setTab(tabFromHash());
+    const onHash = () => {
+      setTab(tabFromHash());
+      setAccountSection(accountSectionFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -204,8 +213,12 @@ function AppInner() {
 
   const goAccount = useCallback((section: AccountSection) => {
     setAccountSection(section);
-    go('account');
-  }, [go]);
+    setTab('account');
+    setDrawer(false);
+    const target = `#/account/${section}`;
+    if (window.location.hash !== target) window.location.hash = target;
+    window.scrollTo({ top: 0 });
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('lq-nav-collapsed', collapsed ? '1' : '0');
@@ -481,7 +494,7 @@ function AppInner() {
           </div>
         )}
         <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
-          {!snap && <Onboarding onGo={(t) => go(t)} />}
+          {!snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
           <LegacyMigrationCard />
           {s.lastDiff && (
             <div className="flex items-start gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm">
@@ -516,7 +529,7 @@ function AppInner() {
             {tab === 'history' && <HistoryView />}
             {tab === 'reports' && <Reports />}
             {tab === 'settings' && <Settings />}
-            {tab === 'account' && <Account section={accountSection} onSection={setAccountSection} />}
+            {tab === 'account' && <Account section={accountSection} onSection={goAccount} />}
           </Suspense>
         </main>
 

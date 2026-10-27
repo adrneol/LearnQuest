@@ -13,7 +13,8 @@ import {
   isRecentAuth, listSessions, revokeAllSessions, revokeSessionById,
 } from '../auth/sessions.js';
 import {
-  consumeEmailActionToken, invalidateEmailAction, issueEmailActionToken, latestEmailAction,
+  consumeEmailActionToken, invalidateAllEmailActions, invalidateEmailAction, issueEmailActionToken,
+  latestEmailAction,
 } from '../auth/actionTokens.js';
 import {
   clearSessionCookie, noStore, requireAuth, requireCsrf, requireOnboarded, requireRecentAuth,
@@ -196,6 +197,8 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
       // A verified email change is security-sensitive: every existing session
       // is revoked and the person must authenticate with the new address.
       await revokeAllSessions(store, updated.userId);
+      await invalidateAllEmailActions(store, updated.userId, ['email_change']);
+      clearSessionCookie(res);
       await notifyPreviousEmail(email, {
         to: account.email,
         subject: 'Your LearnQuest account email was changed',
@@ -242,7 +245,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
       const updated = await updateAccountPreferences(store, account, body);
       // Mirror timezone/session defaults into the learning preferences record
       // so every device sees the same values, without discarding reducedMotion.
-      const prefDoc = await store.data('prefs').findOne({ userId: account.userId, key: 'singleton' });
+      const prefDoc = await store.domainData('prefs').findOne({ userId: account.userId, key: 'singleton' });
       const current = prefDoc?.value && typeof prefDoc.value === 'object' ? prefDoc.value : {};
       const nextPrefs = {
         ...current,
@@ -251,7 +254,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         ...(body.breakMin !== undefined ? { breakMin: updated.breakMin } : {}),
         ...(body.minViableMin !== undefined ? { minViableMin: updated.minViableMin } : {}),
       };
-      await store.data('prefs').updateOne(
+      await store.domainData('prefs').updateOne(
         { userId: account.userId, key: 'singleton' },
         { $set: { userId: account.userId, key: 'singleton', value: nextPrefs, updatedAt: new Date().toISOString(), order: 0 } },
         { upsert: true },

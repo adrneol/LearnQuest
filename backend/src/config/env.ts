@@ -140,6 +140,24 @@ export const env = {
     }
     return raw;
   },
+  /**
+   * Which application learning-data backend the repository reads and writes.
+   * `legacy` remains the safe default until an owner-approved migration has
+   * been applied and independently verified. There is no automatic fallback:
+   * a selected backend that fails returns an error instead of reading the
+   * other layout.
+   */
+  get userDataStore(): 'legacy' | 'unified' {
+    const raw = stringEnv('LQ_USER_DATA_STORE', 'legacy').toLowerCase();
+    if (raw !== 'legacy' && raw !== 'unified') {
+      throw new Error('LQ_USER_DATA_STORE must be exactly "legacy" or "unified".');
+    }
+    return raw;
+  },
+  /** Explicit acknowledgement required to select the unified store in production. */
+  get userDataCutoverAcknowledged(): boolean {
+    return stringEnv('LQ_USER_DATA_CUTOVER_ACK') === 'lq-data-to-user-data-v1';
+  },
   get googleClientId(): string {
     return stringEnv('GOOGLE_CLIENT_ID');
   },
@@ -235,6 +253,24 @@ export interface PublicConfigStatus {
   missing: string[];
   cookieSecure: boolean;
   appOrigin: string;
+  /** UI can state the real reset-link lifetime without hard-coding it. */
+  emailActionTtlMin: number;
+  /** Observable storage mode; exposes no connection details. */
+  userDataStore: 'legacy' | 'unified';
+}
+
+function isLocalOrPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === 'localhost'
+    || host === '127.0.0.1'
+    || host === '::1'
+    || host.endsWith('.localhost')
+    || host.endsWith('.local')
+    || host.endsWith('.internal')
+    || host === 'metadata.google.internal'
+    || /^10\./.test(host)
+    || /^192\.168\./.test(host)
+    || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
 }
 
 /** Actionable, value-free configuration status for the login screen and health. */
@@ -264,6 +300,8 @@ export function configStatus(): PublicConfigStatus {
     missing,
     cookieSecure: env.cookieSecure,
     appOrigin: env.appOrigin,
+    emailActionTtlMin: env.emailActionTtlMin,
+    userDataStore: env.userDataStore,
   };
 }
 
@@ -281,6 +319,15 @@ export function assertProductionConfig(): void {
   if (!env.emailActionConfigured) problems.push('EMAIL_ACTION_HMAC_SECRET is required in production (OTP_HMAC_SECRET is accepted only as a legacy fallback).');
   if (!env.appOrigin.startsWith('https://') || !env.apiOrigin.startsWith('https://')) {
     problems.push('APP_ORIGIN and API_ORIGIN must use https in production.');
+  }
+  if (isLocalOrPrivateHost(new URL(env.appOrigin).hostname)) {
+    problems.push('APP_ORIGIN must be the public frontend origin in production, never localhost, a private IP, or an internal host.');
+  }
+  if (isLocalOrPrivateHost(new URL(env.googleRedirectUri).hostname)) {
+    problems.push('GOOGLE_REDIRECT_URI must use the public production origin, never localhost or an internal host.');
+  }
+  if (env.userDataStore === 'unified' && !env.userDataCutoverAcknowledged) {
+    problems.push('LQ_USER_DATA_STORE=unified requires LQ_USER_DATA_CUTOVER_ACK=lq-data-to-user-data-v1 after a verified migration.');
   }
   const redirectOrigin = new URL(env.googleRedirectUri).origin;
   if (redirectOrigin !== env.appOrigin && redirectOrigin !== env.apiOrigin) {

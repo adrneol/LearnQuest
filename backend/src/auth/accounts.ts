@@ -344,17 +344,18 @@ export async function setAccountPassword(
   options?: { revokeMarker?: string },
 ): Promise<Account> {
   const now = new Date().toISOString();
-  const updated: Account = {
-    ...account,
-    passwordHash,
-    passwordVersion: (account.passwordVersion ?? 0) + 1,
-    passwordChangedAt: now,
-    updatedAt: now,
-  };
-  await store.accounts.updateOne(
-    { userId: account.userId },
-    { $set: { passwordHash, passwordVersion: updated.passwordVersion, passwordChangedAt: now, updatedAt: now } },
-  );
+  // Increment atomically. Two authorised password changes must not both write
+  // the same absolute version and leave a session from the first change valid.
+  const updated = await store.accounts.findOneAndUpdate(
+    { userId: account.userId, status: 'active' },
+    {
+      $set: { passwordHash, passwordChangedAt: now, updatedAt: now },
+      $inc: { passwordVersion: 1 },
+    },
+  ) as Account | null;
+  if (!updated) {
+    throw http(409, 'This account is no longer available. Nothing was changed.', 'ACCOUNT_UNAVAILABLE');
+  }
   void options?.revokeMarker;
   return updated;
 }

@@ -93,6 +93,17 @@ afterEach(async () => {
   await db.close();
 });
 
+async function ensureAccount(userId: string): Promise<void> {
+  if (await store.accounts.findOne({ userId })) return;
+  await store.accounts.insertOne({
+    userId,
+    username: userId,
+    status: 'active',
+    onboardingComplete: true,
+    createdAt: NOW,
+  });
+}
+
 async function insertRecord(
   userId: string,
   domain: UserCollectionName,
@@ -100,6 +111,7 @@ async function insertRecord(
   value: unknown,
   order = 0,
 ): Promise<void> {
+  await ensureAccount(userId);
   const doc: Record<string, unknown> = { userId, key, value, updatedAt: NOW, order };
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const playlistId = (value as Record<string, unknown>).playlistId;
@@ -359,6 +371,7 @@ describe('lq_user_data migration', () => {
   });
 
   it('reports destination-only records as a warning without overwriting them', async () => {
+    await ensureAccount('user-a');
     await store.userData.insertOne({
       userId: 'user-a', domain: 'playlists', key: 'orphan-playlist', value: SAMPLE.playlists, updatedAt: NOW, order: 0,
     });
@@ -375,6 +388,55 @@ describe('lq_user_data migration', () => {
     expect(await store.userData.count({ userId: 'user-a' })).toBe(1);
     const saved = await store.userData.findOne({ userId: 'user-a', domain: 'playlists', key: 'orphan-playlist' });
     expect(saved?.value).toEqual(SAMPLE.playlists);
+  });
+
+  it('blocks migration for a deleted account and never resurrects its records', async () => {
+    await insertRecord('deleted-user', 'progress', 'v1', SAMPLE.progress);
+    await store.accounts.deleteMany({ userId: 'deleted-user' });
+
+    const report = await inspectUserDataMigration(store, { userIds: ['deleted-user'] });
+    expect(report.status).toBe('blocked');
+    expect(JSON.stringify(report.globalIssues)).toMatch(/no owning account/i);
+
+    const applied = await applyUserDataMigration(store, { userIds: ['deleted-user'] });
+    expect(applied.status).toBe('blocked');
+    expect(applied.ok).toBe(false);
+    expect(await store.userData.count({ userId: 'deleted-user' })).toBe(0);
+  });
+
+  it('blocks migration while an account-deletion job exists', async () => {
+    await insertRecord('deleting-user', 'progress', 'v1', SAMPLE.progress);
+    await store.accountDeletions.insertOne({
+      userId: 'deleting-user',
+      status: 'running',
+      startedAt: NOW,
+      updatedAt: NOW,
+      attempts: 1,
+      failedCollection: null,
+      deletedCounts: {},
+    });
+
+    const report = await inspectUserDataMigration(store, { userIds: ['deleting-user'] });
+    expect(report.status).toBe('blocked');
+    expect(JSON.stringify(report.globalIssues)).toMatch(/deletion job/i);
+    expect(await store.userData.count({ userId: 'deleting-user' })).toBe(0);
+  });
+
+  it('removes a record copied when the account is deleted mid-copy', async () => {
+    await insertRecord('race-user', 'progress', 'v1', SAMPLE.progress);
+    const originalInsert = store.userData.insertOne.bind(store.userData);
+    store.userData.insertOne = async (doc) => {
+      const saved = await originalInsert(doc);
+      await store.accounts.deleteMany({ userId: 'race-user' });
+      return saved;
+    };
+
+    const result = await applyUserDataMigration(store, { userIds: ['race-user'] });
+    store.userData.insertOne = originalInsert;
+
+    expect(result.status).toBe('incomplete');
+    expect(result.ok).toBe(false);
+    expect(await store.userData.count({ userId: 'race-user' })).toBe(0);
   });
 
   it('blocks the whole run when a legacy record has no valid owner', async () => {

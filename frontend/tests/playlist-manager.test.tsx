@@ -142,7 +142,7 @@ function Probe() {
 }
 
 function renderManager() {
-  render(
+  return render(
     <StoreProvider mode="local">
       <PlaylistManager />
       <Probe />
@@ -158,7 +158,11 @@ async function probe() {
 async function openRemoveDialog() {
   const buttons = screen.getAllByRole('button', { name: /Manage \/ Remove/ });
   fireEvent.click(buttons[0]);
-  return screen.getByRole('dialog', { name: /Remove Renamed P/ });
+  const dialog = screen.getByRole('dialog', { name: /Remove or delete this playlist/i });
+  // The playlist title identifies the target in the dialog description even
+  // though the accessible name stays stable for screen-reader consistency.
+  expect(dialog).toHaveTextContent(/Renamed P/);
+  return dialog;
 }
 
 beforeEach(async () => {
@@ -247,6 +251,22 @@ describe('playlist manager: archive versus permanent delete', () => {
     });
   });
 
+  it('portals the destructive dialog to a viewport-centered, scrollable overlay', async () => {
+    const { container } = renderManager();
+    await screen.findByText(/Renamed P/);
+    const dialog = await openRemoveDialog();
+
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+    const overlay = dialog.parentElement!;
+    expect(overlay.className).toContain('fixed');
+    expect(overlay.className).toContain('inset-0');
+    expect(overlay.className).toContain('place-items-center');
+    expect(overlay.className).toContain('overflow-y-auto');
+    expect(dialog.className).toContain('max-h-[calc(100dvh-1.5rem)]');
+    expect(dialog.className).toContain('overflow-y-auto');
+  });
+
   it('cancel closes the dialog without changing anything', async () => {
     renderManager();
     await screen.findByText(/Renamed P/);
@@ -254,7 +274,7 @@ describe('playlist manager: archive versus permanent delete', () => {
     const dialog = await openRemoveDialog();
     expect(dialog).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Remove Renamed P/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Remove or delete this playlist/i })).not.toBeInTheDocument());
     const after = await probe();
     expect(after).toEqual(before);
   });

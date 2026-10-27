@@ -21,3 +21,9 @@ if (typeof (globalThis as any).ResizeObserver === 'undefined') {
     disconnect() {}
   };
 }
+
+// jsdom logs "Not implemented: window.scrollTo" for app navigation. Scrolling
+// is not asserted in the suite; tests that care install their own spy.
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'scrollTo', { value: () => undefined, writable: true });
+}

@@ -66,7 +66,7 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
       if (!body.success) throw http(400, 'A valid data version and playlist title confirmation are required.', 'INVALID_REQUEST');
       const priorJob = await store.deletions.findOne({ userId: req.auth!.userId, playlistId: id });
       if (priorJob?.status === 'completed') {
-        const activeDoc = await store.data('activeId').findOne({ userId: req.auth!.userId, key: 'singleton' });
+        const activeDoc = await store.domainData('activeId').findOne({ userId: req.auth!.userId, key: 'singleton' });
         res.json({
           ok: true, mode: 'deleted', deleted: true, alreadyDeleted: true,
           playlistId: id, title: priorJob.title ?? 'Untitled playlist',

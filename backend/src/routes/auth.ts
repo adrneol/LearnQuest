@@ -19,7 +19,8 @@ import {
   revokeAllSessions, revokeSession, rotateSession,
 } from '../auth/sessions.js';
 import {
-  consumeEmailActionToken, invalidateEmailAction, issueEmailActionToken, latestEmailAction,
+  consumeEmailActionToken, invalidateAllEmailActions, invalidateEmailAction, issueEmailActionToken,
+  latestEmailAction,
 } from '../auth/actionTokens.js';
 import {
   clearSessionCookie, clientInfo, noStore, readSessionToken, requireAuth, requireCsrf,
@@ -80,6 +81,22 @@ function onboardingExpiry(): string {
 function requireCompletedAccount(account: Account): void {
   if (!account.onboardingComplete || !account.username) {
     throw http(409, 'Finish your LearnQuest account setup before using this action.', 'ONBOARDING_REQUIRED');
+  }
+}
+
+/**
+ * Retire legacy recovery grants that are no longer part of the current token
+ * flow. They are only marked consumed; no document is deleted outside the
+ * account-deletion cascade. The update is intentionally owner-scoped.
+ */
+async function invalidateLegacyRecoveryArtifacts(store: DataStore, userId: string): Promise<void> {
+  const now = new Date().toISOString();
+  for (const name of ['lq_reset_grants', 'lq_challenges'] as const) {
+    const collection = store.adapter.collection(name);
+    const rows = await collection.find({ userId, consumedAt: null });
+    for (const row of rows) {
+      await collection.updateOne({ _id: row._id, consumedAt: null }, { $set: { consumedAt: now } });
+    }
   }
 }
 
@@ -198,6 +215,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         const created = await rotateSession(store, oldToken, account.userId, {
           ...info,
           authMethod: onboarding ? 'google_register' : 'google_login',
+          passwordVersion: account.passwordVersion ?? 0,
           onboardingExpiresAt: onboarding ? onboardingExpiry() : null,
           onboardingGoogleSub: onboarding ? identity.sub : null,
         });
@@ -219,6 +237,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         const created = await rotateSession(store, oldToken, account.userId, {
           ...info,
           authMethod: 'google_register',
+          passwordVersion: account.passwordVersion ?? 0,
           onboardingExpiresAt: onboardingExpiry(),
           onboardingGoogleSub: identity.sub,
         });
@@ -239,6 +258,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const created = await rotateSession(store, oldToken, pending.userId, {
         ...info,
         authMethod: 'google_register',
+        passwordVersion: pending.passwordVersion ?? 0,
         onboardingExpiresAt: onboardingExpiry(),
         onboardingGoogleSub: identity.sub,
       });
@@ -264,6 +284,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const created = await rotateSession(store, readSessionToken(req), account.userId, {
         ...clientInfo(req),
         authMethod: 'password',
+        passwordVersion: account.passwordVersion ?? 0,
       });
       setSessionCookie(res, created.token, created.maxAgeSec);
       await store.accounts.updateOne({ userId: account.userId }, { $set: { lastLoginAt: new Date().toISOString() } });
@@ -316,6 +337,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const created = await rotateSession(store, readSessionToken(req), updated.userId, {
         ...clientInfo(req),
         authMethod: 'password',
+        passwordVersion: updated.passwordVersion ?? 0,
       });
       setSessionCookie(res, created.token, created.maxAgeSec);
       res.json({ user: safeAccount(updated), csrfToken: created.session.csrfToken });
@@ -353,11 +375,12 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         if (!ok) throw http(401, 'The current password is incorrect.', 'INVALID_CREDENTIALS');
       }
       const newHash = await hashCode(body.newPassword);
-      await setAccountPassword(store, account, newHash);
+      const updated = await setAccountPassword(store, account, newHash);
       await revokeAllSessions(store, account.userId, req.auth!.session.sessionId);
-      const created = await rotateSession(store, readSessionToken(req), account.userId, {
+      const created = await rotateSession(store, readSessionToken(req), updated.userId, {
         ...clientInfo(req),
         authMethod: 'password',
+        passwordVersion: updated.passwordVersion ?? 0,
       });
       setSessionCookie(res, created.token, created.maxAgeSec);
       await safeNotice(email, {
@@ -391,11 +414,13 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       // username/password and must finish Google onboarding instead. The public
       // response remains identical so this check is not an enumeration oracle.
       if (!isPasswordResetEligible(account)) {
+        console.info(JSON.stringify({ level: 'info', event: 'password_reset_not_eligible' }));
         res.status(202).json(generic);
         return;
       }
       const latest = await latestEmailAction(store, account.userId, 'password_reset');
       if (latest && Date.now() - Date.parse(latest.createdAt) < env.emailActionResendSec * 1000) {
+        console.info(JSON.stringify({ level: 'info', event: 'password_reset_cooldown' }));
         res.status(202).json(generic);
         return;
       }
@@ -406,6 +431,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         emailNormalized: account.emailNormalized,
         targetEmail: account.email,
       });
+      console.info(JSON.stringify({ level: 'info', event: 'password_reset_email_requested' }));
       try {
         await email.sendActionEmail({
           to: account.email,
@@ -415,9 +441,10 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         });
       } catch {
         // The response stays generic to avoid account enumeration. The token is
-        // invalidated immediately and no success email claim is stored.
+        // invalidated immediately and no success email claim is stored. The
+        // provider adapter already emitted a sanitized failure event.
         await invalidateEmailAction(store, issued.tokenId);
-        console.error('LearnQuest password-reset email delivery failed; the issued link was invalidated.');
+        console.error(JSON.stringify({ level: 'error', event: 'password_reset_email_failed_token_invalidated' }));
       }
       res.status(202).json(generic);
     } catch (e) {
@@ -445,13 +472,20 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
       }
       const newHash = await hashCode(body.newPassword);
-      await setAccountPassword(store, account, newHash);
-      await revokeAllSessions(store, account.userId);
+      const updated = await setAccountPassword(store, account, newHash);
+      await revokeAllSessions(store, updated.userId);
+      await invalidateAllEmailActions(store, updated.userId, ['password_reset']);
+      await invalidateLegacyRecoveryArtifacts(store, updated.userId);
+      // The reset request may carry the browser's old session cookie. Clear it
+      // here as well as revoking the server record so this browser is visibly
+      // signed out before the client broadcasts the event to other tabs.
+      clearSessionCookie(res);
       await safeNotice(email, {
-        to: account.email,
+        to: updated.email,
         subject: 'Your LearnQuest password was reset',
         message: `Your LearnQuest password was reset on ${new Date().toUTCString()}. All existing sessions were signed out. If this was not you, request another reset link immediately.`,
       });
+      console.info(JSON.stringify({ level: 'info', event: 'password_reset_completed' }));
       res.status(204).end();
     } catch (e) {
       next(e);

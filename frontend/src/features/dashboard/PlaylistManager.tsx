@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
-import { Archive, AlertTriangle, ArchiveRestore, Play, Settings2, Trash2, X } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { Archive, AlertTriangle, ArchiveRestore, Play, Settings2, Trash2 } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
+import { Modal } from '../../components/ui/dialog.js';
 import { notify } from '../../services/notifications/notify.js';
 
 interface DialogState {
@@ -59,6 +60,8 @@ export function PlaylistManager() {
   const s = useStore();
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const applyingRef = useRef(false);
+  const firstChoiceRef = useRef<HTMLButtonElement>(null);
   const archiveIds = useMemo(() => Object.keys(s.meta).filter((id) => s.meta[id]?.archived && s.playlists[id]), [s.meta, s.playlists]);
   const activeIds = useMemo(() => Object.keys(s.playlists).filter((id) => !s.meta[id]?.archived), [s.meta, s.playlists]);
 
@@ -69,7 +72,9 @@ export function PlaylistManager() {
   };
 
   const apply = async () => {
-    if (!dialog) return;
+    // A ref closes the double-click window before React applies the busy state.
+    if (!dialog || applyingRef.current) return;
+    applyingRef.current = true;
     setDialog({ ...dialog, busy: true, error: null });
     try {
       if (dialog.choice === 'archive') {
@@ -83,6 +88,8 @@ export function PlaylistManager() {
       setDialog(null);
     } catch (e: any) {
       setDialog((d) => d ? { ...d, busy: false, error: e?.message ?? 'The action did not complete. Nothing was reported as successful.' } : d);
+    } finally {
+      applyingRef.current = false;
     }
   };
 
@@ -137,80 +144,78 @@ export function PlaylistManager() {
       )}
 
       {dialog && counts && (
-        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-3 backdrop-blur-sm" role="presentation" onClick={() => { if (!dialog.busy) setDialog(null); }}>
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Remove ${dialog.title}`}
-            className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-[#141830] p-4 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <h2 className="text-base font-bold">Remove or delete this playlist?</h2>
-                <p className="mt-1 break-words text-sm text-slate-300"><b>{dialog.title}</b></p>
-                <p className="break-all text-[11px] text-slate-500">{dialog.playlistId}</p>
-              </div>
-              <button type="button" onClick={() => { if (!dialog.busy) setDialog(null); }} aria-label="Close" className="rounded-xl p-1.5 hover:bg-white/10"><X size={17} /></button>
-            </div>
-
-            <div className="mt-3 grid gap-2">
-              <button
-                type="button"
-                aria-pressed={dialog.choice === 'archive'}
-                onClick={() => setDialog({ ...dialog, choice: 'archive', error: null })}
-                className={`rounded-xl border p-3 text-left ${dialog.choice === 'archive' ? 'border-cyan-400/60 bg-cyan-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
-              >
-                <span className="flex items-center gap-1.5 text-sm font-semibold"><Archive size={15} /> Remove from dashboard (keep my learning data)</span>
-                <span className="mt-1 block text-xs text-slate-400">
-                  Archives this playlist. Progress, notes, review history, Focus sessions, playback evidence, checkpoints, saved ranges, modules, scoped goals, achievements, and XP are preserved.
-                  Restore it from Archived playlists without duplicate entries or recreated XP.
-                </span>
-              </button>
-              <button
-                type="button"
-                aria-pressed={dialog.choice === 'delete'}
-                onClick={() => setDialog({ ...dialog, choice: 'delete', error: null })}
-                className={`rounded-xl border p-3 text-left ${dialog.choice === 'delete' ? 'border-red-400/60 bg-red-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
-              >
-                <span className="flex items-center gap-1.5 text-sm font-semibold text-red-200"><Trash2 size={15} /> Permanently delete playlist and all its learning data</span>
-                <span className="mt-1 block text-xs text-slate-400">Destructive and cannot be undone through LearnQuest. The public YouTube playlist itself is not changed.</span>
-              </button>
-            </div>
-
-            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-2.5 text-[11px] text-slate-400">
-              <p className="font-semibold text-slate-300">Account-owned records associated with this playlist</p>
-              <p className="mt-0.5">{counts.videos} videos · {counts.completed} completed · {counts.annotations} with learning records · {counts.focusSessions} Focus sessions · {counts.playbackSegments} playback segments · {counts.playSessions} play sessions</p>
-              <p>{counts.checkpoints} checkpoints · {counts.ranges} saved ranges · {counts.modules} modules · {counts.goals} scoped goals · {counts.xp} attributable XP entries</p>
-            </div>
-
-            {dialog.choice === 'delete' && (
-              <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5">
-                <p className="flex items-start gap-1.5 text-xs text-red-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                  This permanently removes the playlist snapshot, stable-entry progress and annotations, review history, playback and Focus evidence, checkpoints, saved ranges, modules, queue records, playlist-scoped goals, and XP entries that can be reliably attributed to this playlist.
-                  Genuine account-wide settings, preferences, day goals, and unattributable XP are preserved, and other playlists are not changed.
-                </p>
-                <div className="mt-2">
-                  <Field label={`Type "${dialog.title}" to confirm`}>
-                    <input className={inputCls} value={dialog.confirmText} onChange={(e) => setDialog({ ...dialog, confirmText: e.target.value })} autoComplete="off" />
-                  </Field>
-                </div>
-              </div>
-            )}
-
-            {dialog.error && <p role="alert" className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-200">{dialog.error}</p>}
-            <div className="mt-3 flex flex-wrap justify-end gap-2">
-              <Btn onClick={() => setDialog(null)} disabled={dialog.busy}>Cancel</Btn>
-              <Btn
-                variant={dialog.choice === 'delete' ? 'danger' : 'primary'}
-                onClick={apply}
-                disabled={dialog.busy || (dialog.choice === 'delete' && dialog.confirmText !== dialog.title)}
-              >
-                {dialog.busy ? 'Working…' : dialog.choice === 'archive' ? 'Archive playlist (keep data)' : 'Permanently delete playlist'}
-              </Btn>
-            </div>
+        <Modal
+          title="Remove or delete this playlist?"
+          description={(
+            <>
+              <b className="break-words">{dialog.title}</b>
+              <span className="block break-all text-[11px] text-slate-500">{dialog.playlistId}</span>
+            </>
+          )}
+          onClose={() => { if (!dialog.busy) setDialog(null); }}
+          busy={dialog.busy}
+          initialFocusRef={firstChoiceRef}
+          closeLabel="Close remove-playlist dialog"
+          testId="playlist-dialog"
+        >
+          <div className="grid gap-2">
+            <button
+              ref={firstChoiceRef}
+              type="button"
+              aria-pressed={dialog.choice === 'archive'}
+              onClick={() => setDialog({ ...dialog, choice: 'archive', error: null })}
+              className={`rounded-xl border p-3 text-left ${dialog.choice === 'archive' ? 'border-cyan-400/60 bg-cyan-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+            >
+              <span className="flex items-center gap-1.5 text-sm font-semibold"><Archive size={15} /> Remove from dashboard (keep my learning data)</span>
+              <span className="mt-1 block text-xs text-slate-400">
+                Archives this playlist. Progress, notes, review history, Focus sessions, playback evidence, checkpoints, saved ranges, modules, scoped goals, achievements, and XP are preserved.
+                Restore it from Archived playlists without duplicate entries or recreated XP.
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={dialog.choice === 'delete'}
+              onClick={() => setDialog({ ...dialog, choice: 'delete', error: null })}
+              className={`rounded-xl border p-3 text-left ${dialog.choice === 'delete' ? 'border-red-400/60 bg-red-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+            >
+              <span className="flex items-center gap-1.5 text-sm font-semibold text-red-200"><Trash2 size={15} /> Permanently delete playlist and all its learning data</span>
+              <span className="mt-1 block text-xs text-slate-400">Destructive and cannot be undone through LearnQuest. The public YouTube playlist itself is not changed.</span>
+            </button>
           </div>
-        </div>
+
+          <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-2.5 text-[11px] text-slate-400">
+            <p className="font-semibold text-slate-300">Account-owned records associated with this playlist</p>
+            <p className="mt-0.5">{counts.videos} videos · {counts.completed} completed · {counts.annotations} with learning records · {counts.focusSessions} Focus sessions · {counts.playbackSegments} playback segments · {counts.playSessions} play sessions</p>
+            <p>{counts.checkpoints} checkpoints · {counts.ranges} saved ranges · {counts.modules} modules · {counts.goals} scoped goals · {counts.xp} attributable XP entries</p>
+          </div>
+
+          {dialog.choice === 'delete' && (
+            <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5">
+              <p className="flex items-start gap-1.5 text-xs text-red-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                This permanently removes the playlist snapshot, stable-entry progress and annotations, review history, playback and Focus evidence, checkpoints, saved ranges, modules, queue records, playlist-scoped goals, and XP entries that can be reliably attributed to this playlist.
+                Genuine account-wide settings, preferences, day goals, and unattributable XP are preserved, and other playlists are not changed.
+              </p>
+              <div className="mt-2">
+                <Field label={`Type "${dialog.title}" to confirm`}>
+                  <input className={inputCls} value={dialog.confirmText} onChange={(e) => setDialog({ ...dialog, confirmText: e.target.value })} autoComplete="off" disabled={dialog.busy} />
+                </Field>
+              </div>
+            </div>
+          )}
+
+          {dialog.error && <p role="alert" className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-200">{dialog.error}</p>}
+
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <Btn onClick={() => setDialog(null)} disabled={dialog.busy}>Cancel</Btn>
+            <Btn
+              variant={dialog.choice === 'delete' ? 'danger' : 'primary'}
+              onClick={apply}
+              disabled={dialog.busy || (dialog.choice === 'delete' && dialog.confirmText !== dialog.title)}
+            >
+              {dialog.busy ? 'Working…' : dialog.choice === 'archive' ? 'Archive playlist (keep data)' : 'Permanently delete playlist'}
+            </Btn>
+          </div>
+        </Modal>
       )}
     </Card>
   );

@@ -53,7 +53,7 @@ progressGameTracker/
 ├── frontend/    # React + Vite + TS UI; account UI + learning data views
 ├── backend/     # Node + Express: YouTube metadata, auth, accounts, MongoDB
 ├── docs/        # user-facing setup docs
-├── docs/audits/ # verification reports (acceptance + analytics + storage)
+├── docs/user-doc/audit2/ # numbered chronological verification archive
 ├── render.yaml  # backend deploy config (rootDir: backend)
 ├── README.md / HOW_TO_USE_LEARNQUEST.md
 ```
@@ -62,10 +62,11 @@ progressGameTracker/
   authenticated account API, and stores learning collections in MongoDB.
   Password hashes use Argon2id; email action tokens are stored only as
   HMAC digests, are purpose-bound and atomically single-use; sessions are
-  server-side and rotated on privilege changes. Current reads and writes use
-  the legacy per-domain `lq_data_*` collections. `lq_user_data` is the
-  documented consolidated target with a unique `(userId, domain, key)` index;
-  the app does not dual-write until an owner-approved migration is verified.
+  server-side and rotated on privilege changes. The default runtime reads and
+  writes the legacy per-domain `lq_data_*` collections; the consolidated
+  `lq_user_data` layout is selected only with the deliberate
+  `LQ_USER_DATA_STORE=unified` switch after a verified migration. There is no
+  silent fallback between layouts and no dual-write.
 - The **frontend** parses durations and computes every total, percentage,
   goal, efficiency figure, and simulated score in one domain engine
   (`frontend/src/domain`). In production it defaults to cloud mode and never
@@ -143,6 +144,8 @@ Backend (`backend/.env` — create from `backend/.env.example`, never commit):
 | `CACHE_MAX_ENTRIES` | Metadata cache size cap | `50` |
 | `MONGODB_URI` | **Secret.** MongoDB connection string | _(required)_ |
 | `MONGODB_DB_NAME` | Database name | `learnquest` |
+| `LQ_USER_DATA_STORE` | `legacy` (`lq_data_*`) or `unified` (`lq_user_data`); no automatic fallback | `legacy` |
+| `LQ_USER_DATA_CUTOVER_ACK` | Required for production `unified`; exact value `lq-data-to-user-data-v1` | _(unset)_ |
 | `GOOGLE_CLIENT_ID` | Google OAuth web client ID | _(required)_ |
 | `GOOGLE_CLIENT_SECRET` | **Secret.** Google OAuth client secret | _(required)_ |
 | `GOOGLE_REDIRECT_URI` | Must end in `/api/auth/google/callback` | `${API_ORIGIN}/api/auth/google/callback` |
@@ -252,13 +255,17 @@ Run each from its own directory (`frontend/` or `backend/`):
   empty defaults; a failed or malformed query returns an explicit error and
   preserves existing records. Pending onboarding is rejected with
   `409 ONBOARDING_REQUIRED` and routed back to the onboarding screen.
-- Current reads and writes use the legacy per-domain `lq_data_*` collections.
-  The target layout is one `lq_user_data` collection keyed by
-  `(userId, domain, key)`, with `value`, `updatedAt`, `order`, and optional
-  `playlistId`/`version`. It is created and indexed now but is **not** the
-  live source of truth. No data has been migrated or retired. See
-  [the migration and storage audit](./docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md)
-  for the dry-run procedure and Atlas queries.
+- The default learning-data backend is `LQ_USER_DATA_STORE=legacy`, which reads
+  and writes the per-domain `lq_data_*` collections. The consolidated
+  `lq_user_data` collection is keyed by `(userId, domain, key)` with `value`,
+  `updatedAt`, `order`, and optional `playlistId`/`version`. Selecting
+  `LQ_USER_DATA_STORE=unified` in production also requires
+  `LQ_USER_DATA_CUTOVER_ACK=lq-data-to-user-data-v1`; startup fails closed
+  without it, and an empty or unavailable unified store never falls back to
+  legacy data. No data has been migrated or retired live. See
+  [the migration and storage audit](./docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md)
+  and the deployment runbook for the dry-run, inspection, and guarded
+  retirement procedures.
 - Passwords are hashed with Argon2id. Raw passwords, password hashes, raw
   email action tokens, and session tokens are never included in account
   exports.
@@ -290,18 +297,21 @@ Run each from its own directory (`frontend/` or `backend/`):
   stale: `/api/auth/config`, `/api/auth/session`, and `/api/account/data`
   returned 404 and the frontend bundle did not contain the current auth UI.
   Redeploy the matching backend and frontend before judging live behavior. See
-  [the dated audit report](./docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md)
+  [the latest audit report](./docs/user-doc/audit2/11_LEARNQUEST_PRODUCTION_UX_SESSIONS_EMAIL_AND_AUDIT_REPAIR_2026-10-28.md),
+  the [database/account baseline](./docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md),
   and the prior
-  [auth/security report](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
+  [auth/security report](./docs/user-doc/audit2/09_LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
   for the exact verification boundary and owner-side checks.
-- The `lq_user_data` migration was **not** run against Atlas. Its dry-run tool,
-  checksums, idempotent copy path, and regression tests are local only. Legacy
+- The `lq_user_data` migration and legacy retirement were **not** run against
+  Atlas. The dry-run tool, checksums, idempotent copy path, read-only inspection,
+  guarded retirement command, and regression tests are local only. Legacy
   `lq_data_*` data remains authoritative and intact until the owner backs it
-  up, reviews a dry-run, approves an apply, and verifies the result.
+  up, reviews a dry run, approves an apply, verifies the result, and
+  deliberately switches the runtime store.
 - Timed in-browser playback events, overnight soak runs, live quota metering,
   2000+-video stress, and live storage-quota exhaustion are verified by
   unit/integration tests and inspection — not by live runs here. See
-  [`docs/audits/V7_FINAL_ACCEPTANCE.md`](./docs/audits/V7_FINAL_ACCEPTANCE.md).
+  [`docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md`](./docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md).
 - Playlists are capped at **1000 entries** per fetch (larger ones are rejected
   with a clear error, never silently truncated).
 - Quota costs ≈ 5 units per 100-video import/refresh, ≈ 21 per 500-video
@@ -333,11 +343,13 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
 - [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup, plus the migration and deletion runbook.
-- [docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md](./docs/audits/LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md) — current empty-account, API-contract, MongoDB-layout, migration, and account-deletion report.
-- [docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — prior auth, email-link, proxy, and verification report.
-- [docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — prior multi-user platform report (historical; superseded by the auth/security repair above).
-- [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — prior remediation report and verification matrix.
-- [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.
-- [docs/audits/V6_FINAL_AUDIT.md](./docs/audits/V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.
-- [docs/audits/TIME_AND_ANALYTICS_AUDIT.md](./docs/audits/TIME_AND_ANALYTICS_AUDIT.md) — time-correctness matrix.
-- [docs/audits/STORAGE_AND_SCALE_AUDIT.md](./docs/audits/STORAGE_AND_SCALE_AUDIT.md) — storage, memory, and scale measurements.
+- [docs/user-doc/audit2/README.md](./docs/user-doc/audit2/README.md) — indexed, chronological audit archive; report 11 is the latest.
+- [docs/user-doc/audit2/11_LEARNQUEST_PRODUCTION_UX_SESSIONS_EMAIL_AND_AUDIT_REPAIR_2026-10-28.md](./docs/user-doc/audit2/11_LEARNQUEST_PRODUCTION_UX_SESSIONS_EMAIL_AND_AUDIT_REPAIR_2026-10-28.md) — current production UX, cross-tab session, email-diagnostic, deletion, storage-cutover, and archive report.
+- [docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md](./docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md) — empty-account, API-contract, MongoDB-layout, migration, and account-deletion baseline.
+- [docs/user-doc/audit2/09_LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/user-doc/audit2/09_LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — auth, email-link, proxy, and verification report.
+- [docs/user-doc/audit2/07_LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/user-doc/audit2/07_LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — multi-user platform report (historical; numeric OTP flow superseded by report 09).
+- [docs/user-doc/audit2/05_LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/user-doc/audit2/05_LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — remediation report and verification matrix.
+- [docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md](./docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.
+- [docs/user-doc/audit2/03_V6_FINAL_AUDIT.md](./docs/user-doc/audit2/03_V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.
+- [docs/user-doc/audit2/02_TIME_AND_ANALYTICS_AUDIT.md](./docs/user-doc/audit2/02_TIME_AND_ANALYTICS_AUDIT.md) — time-correctness matrix.
+- [docs/user-doc/audit2/01_STORAGE_AND_SCALE_AUDIT.md](./docs/user-doc/audit2/01_STORAGE_AND_SCALE_AUDIT.md) — storage, memory, and scale measurements.

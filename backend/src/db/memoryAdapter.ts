@@ -110,6 +110,9 @@ export function createMemoryDb(): DbAdapter {
       }
       return c;
     },
+    async dropCollection(name: string) {
+      collections.delete(name);
+    },
     async close() {
       collections.clear();
     },

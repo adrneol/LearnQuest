@@ -34,6 +34,8 @@ export interface CollectionAdapter {
 
 export interface DbAdapter {
   collection(name: string): CollectionAdapter;
+  /** Optional destructive maintenance capability used only by the explicit retirement CLI. */
+  dropCollection?(name: string): Promise<void>;
   close?(): Promise<void>;
 }
 

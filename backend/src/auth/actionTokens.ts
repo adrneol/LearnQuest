@@ -173,3 +173,28 @@ export async function invalidateEmailAction(
     { $set: { consumedAt: new Date().toISOString() } },
   );
 }
+
+/**
+ * Invalidate every outstanding action token for an account. Used after a
+ * security-sensitive completion so a copied/parallel reset or verification
+ * link cannot be used later. Returns the number of tokens consumed.
+ */
+export async function invalidateAllEmailActions(
+  store: DataStore,
+  userId: string,
+  purposes?: EmailActionPurpose[],
+): Promise<number> {
+  const filter: Record<string, unknown> = { userId, consumedAt: null };
+  if (purposes && purposes.length > 0) filter.purpose = { $in: purposes };
+  const rows = await store.actionTokens.find(filter);
+  const now = new Date().toISOString();
+  let count = 0;
+  for (const row of rows) {
+    const result = await store.actionTokens.updateOne(
+      { tokenId: row.tokenId, consumedAt: null },
+      { $set: { consumedAt: now } },
+    );
+    count += result.modifiedCount;
+  }
+  return count;
+}

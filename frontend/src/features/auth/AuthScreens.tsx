@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
-  ArrowLeft, CheckCircle2, Cloud, Link2, Loader2, Mail, ShieldCheck,
+  ArrowLeft, CheckCircle2, Cloud, Link2, Loader2, ShieldCheck,
 } from 'lucide-react';
 import type { AuthConfig, AuthUser } from '../../services/api/authApi.js';
 import {
@@ -9,6 +9,7 @@ import {
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
+import { broadcastAuthSignOut } from '../../app/authSync.js';
 import { assessPasswordStrength } from './passwordStrength.js';
 
 const AUTH_ERROR_COPY: Record<string, string> = {
@@ -46,23 +47,20 @@ function clearOAuthErrorFromHash(): void {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/auth`);
 }
 
-export function SetupRequiredScreen({ setup, onRetry }: { setup: AuthConfig | null; onRetry: () => void }) {
+export function SetupRequiredScreen({ setup: _setup, onRetry }: { setup: AuthConfig | null; onRetry: () => void }) {
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-slate-200">
       <Card className="w-full border-amber-500/30">
         <h1 className="text-xl font-bold">LearnQuest accounts are not available yet</h1>
         <p className="mt-2 text-sm text-slate-400">
-          An administrator needs to finish configuring account services. Nothing was created or changed.
+          Account services are not fully configured yet. An administrator needs to finish setup before sign-in can work.
+          Nothing was created or changed.
         </p>
-        <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm">
-          <p className="font-semibold text-amber-200">Required backend configuration is missing:</p>
-          <p className="mt-1 font-mono text-xs text-amber-100">
-            {(setup?.missing ?? ['MONGODB_URI', 'SESSION_SECRET', 'EMAIL_ACTION_HMAC_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']).join(', ')}
-          </p>
+        <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-100">
+          <p>No account, session, email, or learning record was created while this page was shown.</p>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Add the values to the ignored <code>backend/.env</code>, keep <code>backend/.env.example</code> as the documented template,
-          restart the API, then retry. See the multi-user deployment guide for where to obtain each external credential.
+          If this persists, contact the LearnQuest administrator or retry after the next deployment.
         </p>
         <div className="mt-4 flex gap-2">
           <Btn variant="primary" onClick={onRetry}>Retry configuration check</Btn>
@@ -111,11 +109,11 @@ export function AuthScreens({
     const code = authRedirectCode();
     return code ? (AUTH_ERROR_COPY[code] ?? 'Google sign-in did not complete. Nothing was changed; try again.') : null;
   });
-  const [notice, setNotice] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const googleReady = Boolean(setup?.configured?.google);
   const emailReady = Boolean(setup?.configured?.brevo);
   const emailLinksReady = Boolean(setup?.configured?.emailLinks);
+  const resetTtl = setup?.emailActionTtlMin;
 
   useEffect(() => {
     clearOAuthErrorFromHash();
@@ -150,11 +148,10 @@ export function AuthScreens({
     await onPasswordLogin(identifier.trim(), password);
   });
 
-  const requestLink = (resend = false) => run(async () => {
+  const requestLink = () => run(async () => {
     if (!identifier.trim()) throw new Error('Enter your username or account email first.');
     if (!emailReady || !emailLinksReady) throw new Error('Password recovery is temporarily unavailable. Try again later.');
-    const result = await forgotPassword(identifier.trim());
-    setNotice(resend ? 'If an account matches, a new single-use reset link will arrive.' : result.message);
+    await forgotPassword(identifier.trim());
     setCooldown(60);
     setMode('sent');
   });
@@ -173,7 +170,7 @@ export function AuthScreens({
           <ul className="space-y-2 text-sm text-slate-300">
             <li className="flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-300" /> Private to your account</li>
             <li className="flex items-center gap-2"><Cloud size={16} className="text-cyan-300" /> Stored with your account</li>
-            <li className="flex items-center gap-2"><Mail size={16} className="text-violet-300" /> Email-based password recovery</li>
+            <li className="flex items-center gap-2"><ShieldCheck size={16} className="text-violet-300" /> Pick up where you left off on any device</li>
           </ul>
         </section>
 
@@ -187,7 +184,6 @@ export function AuthScreens({
           </div>
 
           {(authError || error) && <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error ?? authError}</p>}
-          {notice && <p role="status" className="mt-3 rounded-xl border border-cyan-500/25 bg-cyan-500/10 p-2.5 text-sm text-cyan-100">{notice}</p>}
 
           {mode === 'signin' && (
             <div className="mt-4">
@@ -214,8 +210,8 @@ export function AuthScreens({
                 </Btn>
               </form>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <button type="button" className="text-cyan-300 hover:underline" onClick={() => { setMode('forgot'); setError(null); setNotice(null); }}>Forgot password?</button>
-                <button type="button" className="text-violet-300 hover:underline" onClick={() => { setMode('register'); setError(null); setNotice(null); }}>Create an account</button>
+                <button type="button" className="text-cyan-300 hover:underline" onClick={() => { setMode('forgot'); setError(null); }}>Forgot password?</button>
+                <button type="button" className="text-violet-300 hover:underline" onClick={() => { setMode('register'); setError(null); }}>Create an account</button>
               </div>
             </div>
           )}
@@ -257,19 +253,24 @@ export function AuthScreens({
           )}
 
           {mode === 'sent' && (
-            <div className="mt-5 text-center">
-              <Mail className="mx-auto text-violet-300" size={34} />
-              <h2 className="mt-2 text-lg font-bold">Check your email</h2>
+            <section className="mt-5" aria-labelledby="recovery-sent-title">
+              <h2 id="recovery-sent-title" className="text-lg font-bold">Check your email</h2>
               <p className="mt-1 text-sm text-slate-400">
-                If an account matches, a single-use password reset link will arrive. It expires shortly and can be used once.
+                If an eligible account matches, a password-reset link will arrive shortly. Open that link to choose a new password.
+                {' '}
+                {resetTtl ? `The link expires in ${resetTtl} minutes and can be used once.` : 'The link expires soon and can be used once.'}
               </p>
               <div className="mt-4 flex flex-col gap-2">
-                <Btn onClick={() => void requestLink(true)} disabled={busy || cooldown > 0}>
-                  {cooldown > 0 ? `Send another link in ${cooldown}s` : 'Send another link'}
-                </Btn>
-                <Btn variant="primary" onClick={() => { setMode('signin'); setNotice(null); }}>Back to sign in</Btn>
+                <Btn variant="primary" onClick={() => { setMode('signin'); }}>Back to sign in</Btn>
+                {cooldown > 0 ? (
+                  <p role="status" className="text-center text-xs text-slate-500">
+                    You can request another link in {cooldown}s.
+                  </p>
+                ) : (
+                  <Btn onClick={() => void requestLink()}>Send another link</Btn>
+                )}
               </div>
-            </div>
+            </section>
           )}
 
           <p className="mt-4 text-[11px] leading-5 text-slate-500">
@@ -312,7 +313,7 @@ function PasswordStrengthMeter({ password }: { password: string }) {
 }
 
 /** Link-only password recovery. The token is already in memory, never displayed. */
-export function PasswordResetScreen({ token, onExit }: { token: string | null; onExit: () => void }) {
+export function PasswordResetScreen({ token, onExit, expiresInMin }: { token: string | null; onExit: () => void; expiresInMin?: number }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -346,6 +347,9 @@ export function PasswordResetScreen({ token, onExit }: { token: string | null; o
     setBusy(true);
     try {
       await resetPassword(token, password);
+      // Another tab may still show an authenticated dashboard. The server has
+      // already revoked every session; this is only a UI synchronization event.
+      broadcastAuthSignOut('password-reset');
       setDone(true);
       setPassword('');
       setConfirm('');
@@ -379,7 +383,10 @@ export function PasswordResetScreen({ token, onExit }: { token: string | null; o
           <form onSubmit={(e) => void submit(e)} className="mt-4 space-y-3">
             <h1 className="text-xl font-bold">Choose a new password</h1>
             <p className="text-xs text-slate-400">
-              This single-use link expires shortly. Choose at least 12 characters; a long passphrase is ideal.
+              {expiresInMin
+                ? `This single-use link expires in ${expiresInMin} minutes.`
+                : 'This single-use link expires soon.'}
+              {' '}Choose at least 12 characters; a long passphrase is ideal.
             </p>
             {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
             <Field label="New password">
@@ -420,6 +427,7 @@ export function EmailVerificationScreen({ token, onExit }: { token: string | nul
     setError(null);
     try {
       await confirmEmailChange(token);
+      broadcastAuthSignOut('email-change');
       setDone(true);
     } catch (e: any) {
       setError(e?.message ?? 'This email verification link is invalid, expired, or already used. Request a new one.');
