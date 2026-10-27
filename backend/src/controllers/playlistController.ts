@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { env } from '../config/env.js';
+import { env, configStatus, VERSION } from '../config/env.js';
 import { validatePlaylistQuery, isRefreshRequested } from '../schemas/playlistSchemas.js';
 import { fetchPlaylistSnapshot } from '../services/youtube/youtubeService.js';
 import { recordCacheHit, recordCacheMiss, recordDedupHit, recordImport } from '../diagnostics/apiStats.js';
@@ -10,7 +10,17 @@ export function createPlaylistController(cache: MemoryCache) {
   // playlist share one upstream request instead of hammering YouTube quota.
   const inflight = new Map<string, Promise<{ snapshot: import('../types/index.js').NormalizedSnapshot }>>();
   async function getHealth(_req: Request, res: Response): Promise<void> {
-    res.json({ ok: true, hasKey: Boolean(env.youtubeApiKey), version: '0.2.0', time: new Date().toISOString() });
+    const config = configStatus();
+    res.json({
+      ok: true,
+      hasKey: Boolean(env.youtubeApiKey),
+      version: VERSION,
+      time: new Date().toISOString(),
+      setupRequired: config.setupRequired,
+      authEnabled: config.authEnabled,
+      configured: config.configured,
+      missing: config.missing,
+    });
   }
 
   async function getPlaylist(req: Request, res: Response, next: NextFunction): Promise<void> {

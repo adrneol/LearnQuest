@@ -12,6 +12,16 @@ Date: 2026-10-13. Symptom on the deployed frontend: `Backend unreachable` /
 > `frontend/dist`; the single `YOUTUBE_API_KEY=…` string is Settings help
 > text, not a value).
 
+> **Superseded cookie-topology note (2026-10-27):** this document's direct
+> `VITE_API_BASE_URL=https://...onrender.com` recommendation fixed an
+> unauthenticated health/playlist connectivity problem, but it is not valid for
+> the authenticated multi-user session cookie. Production uses
+> `__Host-lq_session` with `SameSite=Lax`; a `*.vercel.app` page calling a
+> `*.onrender.com` API is cross-site, so the browser does not send that cookie.
+> Use a same-origin Vercel `/api` proxy or same-site custom domains instead —
+> see `docs/DEPLOYMENT_MULTIUSER.md` section 6. The diagnosis below remains
+> historical context for the earlier outage.
+
 ## 1. Verified root cause
 
 **Two deployment-configuration gaps, no application bug.** The code traces
@@ -59,7 +69,7 @@ preflight (plain GET + `Accept` header = simple request, none needed).
 
 | Variable | Value | Notes |
 |---|---|---|
-| `VITE_API_BASE_URL` | `https://YOUR-RENDER-SERVICE.onrender.com` (real URL from Render dashboard; **no trailing slash, no `/api` suffix**) | Must be set on **Production** (not only Preview/Development); changing it requires **redeploy** (Vite build-time embed) |
+| `VITE_API_BASE_URL` | **Superseded for authenticated builds** — use a same-origin proxy or a same-site API subdomain from `docs/DEPLOYMENT_MULTIUSER.md` §6. The historical direct Render URL (no trailing slash, no `/api` suffix) only fixed unauthenticated health/playlist calls | If retained for an unauthenticated tool, set it on **Production** (not only Preview/Development); changing it requires **redeploy** (Vite build-time embed) |
 
 Same value must be reachable at `<value>/api/health` returning
 `{ok:true,...}` before the frontend can show healthy.

@@ -3,8 +3,10 @@
 LearnQuest turns public YouTube playlists into measurable learning journeys:
 exact duration math, verified watch tracking, focus sessions, modules,
 checkpoints, goals, efficiency analytics, revision scheduling, and an
-optional fictional Arena. Everything you learn is stored **locally in your
-browser** — there is no account and no cloud sync.
+optional fictional Arena. Learning data belongs to your **authenticated
+account** and is stored server-side in MongoDB, so it is available on other
+devices. Google is the only registration path; password sign-in and email OTP
+recovery are available after registration.
 
 > Start with [A](#a-getting-started), then follow the journey in order.
 > Technical verification lives in [`docs/audits/`](./docs/audits/).
@@ -12,7 +14,11 @@ browser** — there is no account and no cloud sync.
 ## A. Getting started
 
 ### Prerequisites
-- **Node.js 20+** and **npm 9+** (`node --version`, `npm --version`).
+- **Node.js 24.22.1+ (24 LTS)** and **npm 9+** (`node --version`,
+  `npm --version`). `backend/.node-version` pins the patched version.
+- **MongoDB**, a **Google OAuth web client**, and a **Brevo** API key with a
+  verified sender for accounts, sign-in, and OTP recovery. Full setup:
+  [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md).
 - For live playlist imports, a **YouTube Data API v3 key** (read-only, no
   billing). Without one, JSON snapshot import still works fully offline.
 
@@ -38,27 +44,61 @@ cd frontend
 npm run dev
 ```
 
-Open **http://localhost:5173**. A successful launch shows the sidebar
-(Dashboard, Library, Player, …) and an onboarding card.
+Open **http://localhost:5173**. With account services configured, you see the
+sign-in screen. If required credentials are missing, the app shows a
+fail-closed setup screen listing the missing variable names; it never offers a
+fake local login.
 
-### Configure the API key
+### Configure account services
+1. Copy `backend/.env.example` to `backend/.env`.
+2. Fill in `MONGODB_URI`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `BREVO_API_KEY`, and `BREVO_SENDER_EMAIL`.
+3. Generate two independent secrets and set `SESSION_SECRET` and
+   `OTP_HMAC_SECRET`:
+   `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`.
+4. Keep `APP_ORIGIN=http://localhost:5173`,
+   `CORS_ORIGIN=http://localhost:5173`, and
+   `GOOGLE_REDIRECT_URI=http://localhost:3001/api/auth/google/callback`.
+5. Register that exact redirect URI in Google Cloud and verify the Brevo
+   sender. Restart the backend after any `.env` change.
+6. Open the app, choose **Continue with Google**, then complete onboarding by
+   choosing a unique username, display name, and password (12+ characters).
+
+### Configure the YouTube API key
 1. At Google Cloud Console, create (or pick) a project.
 2. **APIs & Services → Library** → enable **YouTube Data API v3**.
 3. **Credentials** → Create Credentials → **API key**.
 4. Restrict it: *API restrictions* → YouTube Data API v3 only;
    *Application restrictions* → your backend host.
-5. Copy `backend/.env.example` to `backend/.env` and set
-   `YOUTUBE_API_KEY=PASTE_YOUR_KEY_HERE` (keep `PORT=3001`,
-   `CORS_ORIGIN=http://localhost:5173`).
-6. Restart the backend.
-7. Confirm: **Settings → Backend connection** reads
+5. Set `YOUTUBE_API_KEY` in `backend/.env` and restart the backend.
+6. Confirm: **Settings → Backend connection** reads
    **"● Connected — API key configured"**, or
    `http://localhost:3001/api/health` shows `"hasKey":true`.
 
-Never put the key in a `VITE_` variable, the frontend, chat, or Git.
+Never put any key in a `VITE_` variable, the frontend, chat, or Git.
 `backend/.env` is git-ignored; only `.env.example` files are committed.
 If a key is ever exposed in a screenshot or message, revoke/rotate it in
 Google Cloud immediately and update the replacement in Render.
+
+### Sign in, recovery, and account security
+- **Google** is the only registration path. Your verified Google email is the
+  initial account email; you never type an arbitrary address at signup.
+- Afterwards you can sign in with your username or email and password.
+  Passwords are hashed with Argon2id.
+- **Forgot password?** Enter your username or email, then the six-digit code
+  sent by Brevo. The code expires in about 10 minutes, is single-use, and has
+  limited attempts. Resetting signs out all existing sessions.
+- The **account menu at the top-right of the main header** opens Profile,
+  Account settings, Security & sessions, export, and sign-out. It is not in
+  the sidebar.
+- **Security & sessions** lists active devices, lets you sign out other
+  devices or all devices, change your password, and verify a new email address
+  with a six-digit code. The old email stays active until verification.
+- **Account settings** stores learning preferences (timezone, default session
+  length, break, minimum viable session) in your account, offers a JSON export
+  of account data, and supports permanent account deletion after typing your
+  exact username and recent reauthentication. Export first; deletion cannot be
+  undone through LearnQuest.
 
 ### Import a playlist
 1. Copy a YouTube playlist URL (contains `?list=PL…`) or just the `PL…` ID.
@@ -149,18 +189,41 @@ A module is a chapter **you** define (e.g. "JavaScript Fundamentals").
 against `1–N`), then rename, reassign, reorder (up/down), or delete. Cards
 show video/duration progress. LearnQuest never auto-assigns topics.
 
-### Checkpoints and ranges
-A checkpoint is a milestone defined by an inclusive video range.
-**Checkpoints tab:** label it, pick start/end, press **Add** — progress
-bars, remaining work, and completion (with celebration + XP) appear
-automatically. After a playlist refresh that shrinks `N`, affected items
-show **needsReview**: edit or delete them explicitly. Saved Library ranges
-live here too for renaming/deletion.
+### Checkpoints and saved ranges
+A checkpoint is a milestone defined by one inclusive video range.
+**Checkpoints tab:** type one range (`1-8`, `1–8`, `1 – 8`, or a single
+position such as `103`). The display name is generated automatically
+(**Videos 1–8** or **Video 103**) and a live preview shows exactly what will
+be created. A custom name is optional and replaces only the generated label.
+Reversed, fractional, negative, malformed, and out-of-bounds ranges are
+rejected without clamping; fix the range or choose one inside `1–N`.
+Creating a checkpoint tracks progress and recognizes completion with the
+established milestone/XP behavior. Editing an auto-generated label updates it
+to the new range; a custom name is preserved. After a refresh that shrinks
+`N`, affected items show **needsReview** until you edit or delete them.
+**Saved ranges** are separate Library duration calculations: they appear here
+for renaming/deletion, but they are not checkpoints, do not track completion,
+and do not award milestone XP.
 
-### Playlist changes and review flags
+### Playlist changes, review flags, archive, and permanent delete
 Refreshing metadata never erases progress. If the playlist shrinks or moves,
 saved ranges/checkpoints keep their original boundaries and are flagged
 until you confirm them.
+
+**Dashboard → Your playlists → Manage / Remove** offers two distinct choices:
+- **Remove from dashboard (keep my learning data)** archives the playlist.
+  Progress, notes, review history, Focus sessions, playback evidence,
+  checkpoints, saved ranges, modules, scoped goals, achievements, and XP are
+  preserved. It disappears from active totals and the active-playlist selector;
+  **Archived playlists → Restore** brings it back without duplicate records or
+  recreated XP.
+- **Permanently delete playlist and all its learning data** requires typing
+  the exact displayed title (including a custom title). It removes only
+  account-owned records reliably attributable to that playlist. Other
+  playlists, account-wide settings, day goals, and unattributable XP are kept.
+  The public YouTube playlist itself is never modified. Deletion cannot be
+  undone through LearnQuest; export a backup first if unsure.
+The dialog shows the counts that will be affected before you confirm.
 
 ## D. Revisions
 
@@ -290,8 +353,10 @@ network, no real leaderboard.
 
 ## H. Backup, restore, and data safety
 
-- **Download:** Reports → **Backup JSON** (everything, schema v3).
-  Store the file yourself — there is no cloud copy.
+- Your account is the primary copy in MongoDB. **Download:** Reports →
+  **Backup JSON** (everything, schema v3), or the account menu → **Export
+  account data**. Account exports never include password hashes, OTPs, or
+  session tokens. Keep an offline copy before major cleanups.
 - **Restore:** Reports → **Restore backup** validates the complete file first;
   v3 restores v2/v1 backups too. You are offered a fresh pre-restore JSON
   download before anything is replaced. The restore is all-or-nothing, and
@@ -302,12 +367,15 @@ network, no real leaderboard.
   text beginning with formula characters is escaped for spreadsheets.
 - **Clear cached metadata (keep progress)** drops playlist snapshots only
   (re-add to refetch). **Clear ALL data** (two-step confirm) deletes all
-  learning data **and resets preferences** locally — export a backup first.
-  Pending debounced writes are drained before the clear, so old state cannot
-  reappear.
-- **Remove playlist** deletes that playlist's progress, sessions, playback
-  segments, saved ranges, checkpoints, modules, revision-queue entries, and
-  scoped goals together; other playlists are untouched.
+  learning data **and resets preferences** in your account (or locally in test
+  mode) while keeping the account, profile, and security settings — export a
+  backup first. Pending debounced writes are drained before the clear, so old
+  state cannot reappear.
+- **Archive** keeps every playlist record and only hides it from active lists
+  and totals. **Permanent delete** removes that playlist's progress, sessions,
+  playback segments, saved ranges, checkpoints, modules, revision-queue
+  entries, scoped goals, and reliably attributable XP; other playlists are
+  untouched.
 - If a save ever fails (e.g. browser storage full), the app shows one
   actionable backup notice instead of failing silently; your in-memory
   session data stays available until you back it up. A failed database **read**
@@ -315,23 +383,33 @@ network, no real leaderboard.
   Concurrent tabs are last-writer-wins — prefer one tab for recording.
 - The only `localStorage` values are device-local UI preferences
   (`lq-nav-collapsed`), the interrupted-focus recovery snapshot
-  (`lq-focus-timer-v1`), and the one-time storage notice; they never leave
-  the device.
+  (`lq-focus-timer-v1`), the one-time storage notice, and the legacy-import
+  claim marker; they never contain learning records for cloud accounts.
+- Legacy browser data is offered for import only after sign-in. Existing cloud
+  records win on identical IDs; the local source is retained on failure and can
+  be retried. A different account never inherits it.
 - Practical habit: export a backup weekly (or before playlist refreshes and
-  major cleanups) and keep two recent copies.
+  major cleanups) and keep two recent copies. Deleting your account removes
+  its MongoDB records and sessions permanently.
 
 ## I. Troubleshooting and FAQs
 
 | Problem | What to do |
 |---|---|
+| Setup/configuration screen | Add the listed names to `backend/.env`, restart, and retry. Accounts fail closed; there is no fake local login |
+| Google sign-in fails | Check the OAuth web client, exact redirect URI, consent-screen test user, and `GOOGLE_CLIENT_ID`/secret |
+| OTP email missing | Verify the Brevo sender/domain and API key; check spam; wait for the resend cooldown |
+| MongoDB errors | Check the connection string, database user, and network allow-list. No local fallback is used |
+| Cloud save conflict | Another session changed the account. Use the conflict banner to reload before editing again |
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |
 | API key missing/invalid/restricted | Re-check key + restrictions in Google Cloud; restart backend; Recheck in Settings |
 | Quota exhausted | Wait for the daily reset; use JSON import meanwhile (~5 units per 100-video import, ~21 per 500) |
-| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production: `VITE_API_BASE_URL` must be the exact Render origin on the Vercel **Production** env (no trailing slash, no `/api` suffix) followed by a redeploy; `CORS_ORIGIN` on Render must exactly match the Vercel origin |
+| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production must use a cookie-safe topology: either a same-origin Vercel `/api` rewrite (leave `VITE_API_BASE_URL` empty) or same-site custom domains (`app.example.com` + `api.example.com`). A direct `*.vercel.app` → `*.onrender.com` API URL is cross-site and the `SameSite=Lax` session cookie is not sent; see `docs/DEPLOYMENT_MULTIUSER.md` |
 | Refresh fails | Retry Refresh active — failures never poison the cache or delete progress |
 | Unresolved videos | Expected for deleted/private/region-blocked items; totals stay incomplete-labeled |
 | Focus session lost to reload/sleep | Reopen Focus: a snapshot is recovered **paused**. Time while the page was closed is never counted; resume or finish what was actually observed, or record a History self-reported entry |
 | Day-boundary numbers look off | Re-check the display timezone and its live UTC offset; cross-midnight sessions split across both days |
 | Revision/goal status unexpected | Compare its date against today's date in the selected timezone; check filters (e.g. overdue vs all) |
-| Changes missing after reload | Don't use private/incognito windows; check disk space; restore the latest backup |
+| Changes missing after reload | Check the cloud-save status; retry a failed save or reload a conflict. Then check the account/API connection and restore the latest backup if needed |
 | Invalid import file | Re-export from Reports; restores validate before applying anything |
+| Playlist disappeared | Check **Dashboard → Your playlists → Archived playlists**; archive is recoverable, permanent delete is not |

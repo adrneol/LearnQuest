@@ -134,6 +134,7 @@ describe('revision review lifecycle and all-lessons discovery', () => {
       const db = await openDB('learnquest-db', 2);
       const savedRaw = await db.get('kv', 'progress');
       expect(savedRaw[`${P}::r1`].notes).toBe('edited after review');
+      expect(savedRaw[`${P}::r1`].needsRevision).toBe(false);
       expect(savedRaw[`${P}::r1`].reviewHistory).toHaveLength(1);
     });
 

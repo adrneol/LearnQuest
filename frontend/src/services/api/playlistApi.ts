@@ -1,5 +1,8 @@
 import { validateImportedSnapshot, toCsv, formatSecondsHHMMSS, parseISO8601ToSeconds, entryKey } from '../../domain/index.js';
 import type { PlaylistSnapshot, PlaylistEntry } from '../../domain/index.js';
+import { apiUrl } from './http.js';
+
+export { apiUrl, getApiBase } from './http.js';
 
 // Backend contract: normalized metadata with ORIGINAL ISO durations.
 // The frontend domain engine parses them — the single authority for totals.
@@ -53,22 +56,9 @@ function toClientSnapshot(s: ServerSnapshot): PlaylistSnapshot {
 }
 
 /**
- * Backend origin prefix. Production contract (see .env.example): the Render
- * service origin WITHOUT trailing slash and WITHOUT an `/api` suffix, e.g.
- * `https://YOUR-RENDER-SERVICE.onrender.com`. Trailing slashes are stripped
- * here so a `...onrender.com/` value cannot produce `//api/...` (404).
- * Empty = same-origin `/api` (local dev proxy handles it).
+ * Backend origin prefix is documented in http.ts. This module keeps the public
+ * playlist transport unauthenticated; account requests use authApi/http.
  */
-export function getApiBase(): string {
-  const raw = import.meta.env?.VITE_API_BASE_URL ?? '';
-  return String(raw).replace(/\/+$/, '');
-}
-
-/** Join one `/api/...` path onto the configured base. Exported for tests. */
-export function apiUrl(path: string): string {
-  return `${getApiBase()}/api${path.startsWith('/') ? path : `/${path}`}`;
-}
-
 /** Abort a hung request instead of leaving the UI in a permanent spinner. */
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const ctrl = new AbortController();

@@ -12,6 +12,7 @@ import { Card, Btn, inputCls } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import { validateBackup } from '../../services/persistence/backup.js';
+import { notify } from '../../services/notifications/notify.js';
 
 export function Reports() {
   const s = useStore();
@@ -266,15 +267,17 @@ function PlaylistTable({ ids }: { ids: string[] }) {
       const t = await promptDialog({ title: 'Rename playlist (local label)', initial: row.m?.customTitle ?? row.p.title });
       if (t) s.renamePlaylist(row.id, t);
     } else if (kind === 'archive') {
-      s.setArchived(row.id, !row.m?.archived);
+      try {
+        if (row.m?.archived) await s.restorePlaylistManaged(row.id);
+        else await s.archivePlaylistManaged(row.id);
+      } catch (e: any) {
+        notify(e?.message ?? 'The playlist archive action did not complete.');
+      }
     } else {
-      const ok = await confirmDialog({
-        title: `Remove "${row.p.title}"?`,
-        body: 'This playlist’s progress, sessions, playback evidence, saved ranges, checkpoints, modules, revision queue, and scoped goals are deleted. Other playlists are unaffected.',
-        confirmLabel: 'Remove',
-        danger: true,
-      });
-      if (ok) s.removePlaylist(row.id);
+      // Permanent deletion lives in the Dashboard manager so it always uses
+      // the two-choice flow, typed-title confirmation, and backend protocol.
+      window.location.hash = '/dash';
+      notify('Manage removal in Dashboard → Your playlists. Archive keeps all data; permanent deletion requires typing the exact title.');
     }
   };
 
@@ -326,7 +329,7 @@ function PlaylistTable({ ids }: { ids: string[] }) {
               <>
                 <MenuItem label="Rename…" onPick={() => act('rename', row)} />
                 <MenuItem label={row.m?.archived ? 'Unarchive' : 'Archive'} onPick={() => act('archive', row)} />
-                <MenuItem label="Remove…" danger onPick={() => act('remove', row)} />
+                <MenuItem label="Manage removal…" danger onPick={() => act('remove', row)} />
               </>
             );
           })()}

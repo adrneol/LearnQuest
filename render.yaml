@@ -18,3 +18,49 @@ services:
         value: '30'
       - key: TRUST_PROXY_HOPS
         value: '1'
+      # Patched Node 24 LTS. .node-version is the source of truth; this value
+      # can be overridden by a dashboard-level NODE_VERSION variable.
+      - key: NODE_VERSION
+        value: '24.22.1'
+      - key: APP_ORIGIN
+        value: https://learnquest.vercel.app
+      - key: API_ORIGIN
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: learnquest
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER_EMAIL
+        sync: false
+      - key: BREVO_SENDER_NAME
+        value: LearnQuest
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: OTP_HMAC_SECRET
+        generateValue: true
+      - key: AUTH_RATE_LIMIT_PER_MIN
+        value: '20'
+      - key: OTP_RATE_LIMIT_PER_15MIN
+        value: '8'
+      - key: SESSION_IDLE_HOURS
+        value: '168'
+      - key: SESSION_ABSOLUTE_DAYS
+        value: '30'
+      - key: REAUTH_WINDOW_MIN
+        value: '10'
+      - key: OTP_TTL_MIN
+        value: '10'
+      - key: OTP_RESEND_SEC
+        value: '60'
+      - key: OTP_MAX_ATTEMPTS
+        value: '5'
+      - key: ACCOUNT_MAX_STATE_BYTES
+        value: '8388608'

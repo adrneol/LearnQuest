@@ -11,6 +11,7 @@ import { useDayTick } from '../../app/dayTick.js';
 import { Card, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { CumulativeChart } from '../../components/charts/CumulativeChart.js';
 import { TICK, GRID_STROKE, TOOLTIP_STYLE } from '../../components/charts/theme.js';
+import { PlaylistManager } from './PlaylistManager.js';
 
 export function Dashboard() {
   const s = useStore();
@@ -200,6 +201,8 @@ export function Dashboard() {
           </ul>
         )}
       </Card>
+
+      <PlaylistManager />
     </div>
   );
 }

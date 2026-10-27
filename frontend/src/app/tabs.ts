@@ -12,4 +12,5 @@ export type Tab =
   | 'revise'
   | 'history'
   | 'reports'
-  | 'settings';
+  | 'settings'
+  | 'account';

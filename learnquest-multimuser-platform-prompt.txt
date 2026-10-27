@@ -1,0 +1,1134 @@
+# LearnQuest — Multi-User Platform Migration, Secure Authentication, MongoDB, Checkpoint UX, and Production Hardening
+
+## Mission
+
+Act as the senior engineer and security-conscious architect responsible for transforming LearnQuest from a local-first learning tracker into a professional multi-user application.
+
+This is a substantial implementation project, not another audit-only task.
+
+Inspect the current repository and previous reports, implement a coherent account system, migrate all user-owned learning data to MongoDB, add secure Google authentication and password-based sign-in, implement account recovery and email verification through Brevo, redesign the confusing checkpoint creation form, harden the Node.js deployment, test every important workflow, and document the completed implementation.
+
+The existing app is React/Vite/TypeScript with an Express/TypeScript backend and a mature domain engine for playlist duration, progress, stable entry identity, verified playback, Focus, Revision, History, Efficiency, goals, checkpoints, Arena, and exports.
+
+The previous remediation reports claim 250 frontend tests and 26 backend tests pass. Verify the current code and tests independently.
+
+**The central goal is to make every account's data private, persistent, recoverable, and isolated while retaining LearnQuest's existing learning calculations and user experience.**
+
+Do not stop after creating authentication pages, adding a MongoDB client, or producing an implementation plan. Implement the complete safe scope described here.
+
+---
+
+# 1. Non-negotiable safety and execution rules
+
+Before making changes:
+
+- Inspect Git branch, HEAD, `git status`, and existing diffs.
+- Read `docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md` and `docs/audits/LEARNQUEST_POST_REMEDIATION_QUALITY_REPORT_2026-10-27.md` if present.
+- Inspect the current backend architecture, the entire state/store model, IndexedDB schema, API contract, environment examples, deployment files, and existing tests.
+- Determine the current frontend and backend production origins from repository configuration and documentation.
+- Record the actual baseline test, typecheck, lint, build, and dependency-audit results.
+- Preserve all pre-existing changes and untracked files.
+
+Do not reset, clean, overwrite, or automatically revert existing work. Do not commit, push, switch branches, or perform destructive checkout operations.
+
+Do not clear or manipulate the user's real browser database. Do not execute a real account deletion, destructive restore, production migration, or live credential test.
+
+Do not print real API keys, Google secrets, MongoDB credentials, Brevo credentials, session secrets, OTPs, password hashes, or session cookies into logs or reports.
+
+You have permission to update environment configuration where required, but do not create a real `.env` file unless it is genuinely necessary and suitable credentials are already available. Never invent credentials.
+
+The existing ignored `backend/.env`, if present, must be left intact. Do not read its secret values or overwrite it. Update `.env.example`, deployment documentation, and configuration validation as required.
+
+Use fake credentials and mocked adapters for automated tests. If actual Google, Brevo, or MongoDB credentials are unavailable, implement and validate the real integration code as far as possible and document the external configuration needed. Do not fabricate a successful live integration.
+
+Do not weaken or remove tests just to obtain a passing result.
+
+---
+
+# 2. Review the prior implementation and resolve remaining product issues
+
+Before adding account functionality, establish which earlier changes are actually present and working.
+
+Inspect:
+
+- Stable playlist-entry identity and legacy migration.
+- Annotation persistence and review history.
+- Player learning-record editor.
+- Focus timer and recovery.
+- History range filtering and evidence separation.
+- Efficiency formulas and evidence filtering.
+- Timezone-aware daily attribution.
+- Backup validation and restore behavior.
+- Revision queue, all-lessons scope, and reviewed lessons.
+- Numeric input normalization.
+- Checkpoint creation and saved-range behavior.
+- Backend dependency hardening and runtime configuration.
+
+Fix any concrete regression found during this pass before building dependent account features.
+
+Preserve the established distinction between verified, manual, and estimated activity. Preserve all notes, confidence ratings, revision dates, exercise flags, questions, key concepts, and review history.
+
+Do not blindly repeat old audit claims. Verify them.
+
+---
+
+# 3. Redesign Checkpoint creation to remove redundant inputs
+
+The current Checkpoints screen has separate Label, Start, and End fields. This is confusing because a user who wants a checkpoint covering videos 1–8 should not have to enter a range twice or guess what the label is supposed to contain.
+
+Redesign this form into a natural, concise workflow.
+
+## Required creation experience
+
+The main form should require only one range input:
+
+**Video range**
+
+Example:
+- `1-8`
+- `9-16`
+- `50-60`
+- `103`
+
+Accept reasonable spacing and standard hyphen/en-dash input.
+
+The user should be able to type `1-8` and create the checkpoint without needing to enter the number range again in other fields.
+
+Automatically derive the display label:
+
+- `1-8` → `Videos 1–8`
+- `9-16` → `Videos 9–16`
+- `103` → `Video 103`
+
+Add an optional, secondary custom-name field only for users who want a more descriptive milestone name, such as `JavaScript fundamentals`.
+
+When a custom name is not supplied, the automatically generated label is the saved name. Do not require a label or display a confusing placeholder suggesting the user must name a numeric range manually.
+
+Provide a live preview of the parsed range and resulting checkpoint name.
+
+## Validation
+
+- Require a valid single contiguous range or one valid position.
+- Normalize `1 - 8`, `1–8`, and `1-8` consistently.
+- Validate that positions fall within `1..N` for the active playlist.
+- Reject malformed, negative, fractional, reversed, empty, and out-of-bounds ranges with understandable feedback.
+- Do not silently clamp an invalid input into an unrelated range.
+- Test the active playlist, including empty or unavailable playlist metadata.
+- Preserve existing saved checkpoints and custom names when editing existing records.
+
+Do not change the definition of an inclusive checkpoint range or award completion rewards prematurely.
+
+## Separate checkpoints from saved ranges
+
+The page currently mixes checkpoint creation with saved duration ranges. Explain the two functions clearly and keep them visually distinct:
+
+**Checkpoint:** a learning milestone over a video range. Progress is tracked, completion is recognized when the full eligible range is complete, and the established milestone/XP behavior is applied.
+
+**Saved range:** a reusable duration/range calculation saved from Library. It does not independently represent completion or award milestone XP.
+
+Organize the page so a new user understands the distinction without reading a long explanatory paragraph.
+
+Provide concise helper text, clear section titles, useful empty states, responsive fields, and consistent labels.
+
+Check whether a checkpoint should navigate to the relevant range in Library or Player; implement a convenient route only if it is consistent with current application navigation and stable entry identity.
+
+Add regression tests for parsing, naming, validation, custom names, existing checkpoint compatibility, completion boundaries, and saved-range separation.
+
+---
+
+# 4. Architectural transition: MongoDB as the authoritative user-data store
+
+The current LearnQuest system stores its authoritative learning state in browser IndexedDB. That must change.
+
+**MongoDB on the server must become the authoritative persistence layer for authenticated accounts.**
+
+Adding a users collection while leaving progress, Focus sessions, Revision notes, goals, checkpoints, and analytics inputs solely in IndexedDB is not sufficient.
+
+Inspect every stored key, store action, state transition, export/import operation, and consumer before changing the persistence boundary.
+
+## 4.1 Create an authenticated server data architecture
+
+Use the existing Express/TypeScript backend and its established conventions. Reuse existing abstractions where practical. Prefer the official MongoDB Node.js driver unless the current repository already has a justified data-access layer.
+
+Implement:
+
+- Centralized MongoDB connection lifecycle and error handling.
+- Validated configuration at startup.
+- Defined schemas or runtime validators for every request and stored entity.
+- Explicit repositories/services for user-owned data.
+- Appropriate unique, TTL, and compound indexes.
+- Bounded request sizes and collection growth.
+- Safe pagination for potentially large history and record collections.
+- Optimistic concurrency or version checks for conflicting updates.
+- Idempotency for operations that can be retried.
+- Robust handling of transient database disconnections.
+- Transactional or otherwise all-or-nothing behavior for multi-document operations where required.
+- Safe migrations for legacy identities and backup formats.
+
+Do not place the entire unbounded history of a user in one giant MongoDB document.
+
+Use appropriate collections for account identity, sessions, authentication challenges, playlists, progress records, Focus sessions, playback sessions and segments, checkpoints, saved ranges, modules, goals, achievements, XP ledger entries, Revision history, settings/preferences, and any other actual state discovered in the codebase.
+
+The exact collection design should reflect the actual domain model. Every user-owned record must have reliable ownership and identity.
+
+## 4.2 Enforce strict user isolation
+
+Derive the authenticated user ID from the validated server-side session, never from a client-supplied `userId` field.
+
+Every read, update, delete, list, export, restore, and bulk mutation must be scoped to the authenticated user.
+
+A user must never be able to access another account's information by guessing or modifying:
+
+- Playlist IDs.
+- Progress or entry IDs.
+- Focus session IDs.
+- Playback segment IDs.
+- Revision records.
+- Goal or checkpoint IDs.
+- Export or backup references.
+- Any other entity identifiers.
+
+Apply ownership checks at the repository/service boundary, not only in UI components.
+
+Never trust a client-provided ownership field, MongoDB query object, role, privilege, or account identifier.
+
+Add two-user isolation tests: create accounts A and B with distinct learning data, then prove that A cannot read, list, update, delete, export, or restore B's records and vice versa.
+
+## 4.3 Data migration from the existing local-first app
+
+Current users already have data stored in IndexedDB. Do not silently discard it or mix it into an unintended account.
+
+Implement an explicit one-time local-to-account migration workflow.
+
+1. A visitor can register/sign in.
+2. After authentication, detect whether legacy local LearnQuest data exists without exposing the underlying learning records on the login screen.
+3. If import is available, offer a clear migration dialog describing what will be transferred and how it will be handled.
+4. Allow the user to download a backup before migrating.
+5. Validate and stage the complete local dataset.
+6. Migrate playlists, stable identities, progress, annotations, Focus sessions, playback evidence, goals, checkpoints, modules, saved ranges, Revision history, preferences, achievements, XP, and all other persistent state.
+7. Preserve duplicate playlist occurrences and the stable entry identities introduced by prior remediation.
+8. Make retrying a failed migration idempotent; do not duplicate sessions, XP, or annotations.
+9. Mark migration complete only after the server confirms that all intended data has been stored successfully.
+10. If the migration fails partway through, retain the source data and offer recovery. Never claim complete migration after a partial upload.
+11. Show a clear summary of what was imported and any conflicts or items that could not be migrated.
+12. Do not overwrite existing cloud records silently. Define deterministic conflict rules and explain them.
+13. Offer a clear choice for retaining a local backup or removing legacy local data after the successful import has been verified and the user confirms the cleanup.
+
+The application must distinguish unclaimed legacy data from data already migrated to a specific account. A different user signing in on the same browser must never accidentally inherit another user's data.
+
+After account migration, authenticated data must be served from MongoDB. Do not silently fall back to a separate local-only account state when the network or backend fails.
+
+## 4.4 Local caching and sign-out
+
+Do not persist authenticated user records as unscoped browser data.
+
+Prefer in-memory caching for authenticated state. If any persistent client cache is truly necessary, namespace it by authenticated user, document the purpose, and clear it on logout/account switching.
+
+At logout:
+
+- Invalidate the server session.
+- Clear in-memory account data and query caches.
+- Clear any transient client data that could reveal the previous account.
+- Reset account-specific UI state.
+- Ensure the next user cannot see the previous account's profile, playlist, annotations, or statistics.
+
+Preferences that belong to an account must be stored on the server. A harmless device-only navigation preference may remain local if it is genuinely independent of user identity.
+
+Provide explicit loading, offline/unreachable, retry, authentication-expired, and save-failure states. Never report a cloud save as successful before the backend confirms it.
+
+Make the backend the source of truth for synchronization and conflict resolution. Document that full offline editing is not available unless a properly isolated offline architecture is deliberately implemented.
+
+## 4.5 Data export, deletion, and recovery
+
+Preserve the existing JSON backup concepts while moving the authoritative state to accounts.
+
+Provide an authenticated user export containing the user's learning data, with a supported schema version.
+
+Implement account deletion with clear confirmation and recent reauthentication. Remove the account's data and associated sessions consistently; do not leave accessible orphaned records.
+
+Ensure session revocation, backups, and delete behavior do not accidentally expose another user's data.
+
+---
+
+# 5. Authentication model and sign-up requirements
+
+Registration must be through Google authentication only. Do not provide a manual email-and-password registration form.
+
+The sign-up flow must derive the initial email address from the validated Google identity. The user must not type any arbitrary email address into the signup form.
+
+Google authentication must also remain an available sign-in method for existing linked accounts.
+
+## 5.1 Registration flow
+
+A new user selects:
+
+**Continue with Google**
+
+After the backend validates the Google authentication response:
+
+- Identify the Google account using its stable `sub` claim.
+- Require a verified email claim for initial account registration.
+- Check username/email uniqueness and account status safely.
+- Create an account in an onboarding-incomplete state.
+- Show a professional first-time setup flow for:
+  - Username.
+  - Display name.
+  - Setting an initial password.
+  - Relevant learning preferences, such as display timezone and session defaults.
+- Validate all values server-side.
+- Complete the profile only after required fields are valid and saved.
+- Then take the user to LearnQuest.
+
+Persist the new account and its preferences in MongoDB.
+
+If onboarding is interrupted, the authenticated user must be able to resume it safely.
+
+A Google identity must not create multiple accounts simply because its email changed. Use the provider's stable subject identifier.
+
+Do not automatically link a previously existing account to a different Google identity merely because the email strings match. Require a safe authenticated account-linking flow if linking is ever supported.
+
+Google email verification reduces disposable-account abuse but does not prove that an email address will remain permanent. If a disposable-domain policy is desired, make it an explicit server-side policy and do not claim absolute prevention.
+
+## 5.2 Sign-in flow
+
+Provide two clear paths:
+
+1. **Continue with Google** for an existing linked account.
+2. **Username or email + password**.
+
+The identifier input must accept either the registered username or registered email.
+
+Normalize usernames and emails consistently for lookup. Preserve the intended display form while preventing case-based duplicate accounts.
+
+Do not reveal whether a particular email or username exists through error messages, password reset responses, or timing differences.
+
+A successful login must rotate/regenerate the session identifier. A failed login must not reveal credentials or tokens in logs.
+
+Require the first-time password setup described above for newly created accounts if password login is part of the registration experience. Google login remains available.
+
+## 5.3 OAuth/OIDC security
+
+Use a standard, maintained Google OpenID Connect flow appropriate to this architecture.
+
+Implement and verify:
+
+- State parameter validation.
+- Nonce validation.
+- PKCE where applicable to the chosen authorization-code flow.
+- Exact redirect URI validation.
+- Signature verification of ID tokens.
+- Issuer, audience, expiry, and other required claim checks.
+- Verified-email handling.
+- Stable `sub` identity.
+- Protection against replay, callback forgery, and account-linking mistakes.
+- Single-use OAuth state and safe error handling.
+- No OAuth access token, refresh token, client secret, or session credential written to localStorage or exposed in logs.
+
+Do not accept a client-supplied email/username as proof of identity.
+
+---
+
+# 6. Password and session security
+
+Use current maintained libraries and established security controls; do not design a custom cryptographic or session protocol.
+
+## 6.1 Password storage and changes
+
+Use Argon2id for password hashing where supported by the deployment runtime and maintained library choice. Use a strong salted, versioned hash configuration.
+
+Never store plaintext passwords or reversibly encrypted passwords. Do not use a single fast SHA hash for password storage.
+
+Validate passwords server-side, enforce sensible length limits, support password managers and paste, and avoid unnecessary composition rules that encourage weak patterns.
+
+Provide authenticated password change:
+
+- Require recent authentication or the current password.
+- Verify the current credential when applicable.
+- Store only the new password hash.
+- Invalidate or rotate sessions as appropriate.
+- Notify the account email of a security-sensitive password change.
+- Never log the submitted password.
+
+## 6.2 Server-side sessions
+
+Use server-side sessions stored in MongoDB or another deliberate server-side session store. Do not store the full session object in a client-readable cookie.
+
+Do not store JWTs, refresh tokens, passwords, or session credentials in localStorage/sessionStorage.
+
+Use a high-entropy session identifier and a production cookie with the following properties where the deployment topology permits:
+
+- `HttpOnly`.
+- `Secure` in production.
+- Explicit `SameSite`.
+- A host-only cookie with `Path=/`.
+- A non-revealing cookie name; use a `__Host-` prefix when its restrictions can be satisfied.
+- Server-enforced absolute and idle expiry.
+- Session invalidation on logout, password reset, and other appropriate security events.
+
+Regenerate session IDs after login, Google authentication, onboarding completion, and privilege-sensitive changes.
+
+Implement:
+
+- Logout that invalidates the server session as well as clearing the cookie.
+- Logout all sessions.
+- Protection against session fixation.
+- Session expiry and cleanup.
+- Session revocation after password reset.
+- Recent reauthentication for sensitive account changes.
+- `Cache-Control: no-store` for sensitive authentication responses.
+- Appropriate protection against CSRF on state-changing endpoints.
+
+### Cross-origin deployment
+
+Inspect the real frontend/backend deployment architecture before choosing cookie settings.
+
+Do not silently rely on cross-site third-party cookies that major browsers may block. Prefer a same-site deployment/custom-domain arrangement or a properly configured same-origin API proxy if the current hosting configuration permits it.
+
+If separate cross-site frontend and API origins must be used, explicitly evaluate credentialed CORS, cookie requirements, CSRF defenses, Google OAuth callbacks, and modern browser restrictions. Document and test the chosen approach rather than assuming the cookies will work.
+
+Never use wildcard credentialed CORS. Never trust the `Origin` or forwarded-IP headers without an appropriate validation/trust policy.
+
+## 6.3 CSRF and request security
+
+Use a well-understood CSRF defense for state-changing cookie-authenticated requests. Enforce an exact allowed origin and a server-validated CSRF token where appropriate.
+
+SameSite is defense in depth, not the sole CSRF control.
+
+Validate content type, request size, schema, ownership, and method semantics on the server. Do not perform state changes via GET requests.
+
+Use Helmet and an appropriate production security-header policy without breaking required Vite assets, Google authentication, YouTube embeds, or the API.
+
+Evaluate a real production Content-Security-Policy configuration and document what still needs browser testing. Do not blindly ship a restrictive policy that breaks the product.
+
+---
+
+# 7. Brevo transactional email and six-digit OTP
+
+Use the Brevo transactional email API for password-reset OTPs and new-email verification.
+
+Read the official API documentation:
+https://developers.brevo.com/docs/send-a-transactional-email
+
+Implement a reusable email service with a professional LearnQuest HTML email template and a plain-text alternative.
+
+The emails should include:
+
+- LearnQuest branding.
+- Clear subject and heading.
+- The six-digit code.
+- A clear expiration time.
+- A warning never to share the code.
+- A statement that the user can ignore the email if they did not request the action.
+- Responsive layout and inline styles suitable for email clients.
+- No unnecessary tracking or external asset dependency.
+- Safe escaping of all dynamic values.
+- Both HTML and plain-text message content.
+
+Use the Brevo API key only on the backend. Never expose it in the frontend, build artifacts, error messages, or logs.
+
+Handle Brevo errors, timeouts, and rate limits safely. Do not reveal OTP values through debugging messages.
+
+## 7.1 OTP generation and storage
+
+Use cryptographically secure randomness such as the appropriate Node.js crypto API. Do not use `Math.random()`.
+
+For each challenge:
+
+- Generate a six-digit numeric OTP using a cryptographically secure generator.
+- Store only a keyed digest/HMAC or similarly secure verifier, not the raw code.
+- Bind the challenge to the user, purpose, target email where applicable, and expiry.
+- Use a short expiry, such as 10 minutes.
+- Limit incorrect attempts, such as five attempts per challenge.
+- Apply resend cooldowns and per-account/IP rate limiting.
+- Make codes single-use and invalidate superseded challenges.
+- Prevent an OTP issued for email change from being accepted for password reset, or vice versa.
+- Use constant-time comparison for stored digest verification where appropriate.
+- Consume the code atomically so concurrent requests cannot reuse it.
+- Ensure expired/used challenges cannot succeed after retries or server restarts.
+- Never store a raw OTP in an audit record or log.
+
+Set concrete limits in validated configuration or well-defined constants, and cover them with tests.
+
+## 7.2 Forgot-password flow
+
+Implement an accessible **Forgot password?** flow.
+
+1. User enters their registered username or email.
+2. The response is generic and does not disclose whether an account exists.
+3. If an eligible account exists, send its registered email a six-digit OTP using Brevo.
+4. The user enters the OTP.
+5. The backend validates its purpose, expiry, attempt count, target account, and single-use state.
+6. After successful verification, permit the user to set a new password.
+7. Revoke existing sessions as appropriate.
+8. Notify the account holder that the password was reset.
+
+Do not let a browser decide that an OTP is valid. All verification and password changes must occur server-side.
+
+Do not issue a password-reset token merely because the client returned a previously entered email or username.
+
+## 7.3 Email-change flow
+
+In Account Settings:
+
+1. The authenticated user requests an email change.
+2. Require recent reauthentication where appropriate.
+3. Validate and normalize the proposed new email.
+4. Verify that it is available for the account.
+5. Send a six-digit OTP to the new address.
+6. Keep the old address active until successful verification.
+7. Atomically verify the challenge and update the account email.
+8. Notify the old email about the change.
+9. Invalidate stale challenges and rotate/revoke sessions as appropriate.
+
+The Google identity remains linked by its stable provider subject; changing LearnQuest's account email must not break Google login or silently replace the linked Google identity.
+
+Do not claim success until verification and the database update have completed.
+
+---
+
+# 8. MongoDB account and learning-data schema
+
+Design and document schemas consistent with the actual domain model.
+
+At minimum, account records should support:
+
+- Stable user ID.
+- Google provider subject.
+- Verified current email and normalized lookup value.
+- Unique normalized username.
+- Display name and profile settings.
+- Password hash and hash/version metadata.
+- Onboarding completion status.
+- Account lifecycle timestamps.
+- Security-sensitive change timestamps and safe audit metadata.
+- Appropriate disabled/deletion state where needed.
+
+Use unique indexes for identities and normalized account fields.
+
+Use server-side session storage with expiry and an appropriate TTL index. Use a separate, bounded OTP-challenge model with expiry and atomic consumption.
+
+Every learning-data document must be owned by an authenticated user and validated for that ownership.
+
+Preserve the stable playlist-entry identity model and backwards-compatible domain rules. Do not reintroduce position-only completion identity.
+
+Use indexes appropriate to user-scoped queries and common time-range lookups. Use schema and request validation so invalid numbers, dates, IDs, missing ownership, and malformed records cannot corrupt data.
+
+Do not place raw password-reset codes, passwords, OAuth tokens, or session secrets in the main user document.
+
+Do not store data in globally shared cache entries if the data is private to a user. Public YouTube metadata may retain a safe shared cache keyed by playlist identity because it is not user-owned; learning progress and private records must be scoped to the user.
+
+---
+
+# 9. Complete API and persistence migration
+
+Do not only add `/auth` routes.
+
+Trace every existing frontend state action and make it work through the authenticated API and MongoDB.
+
+Implement or refactor the appropriate endpoints/repositories for:
+
+- Authentication and account profile.
+- Playlist list/add/refresh/archive/remove as supported.
+- Stable-entry progress and annotations.
+- Revision queue, all-lessons view, and review history.
+- Focus sessions and timer notes/corrections.
+- Player-observed playback segments and session records.
+- Checkpoints and saved ranges.
+- Modules and queue.
+- Goals, achievements, and XP.
+- Settings and preferences.
+- History and Analytics inputs.
+- JSON export/backup and safe restore.
+- Account export and deletion.
+- Any other persisted user-owned state found during source inspection.
+
+Preserve the distinction between metadata fetched from public YouTube APIs and private user records.
+
+Use authenticated request middleware for all account-owned API resources. Build server-side ownership checks into the actual queries.
+
+The frontend must not continue updating only IndexedDB while pretending the data was synchronized. Save, delete, restore, refresh, and edit operations must have honest loading/error/success states.
+
+Choose a consistent persistence strategy for the app store. Prefer a server-backed repository layer that isolates UI components from transport details, rather than adding independent fetch logic to every component.
+
+If a change requires a long-running request, use cancellation and prevent stale requests from overwriting a newer account/playlist selection.
+
+Test switching accounts in the same browser: no state from the previous account may remain visible after logout or account switch.
+
+Do not silently discard or merge concurrent updates. Define version/conflict handling and retry behavior.
+
+---
+
+# 10. Account UI and profile layout
+
+The account UI must be professional and integrated with the existing dark/glass-like design system.
+
+**Do not put the user's email, username, avatar, or account details in the left sidebar.**
+
+Keep the existing LearnQuest branding, active playlist selector, navigation groups, and API/service status where they currently belong.
+
+Instead, create a compact global account control at the **top-right of the main application header**, similar to modern developer applications.
+
+If the current application lacks a global top bar, introduce a compact responsive top bar without disrupting existing navigation or producing duplicated headers on each tab.
+
+The top-right control should use an avatar/initials and a dropdown menu with clear entries such as:
+
+- Profile.
+- Account settings.
+- Security and active sessions.
+- Export account data.
+- Sign out.
+
+Only include entries that are actually implemented.
+
+### Profile
+
+Allow appropriate profile fields such as username and display name to be edited. Validate username uniqueness on the server and handle conflicts without losing the user's input.
+
+### Account settings
+
+Provide clear sections for:
+
+- Profile information.
+- Current verified email.
+- Password setup/change.
+- Email change with OTP verification.
+- Learning preferences, such as timezone and session defaults.
+- Active sessions and sign-out-all functionality.
+- Account/data export.
+- Account deletion with safe confirmation and reauthentication.
+
+Do not ask users to re-enter their email at sign-up. Their initial email comes from the validated Google identity.
+
+Display the email only in the profile/account UI, not in the sidebar.
+
+### Auth screens
+
+Create responsive, accessible login, Google signup, initial profile/password setup, forgot-password OTP, new-password, email-change OTP, and error states.
+
+Use one consistent visual system. Support password managers, keyboard operation, readable validation, loading states, resend countdowns, and useful recovery messages.
+
+Avoid revealing whether an email/username is registered.
+
+---
+
+# 11. Node.js runtime and security hardening
+
+The previous repository uses Node.js and Express, not PHP.
+
+As of October 27, 2026, the official Node.js security release dated October 21, 2026, lists patched releases including Node 24.22.1:
+https://nodejs.org/en/blog/vulnerability/october-2026-security-releases
+
+Use the latest appropriate patched Node 24 LTS release available at implementation time. At minimum, do not leave the application pinned to versions earlier than the October 21 security fix, including Node 24.11.0 or 24.21.0.
+
+Inspect:
+
+- `backend/package.json` and its `engines` field.
+- Root and backend runtime/version files.
+- `render.yaml`.
+- Any Vercel configuration.
+- Existing runtime environment settings documented in the repository.
+- Lockfiles and dependency-audit output.
+
+Add or update `backend/.node-version` when compatible with the existing Render root-directory configuration, and declare a compatible bounded Node 24 runtime range in `backend/package.json`.
+
+Render permits `NODE_VERSION` to override `.node-version`; the deployment documentation must explicitly note that an older Dashboard override can defeat the repository pin:
+https://render.com/docs/node-version
+
+Do not assume that changing repository files changes the deployed Node version automatically. Do not deploy the application or change production credentials in this task.
+
+Inspect the actual Express/Node dependency tree. Update vulnerable production dependencies with the smallest compatible fix where possible. Do not blindly run `npm audit fix --force` or upgrade major versions without an explicit compatibility analysis.
+
+Re-run production and full dependency audits after changes.
+
+Keep Helmet and appropriate HTTP security headers. Evaluate CSP for both frontend and backend with the actual Google auth, API, and YouTube requirements. Protect the Google OAuth callback and all sensitive API routes.
+
+Enforce body-size limits, input validation, rate limits, safe error responses, and robust trust-proxy configuration.
+
+No PHP runtime should be added unless inspection proves that a PHP service exists in this project.
+
+---
+
+# 12. Environment and deployment configuration
+
+Inspect the current repository deployment topology before choosing configuration names and defaults.
+
+Update `backend/.env.example` and appropriate deployment documentation with the environment variables actually needed, potentially including:
+
+- `MONGODB_URI`
+- `MONGODB_DB_NAME`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+- `BREVO_API_KEY`
+- `BREVO_SENDER_EMAIL`
+- `BREVO_SENDER_NAME`
+- `SESSION_SECRET`
+- `APP_ORIGIN`
+- `API_ORIGIN`
+- `TRUST_PROXY_HOPS`
+- A pinned Node runtime version where appropriate
+
+Use exact names consistently throughout code, docs, and tests. Avoid duplicate configuration keys for the same purpose.
+
+Do not create real secrets or placeholder credentials that could accidentally be used as production values. Do not print the existing `.env` values.
+
+A real `.env` is not required just to implement the feature. Update `.env.example` with clearly documented blank/placeholder values and explain the setup required for local testing and deployment.
+
+When required secrets are missing, the auth service must fail closed and give an actionable setup/configuration status. No production bypass, fake login, predictable test OTP, or hard-coded credentials may be permitted.
+
+Unit tests may use explicit test-only adapters and fixed fixtures only in test mode; ensure they cannot be enabled in production.
+
+Document the Google Cloud Console configuration:
+
+- Approved OAuth origin(s).
+- Exact redirect/callback URI(s).
+- Authorized client configuration.
+- Required credential names.
+- Session/cookie topology.
+
+Document Brevo sender verification and API-key configuration, and MongoDB Atlas database/user access requirements.
+
+Do not claim that Google, Brevo, or MongoDB has been fully configured remotely if no real credentials and external service access were available.
+
+---
+
+# 13. Security acceptance requirements
+
+Treat account ownership and session handling as high-risk code.
+
+Test for:
+
+- User A cannot read or mutate User B's records.
+- Session IDs rotate on authentication and cannot be reused after logout/revocation.
+- Passwords are never stored in plaintext.
+- Google identity cannot be forged by supplying an email from the client.
+- OAuth state, nonce, callback, and token validations reject invalid cases.
+- Signup and login races cannot create duplicate users.
+- Email change cannot be completed without the new-address OTP.
+- Password reset cannot be completed without a valid, unexpired, unused code.
+- Expired, superseded, wrong-purpose, already-used, and brute-forced OTPs are rejected.
+- Password reset invalidates relevant sessions.
+- Login, signup, OTP request, resend, verification, and recovery endpoints have appropriate rate limits.
+- Responses avoid account enumeration.
+- Session cookies use the intended secure properties in production.
+- CSRF controls cover relevant state-changing operations.
+- CORS allows only the exact configured origins with appropriate credentials.
+- Missing MongoDB/Google/Brevo configuration cannot cause an insecure fallback.
+- Request validation prevents mass assignment and client-supplied owner changes.
+- Sessions, OTPs, and account deletion follow correct expiry and revocation semantics.
+- No secrets, OTPs, passwords, tokens, or private learning records are exposed in ordinary logs.
+- An account switch cannot display a previous user's private state.
+
+Run security-focused unit/integration tests and use a test database or isolated mocks. Do not use actual user data.
+
+---
+
+# 14. Reliability, observability, and performance
+
+Do not optimize only for a passing build.
+
+Make sure:
+
+- Database connections are reused safely rather than opened per request.
+- Failures are bounded with appropriate timeouts.
+- Session and OTP collections have appropriate expiry cleanup.
+- Database indexes support common user-scoped queries.
+- Large history lists are paginated.
+- Bulk import/export has safe limits and transparent progress/failure behavior.
+- Authentication failures and service outages produce useful user-facing states.
+- Private request bodies and secret values are excluded from logs.
+- Public YouTube caching continues to work correctly.
+- Failed save/restore/migration operations never appear successful.
+- The app does not silently fall back to local-only authenticated data.
+- Rate limiting cannot accidentally become global due to misconfigured proxy trust.
+- Critical actions are idempotent where retries could duplicate data.
+
+Use request IDs and safe structured error logging if consistent with the existing backend.
+
+---
+
+# 15. Implementation phases
+
+Work through these phases autonomously; do not stop after producing this plan.
+
+## Phase A — Baseline and design
+
+Review the existing implementation and audit reports. Produce an internal task checklist, inspect the persistence state model, identify all user-data paths, and establish test results.
+
+Resolve the deployment/cookie architecture before building authentication into the frontend.
+
+## Phase B — Backend foundation
+
+Implement MongoDB connection/configuration, user and session storage, validated repositories, ownership middleware, and foundational tests.
+
+## Phase C — Authentication
+
+Implement Google registration/login, initial username/password/profile setup, username/email/password login, secure server-side sessions, session revocation, and auth configuration validation.
+
+## Phase D — OTP and email
+
+Implement Brevo API integration, responsive HTML/plain-text messages, secure OTP challenges, forgot-password flow, email-change flow, retry/rate-limit behavior, and tests.
+
+## Phase E — Migrate all app data to accounts
+
+Implement the authenticated persistence layer for all learning data. Update every feature so authenticated user data is stored on the server and cannot leak across users.
+
+Add the legacy IndexedDB migration flow, idempotency, conflict handling, account-scoped state/cache clearing, and failure recovery.
+
+Do not declare the migration complete if some feature still writes authoritative state only to IndexedDB.
+
+## Phase F — Frontend account UX
+
+Add the top-right account control and dropdown. Implement profile, account settings, password/email changes, security/session controls, data export, and account deletion.
+
+Keep account details out of the sidebar.
+
+## Phase G — Checkpoint redesign and existing functionality
+
+Replace redundant Label/Start/End entry with a single required Video range field such as `1-8`, automatically derive the display label, and make custom naming optional.
+
+Separate checkpoint milestones from saved duration ranges. Re-test the Player learning-record editor, Revision annotations, Focus, History, Efficiency, Goals, and other existing modules against the cloud persistence layer.
+
+## Phase H — Runtime/dependency hardening
+
+Pin an appropriate patched Node 24 LTS version; ensure Render's version configuration cannot silently override it with an unpatched release. Update dependencies where safely justified and add deployment documentation.
+
+## Phase I — End-to-end regression and final report
+
+Test the real repository behavior through all available safe checks. Build a comprehensive report and a concise terminal summary.
+
+---
+
+# 16. Required verification
+
+Use the current available tooling and baseline tests.
+
+At minimum, verify:
+
+- Frontend tests, typecheck, lint, and production build.
+- Backend tests, typecheck, lint, and production build.
+- MongoDB repository behavior and user isolation.
+- Google auth flow and rejected-invalid-token cases using test adapters/fixtures.
+- Password hashing and credential login.
+- OTP purpose, expiry, rate limits, resend, single use, and reset/email-change behavior.
+- Session rotation, logout, session revocation, and cookie configuration.
+- CSRF/CORS/session configuration.
+- Migration of legacy local data into the correct user.
+- No accidental local-to-cloud cross-user import.
+- All feature state persists on the server for the authenticated owner.
+- Logout and account switching clear stale account-specific UI/cache data.
+- Checkpoint range parsing, auto-labeling, editing, and saved-range distinction.
+- Player learning records, Revision lifecycle, Focus, History, Efficiency, and timezone behavior still work.
+- Dependency audits and Node runtime configuration.
+- Backup/export and account deletion integrity.
+
+Use mocks where credentials are unavailable, but label mocked tests honestly. If a MongoDB test replica set or live external service is unavailable, provide accurate mocked/unit coverage and document what needs a real integration test.
+
+If Playwright or a real browser is available, use it for critical auth and responsive flows. Otherwise, report the limitation and provide a concise manual acceptance plan. Do not claim pixel-level, screen-reader, or live OAuth verification without performing it.
+
+Do not weaken existing tests. Fix genuine regressions and document any issue outside the achievable scope.
+
+---
+
+# 17. Required implementation report
+
+Create:
+
+`docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md`
+
+If that file already exists, preserve it and use a unique suffix.
+
+The report must include:
+
+1. Executive summary and major architecture decisions.
+2. Baseline branch/HEAD and pre-existing changes.
+3. Current persistence architecture and the new MongoDB schema.
+4. All user-owned resources migrated and any intentionally deferred resources.
+5. Authentication flows, identity-linking rules, session architecture, cookie/CORS/CSRF strategy, and security controls.
+6. Password hashing and OTP implementation details without secrets.
+7. Brevo email-template and Google OAuth integration status.
+8. Legacy local-data migration, idempotency, conflicts, backup, and recovery rules.
+9. User isolation tests with concrete pass/fail outcomes.
+10. Account UI/profile/settings behavior.
+11. Checkpoint form redesign and tests.
+12. Prior LQ findings that remain fixed, regressions discovered, and any new findings.
+13. Files changed and dependency updates.
+14. Runtime version pinning, deployment configuration, security advisories, and audit results.
+15. Exact test, lint, typecheck, build, migration, and integration outcomes.
+16. Every unverified external setup item and manual action still required.
+17. Environment-file changes: exact files and variables touched, without displaying any secret values.
+18. Final Git status; no commit or push.
+19. A practical staging and manual acceptance checklist.
+
+Separate verified behavior from assumed behavior, mocked tests from live integrations, and implemented code from external setup still needed.
+
+If any endpoint, feature, or data collection still lacks user isolation or cloud persistence, state it explicitly. Do not claim the migration is complete if the implementation is partial.
+
+---
+
+# Final instruction
+
+Implement the work in the repository, run the validation checks, and create the Markdown report.
+
+Do not commit or push. Do not overwrite prior reports or existing user changes. Do not create a real `.env` file unless there is a genuine necessity and valid credentials are available.
+
+Do not claim the app is impossible to hack; state the actual protections and remaining limitations.
+
+
+# ADDENDUM — Explicit Backend Environment Setup and Playlist Removal
+
+This addendum extends the original LearnQuest multi-user implementation specification. It is mandatory and overrides earlier conflicting instructions about environment-file creation where explicitly stated below.
+
+## A. Backend environment file: create, configure, and document it
+
+I explicitly authorize you to create or update the backend environment files required for this implementation.
+
+### A1. Create or update `backend/.env`
+
+Inspect the existing environment configuration first.
+
+- If `backend/.env` already exists, preserve all its existing settings and secrets. Add missing variables without overwriting existing non-empty values.
+- If it does not exist, create it with suitable local-development defaults and the required environment-variable names.
+- Ensure `.env` is git-ignored. Never force-add it to Git.
+- Keep `backend/.env.example` synchronized with the actual configuration interface, using descriptive placeholders rather than real secrets.
+- Do not print the contents or secret values of `.env`.
+- Do not copy real values into documentation, reports, screenshots, or logs.
+- Do not create a second conflicting source of configuration.
+- Ensure missing required credentials fail closed: there must be no insecure authentication fallback or fake production mode.
+
+### A2. Required configuration
+
+Use these variable names unless an existing, clearly justified convention must be preserved. If a name changes, document the exact final name and reason.
+
+| Environment variable | Required value |
+|---|---|
+| `PORT` | Local API port, normally `3001`. Preserve existing working settings. |
+| `NODE_ENV` | Appropriate local/development or production environment. |
+| `APP_ORIGIN` | Actual frontend origin, normally `http://localhost:5173` locally. |
+| `API_ORIGIN` | Actual backend origin, normally `http://localhost:3001` locally. |
+| `MONGODB_URI` | Real MongoDB Atlas or authorized MongoDB connection URI. |
+| `MONGODB_DB_NAME` | A suitable database name, such as `learnquest`. |
+| `GOOGLE_CLIENT_ID` | OAuth client ID obtained from Google Cloud Console. |
+| `GOOGLE_CLIENT_SECRET` | OAuth client secret obtained from Google Cloud Console. |
+| `GOOGLE_REDIRECT_URI` | Exact callback URI implemented by the backend and registered with Google. |
+| `BREVO_API_KEY` | Real Brevo transactional-email API key. |
+| `BREVO_SENDER_EMAIL` | Verified sender email configured in Brevo. |
+| `BREVO_SENDER_NAME` | Human-readable sender name, such as `LearnQuest`. |
+| `SESSION_SECRET` | A high-entropy secret generated securely for signing/session-related operations where required by the chosen implementation. |
+| `OTP_HMAC_SECRET` | A separate cryptographically random secret for keyed OTP-verifier digests. |
+| `TRUST_PROXY_HOPS` | Correct value for the actual local or production proxy topology. Do not blindly trust forwarded IP headers. |
+
+Preserve and continue validating existing YouTube API configuration, such as `YOUTUBE_API_KEY`, and any other currently required environment variables. Do not remove an existing variable merely because it is not in this list.
+
+Inspect the actual OAuth callback path and deployed hosting architecture before selecting redirect URIs, cookie behavior, or proxy settings. Do not assume the example localhost origins will work unchanged in production.
+
+### A3. Generate application secrets, but never invent provider credentials
+
+For `SESSION_SECRET` and `OTP_HMAC_SECRET`:
+
+- If the existing values are valid, preserve them.
+- If they are missing or empty, generate strong independent secrets using Node.js `crypto.randomBytes` or an equivalent cryptographically secure generator.
+- Never derive them from a username, timestamp, repository name, or predictable string.
+- Do not put the real secret values in `.env.example`.
+- Do not print the generated values or include them in the report.
+
+For MongoDB, Google OAuth, and Brevo, you cannot manufacture valid credentials for external services. Do not invent them.
+
+Create the appropriate variable slots and document exactly how I must obtain and supply each real value. Keep placeholders out of production configuration.
+
+The application may start in a clearly identified setup-required state when external integration credentials are absent, provided that sensitive endpoints remain securely disabled. Authentication and account data access must never succeed through a fake or bypass implementation.
+
+### A4. Validate environment configuration
+
+At startup, validate required variables according to the functionality being enabled.
+
+Reject malformed database URIs, incorrect redirect URI formats, invalid ports, malformed proxy-hop values, and insecure production cookie configuration.
+
+Do not log secrets or full connection strings.
+
+Test the behavior when each external credential is absent. Provide actionable setup errors without printing the missing secret's value.
+
+Ensure MongoDB credentials have least-privilege access, and document the required network access. Do not commit real database credentials.
+
+### A5. Final environment setup report
+
+In the final Markdown implementation report, include:
+
+1. The exact variable names added to `backend/.env`.
+2. The exact variable names added or updated in `backend/.env.example`.
+3. Which local application secrets were securely generated, without disclosing their values.
+4. Which existing variables were preserved.
+5. Which external credential values I still need to provide.
+6. Where to obtain each value:
+   - MongoDB Atlas connection details.
+   - Google OAuth client credentials and authorized redirect URI.
+   - Brevo API key and verified sender email.
+7. Which credentials are configured, which are missing, and which integrations were actually tested.
+8. Confirmation that `.env` remains git-ignored and that no secret was exposed.
+
+Also state this information concisely in the final terminal summary. If no external credentials were available, say so explicitly rather than claiming the integrations are live.
+
+---
+
+## B. Add two-choice playlist removal to Dashboard
+
+LearnQuest currently lacks a convenient way to remove an added playlist. Implement playlist management directly from the Dashboard, with a clear per-playlist action.
+
+If the Dashboard does not have a suitable playlist card/list, add a well-designed playlist management section without disrupting the current dashboard layout.
+
+Each playlist must have a clear **Manage / Remove** action. The action must be scoped to the authenticated account and must never remove another user's data.
+
+When the user selects Remove, present two visually distinct choices with explicit consequences.
+
+### Option 1 — Remove from my dashboard
+
+Recommended label:
+
+**Remove from dashboard (keep my learning data)**
+
+Behavior:
+
+- Archive or hide the playlist from the active Dashboard list and normal active-playlist selector.
+- Preserve its learning progress, annotations, notes, confidence, revision records, Focus history, playback history, checkpoints, saved ranges, modules, scoped goals, achievements, and attributable history.
+- Do not delete any user-owned records.
+- Provide an **Archived playlists** view or equally discoverable restoration workflow.
+- Allow the user to restore the playlist and its preserved learning records without duplicate entries or recreated XP.
+- Exclude archived playlists from default active-dashboard totals where appropriate, and clearly disclose this behavior.
+- Keep archived data accessible through its designated archive workflow. Do not silently mix archived and active records.
+- Never interpret archiving as permanent deletion.
+
+Use a consistent archived status in the data model and API rather than merely hiding a client-side card.
+
+### Option 2 — Permanently remove the playlist and its associated data
+
+Recommended label:
+
+**Permanently delete playlist and all its learning data**
+
+This option is destructive and must be presented with a strong, explicit warning before confirmation.
+
+The confirmation dialog must explain that LearnQuest will permanently remove the selected playlist and its associated account-owned records, including applicable:
+
+- Playlist snapshot and stored playlist metadata.
+- Progress/completion records and stable-entry identities.
+- Learning-record annotations, notes, confidence, concepts, questions, revision dates, and review history.
+- Playback sessions, timeline segments, and associated playback evidence.
+- Focus sessions and Focus-related notes/corrections explicitly associated with the playlist.
+- Checkpoints and associated completion state.
+- Saved duration ranges and modules.
+- Playlist-specific queue records.
+- Goals scoped specifically to that playlist.
+- XP ledger entries, achievements, and other side effects attributable exclusively to the removed playlist, where the data model supports a reliable association.
+- Account-owned caches and other playlist-specific application records.
+
+If any item cannot reliably be attributed to this playlist, do not delete it merely because its data happens to contain a similar title or numeric position. Trace ownership and stable identity before deleting it.
+
+The deletion must also:
+
+- Recalculate or invalidate derived account totals that depend on removed records.
+- Preserve unrelated playlists, their progress, and their associated records.
+- Preserve genuine account-wide history, preferences, and goals that are not exclusively tied to this playlist, recalculating their values from the remaining data as needed.
+- Clear the deleted playlist as the active selection and select a valid remaining playlist or an empty state.
+- Remove the playlist from the Dashboard, selectors, search results, and ordinary account views.
+- Prevent stale cached or in-memory data from bringing the deleted playlist back.
+- Be implemented on the backend against MongoDB and the authenticated user's ownership scope, not through a local-only deletion.
+- Never delete or change the actual public playlist from YouTube or remove data belonging to a different LearnQuest account.
+- Avoid deleting shared public YouTube metadata caches that are safely used by other users; invalidate only what is appropriate and necessary.
+
+### Strong confirmation and transaction safety
+
+Before deletion:
+
+1. Display the selected playlist's actual title and identity.
+2. Show the scope of the operation and, where reliably available, an accurate summary of associated records that will be removed.
+3. State clearly that the deletion cannot be undone through LearnQuest.
+4. Require a separate final confirmation. Consider requiring the user to type the playlist title or a clear confirmation word.
+5. Provide Cancel as an equally understandable escape path.
+
+No mutation may occur merely by opening the dialog, changing the selected option, or pressing Cancel.
+
+On confirmation, execute a safely scoped backend deletion plan. Use a MongoDB transaction when the deployment supports it and the required records can be deleted transactionally. Otherwise implement a documented, retry-safe deletion protocol with explicit progress/state so the user is not told that everything is deleted after a partial failure.
+
+Do not silently stop halfway, leave orphaned records, or report success before the deletion completes. Ensure retrying a failed operation cannot delete unrelated records or duplicate side effects.
+
+The user interface must show a precise success or failure message, and its lists/totals must refresh from authoritative server state.
+
+### Archive and delete endpoints
+
+Design the API endpoints to match the existing backend routing conventions.
+
+For both actions:
+
+- Require a valid authenticated session.
+- Derive the owner from the authenticated server-side identity.
+- Validate the playlist ID.
+- Check ownership in every repository operation.
+- Return safe, consistent errors.
+- Prevent cross-user enumeration or mutation.
+- Handle duplicate requests idempotently.
+- Ensure an archive action cannot accidentally invoke permanent deletion.
+- Ensure a delete action cannot be triggered by a stale UI confirmation for a different playlist.
+
+### Required regression tests
+
+Add tests covering:
+
+1. Archive a playlist and confirm all associated data remains preserved.
+2. Restore an archived playlist and confirm there are no duplicate records or XP rewards.
+3. Archived playlists disappear from ordinary active lists and default active totals where intended.
+4. Permanently delete a playlist with populated progress, notes, sessions, segments, checkpoints, ranges, modules, goals, revision history, and XP.
+5. Confirm all exclusively attributable records are removed.
+6. Confirm unrelated playlists and their records remain intact.
+7. Confirm user-wide data is recalculated and not incorrectly deleted.
+8. Confirm deletion of the active playlist selects a valid fallback or empty state.
+9. Confirm Cancel or a dismissed dialog causes no mutation.
+10. Confirm the warning identifies the correct playlist and consequences.
+11. Confirm a retry after successful deletion is safe.
+12. Confirm a simulated database failure cannot be reported as a completed deletion.
+13. Confirm User A cannot archive or delete User B's playlist by supplying its ID.
+14. Confirm stale client state cannot resurrect deleted records after refresh or login.
+15. Confirm the Dashboard, selectors, Revision, History, Analytics, Efficiency, Focus, checkpoints, and all applicable views remain consistent afterward.
+
+Use isolated databases and fixtures. Never test destructive behavior against real user data.
+
+---
+
+## C. Preserve the original multi-user security architecture
+
+These additions do not weaken any of the original prompt's requirements.
+
+All learning records remain account-scoped and authoritative on MongoDB after migration.
+
+- Archive/delete operations must use server-side ownership checks.
+- A client-supplied `userId` is never proof of ownership.
+- No authenticated account may fall back silently to browser-only learning state.
+- Logout/account switching must clear stale account-specific UI caches.
+- The previous local-data migration, secure server-side sessions, Google OIDC validation, password hashing, Brevo OTP security, CSRF protection, secure cookies, and account-deletion protections remain mandatory.
+- Update the user manual and deployment documentation to describe archive versus permanent deletion and the complete environment setup process.
+
+## D. Final acceptance gate for this addendum
+
+Do not consider this addendum complete until:
+
+- The backend environment configuration and example file agree with actual code.
+- Local session/OTP secrets are generated safely if missing.
+- External credentials are explicitly identified as required or configured.
+- The Dashboard exposes both playlist removal choices.
+- Archive preserves data and supports recovery.
+- Permanent deletion removes all reliably attributable account-owned effects and no unrelated records.
+- All new tests pass, alongside applicable existing tests and quality gates.
+- The final report documents environment setup, deletion semantics, verification results, and remaining blockers.
+
+
+At the end, print only a concise terminal summary containing:
+
+- The report path.
+- The completed implementation areas.
+- Test/typecheck/lint/build status.
+- Production and full dependency audit results.
+- Whether any `.env` file was created or modified.
+- Which required configuration values are still missing.
+- Any security or multi-user isolation blocker.
+- Whether real-browser/external-service verification was performed.
+
+Keep the full report in Markdown, not in the terminal.

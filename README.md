@@ -3,8 +3,12 @@
 Turn any public YouTube playlist into a measurable learning journey: exact
 per-video duration math (never averages), an embedded player with
 verified-coverage tracking, focus sessions, modules, checkpoints, goals,
-revision scheduling, efficiency analytics, and an optional fictional Arena —
-all local-first, with your data staying in your browser.
+revision scheduling, efficiency analytics, and an optional fictional Arena.
+
+LearnQuest now has **authenticated multi-user accounts**: Google is the only
+registration path, password sign-in and OTP recovery are available afterwards,
+and learning data is stored server-side in MongoDB and scoped to the signed-in
+account. A local IndexedDB path remains for automated tests and development.
 
 > **New here?** Start the app in minutes below, then read the full user manual:
 > [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md).
@@ -17,47 +21,61 @@ all local-first, with your data staying in your browser.
   **verified** completion through watched coverage in the embedded player.
 - **Focus sessions** — a study timer with pause/resume, notes, and manual
   correction; only active seconds are recorded.
-- **Organization** - modules (your own chapters), checkpoints (range
-  milestones), saved ranges, and a revision workflow with confidence ratings,
-  persistent learning records, review history, and an all-lessons browser.
+- **Organization** — modules, checkpoints (one video-range field with an
+  automatic label), saved ranges, and a revision workflow with confidence
+  ratings, persistent learning records, review history, and an all-lessons
+  browser.
+- **Two-choice playlist removal** — **archive** keeps every record and can be
+  restored, while **permanent delete** removes only reliably attributable
+  account-owned records after typing the displayed title.
 - **Goals & motivation** — daily and flexible goals, streaks, XP, achievements.
 - **Efficiency analytics** — unique content ÷ focused study time, with
   aggregate-vs-daily semantics documented in the UI.
 - **Arena (optional, off by default)** — a clearly labeled fictional
   simulation that ranks average daily efficiency; never real people.
+- **Accounts** — Google-only registration, Argon2id password sign-in, Brevo
+  OTP password recovery, server-side sessions, account export and deletion.
 - **Reports** — versioned (v3) JSON backups, CSV exports, validated atomic restore.
 
 ## How it works
 
 ```text
 progressGameTracker/
-├── frontend/    # React + Vite + TS UI; owns ALL learning data (IndexedDB)
-├── backend/     # Node + Express proxy: YouTube Data API v3 → normalized metadata
+├── frontend/    # React + Vite + TS UI; account UI + learning data views
+├── backend/     # Node + Express: YouTube metadata, auth, accounts, MongoDB
+├── docs/        # user-facing setup docs
 ├── docs/audits/ # verification reports (acceptance + analytics + storage)
 ├── render.yaml  # backend deploy config (rootDir: backend)
 ├── README.md / HOW_TO_USE_LEARNQUEST.md
 ```
 
-- The **backend** only fetches and normalizes public playlist metadata
-  (original ISO 8601 durations). It keeps a bounded ephemeral cache
-  (TTL + 50-playlist LRU) and stores no user data.
+- The **backend** fetches and normalizes public playlist metadata, serves the
+  authenticated account API, and stores learning collections in MongoDB.
+  Password hashes use Argon2id; OTPs are HMAC-verified and single-use; sessions
+  are server-side and rotated on privilege changes.
 - The **frontend** parses durations and computes every total, percentage,
   goal, efficiency figure, and simulated score in one domain engine
-  (`frontend/src/domain`). Learning records persist in IndexedDB
-  (`learnquest-db`) in your browser.
-- The secret API key lives server-side only (`backend/.env`, never committed).
+  (`frontend/src/domain`). In production it defaults to cloud mode and never
+  silently falls back to browser-only state for an authenticated account.
+- Secrets live server-side only (`backend/.env`, never committed). Google,
+  Brevo, and MongoDB credentials are never sent to the browser.
 
 ## Technology
 
 Frontend: React 18, Vite 6, TypeScript, Tailwind CSS, Recharts, `idb`.
-Backend: Node.js, Express, `express-rate-limit`, `helmet`, `cors`, `dotenv`.
+Backend: Node.js 24 LTS, Express, MongoDB driver, `jose`, Argon2id
+(`@node-rs/argon2`), Zod, `express-rate-limit`, `helmet`, `cors`.
 Tests: Vitest, Supertest, Testing Library, fake-indexeddb.
 
 ## Requirements
 
-- **Node.js 20+** and **npm 9+** (`node --version`, `npm --version`).
-- A **YouTube Data API v3 key** for live playlist imports (or use JSON
-  snapshot import, which works fully offline).
+- **Node.js 24.22.1+ (24 LTS)** and **npm 9+** (`node --version`,
+  `npm --version`). `backend/.node-version` pins the patched version.
+- A **MongoDB** deployment (Atlas or self-hosted) for accounts and cloud data.
+- A **Google OAuth 2.0 / OIDC** web client for Google-only registration.
+- A **Brevo** account, API key, and verified sender for OTP email.
+- A **YouTube Data API v3 key** for live playlist imports (JSON snapshot
+  import works without it).
 
 ## Local setup
 
@@ -70,7 +88,9 @@ npm install
 cd ..\backend
 npm install
 
-# 2. Configure the backend key (see Configuration below)
+# 2. Configure backend/.env from backend/.env.example (see Configuration)
+#    Generate the two required secrets once:
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 # 3. Start both servers (two terminals)
 # Terminal A:
@@ -81,8 +101,16 @@ cd frontend
 npm run dev      # App on http://localhost:5173
 ```
 
-Open **http://localhost:5173**. Without a backend key, playlist-URL fetching
-reports the missing integration; JSON import (Reports) works fully offline.
+Open **http://localhost:5173**. With account services configured, the login
+screen offers **Continue with Google**; registration completes with a
+username, display name, and password. If required credentials are missing,
+the app shows a fail-closed setup screen instead of enabling a fake login.
+
+### External service setup
+
+Detailed step-by-step instructions (Google redirect URI, Brevo sender
+verification, MongoDB Atlas network access, Render/Vercel variables) are in
+[docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md).
 
 ## Configuration
 
@@ -90,13 +118,34 @@ Backend (`backend/.env` — create from `backend/.env.example`, never commit):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `YOUTUBE_API_KEY` | **Secret.** Server-side only | _(required for live imports)_ |
+| `NODE_ENV` | `development`, `test`, or `production` | `development` |
 | `PORT` | API port | `3001` |
-| `CORS_ORIGIN` | Allowed frontend origin(s) | `http://localhost:5173` |
+| `APP_ORIGIN` | Frontend origin used for cookies/CORS/links | `http://localhost:5173` |
+| `API_ORIGIN` | Backend origin; default Google redirect base | `http://localhost:3001` |
+| `CORS_ORIGIN` | Exact allowed browser origin(s), comma-separated | `http://localhost:5173` |
+| `TRUST_PROXY_HOPS` | Trusted reverse-proxy hops; `0` for direct traffic | `1` |
+| `YOUTUBE_API_KEY` | **Secret.** Server-side only | _(optional)_ |
 | `CACHE_TTL_SEC` | Metadata cache TTL | `600` |
 | `CACHE_MAX_ENTRIES` | Metadata cache size cap | `50` |
-| `RATE_LIMIT_PER_MIN` | Per-IP request limit | `30` |
-| `TRUST_PROXY_HOPS` | Trusted reverse-proxy hops; `0` for direct traffic | `1` |
+| `MONGODB_URI` | **Secret.** MongoDB connection string | _(required)_ |
+| `MONGODB_DB_NAME` | Database name | `learnquest` |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client ID | _(required)_ |
+| `GOOGLE_CLIENT_SECRET` | **Secret.** Google OAuth client secret | _(required)_ |
+| `GOOGLE_REDIRECT_URI` | Must end in `/api/auth/google/callback` | `${API_ORIGIN}/api/auth/google/callback` |
+| `BREVO_API_KEY` | **Secret.** Brevo transactional email key | _(required)_ |
+| `BREVO_SENDER_EMAIL` | Brevo-verified sender address | _(required)_ |
+| `BREVO_SENDER_NAME` | Sender display name | `LearnQuest` |
+| `SESSION_SECRET` | **Secret.** 32+ chars; generate, never reuse | _(required)_ |
+| `OTP_HMAC_SECRET` | **Secret.** 32+ chars; generate, never reuse | _(required)_ |
+| `SESSION_IDLE_HOURS` | Idle session lifetime | `168` |
+| `SESSION_ABSOLUTE_DAYS` | Absolute session lifetime | `30` |
+| `REAUTH_WINDOW_MIN` | Recent reauthentication window | `10` |
+| `OTP_TTL_MIN` | OTP lifetime | `10` |
+| `OTP_RESEND_SEC` | OTP resend cooldown | `60` |
+| `OTP_MAX_ATTEMPTS` | OTP verification attempts | `5` |
+| `AUTH_RATE_LIMIT_PER_MIN` | Auth endpoint limit per IP | `20` |
+| `OTP_RATE_LIMIT_PER_15MIN` | OTP request limit per IP | `8` |
+| `ACCOUNT_MAX_STATE_BYTES` | Import/export envelope cap | `8388608` |
 
 Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`):
 
@@ -104,17 +153,25 @@ Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`)
 |---|---|---|
 | `VITE_API_BASE_URL` | API origin prefix; empty = same-origin `/api` (dev proxy handles it) | _(empty)_ |
 
-Production on Vercel: set `VITE_API_BASE_URL` to the Render backend origin
-with **no trailing slash and no `/api` suffix**
-(e.g. `https://YOUR-RENDER-SERVICE.onrender.com` — your real hostname from
-the Render dashboard), on the **Production** environment, then **redeploy**
-(Vite embeds it at build time). The app also tolerates a trailing slash,
-and the status pill re-checks on tab focus after an outage or cold start.
+Production has two supported connection layouts; see
+[`docs/DEPLOYMENT_MULTIUSER.md`](./docs/DEPLOYMENT_MULTIUSER.md#6-cookie-safe-production-topology):
 
-Order of operations: copy `backend/.env.example` → `backend/.env`, paste the
-key, restart the backend, then confirm **Settings → Backend connection**
-reads "● Connected — API key configured" (or `GET /api/health` shows
-`"hasKey":true`).
+- **Same-origin `/api` proxy (recommended):** keep `VITE_API_BASE_URL` empty
+  and add a Vercel rewrite from `/api/*` to the Render service. The session
+  cookie stays first-party.
+- **Same-site custom domains:** serve the app at `app.example.com` and the API
+  at `api.example.com`, then set `VITE_API_BASE_URL=https://api.example.com`
+  (no trailing slash, no `/api` suffix) on Vercel **Production** and redeploy.
+
+Do not point a `*.vercel.app` frontend directly at `*.onrender.com`. That is a
+cross-site request, and the `SameSite=Lax` session cookie is not sent. The app
+tolerates a trailing slash, and the status pill re-checks on tab focus after an
+outage or cold start.
+
+Order of operations: copy `backend/.env.example` → `backend/.env`, fill in
+MongoDB/Google/Brevo credentials, generate unique `SESSION_SECRET` and
+`OTP_HMAC_SECRET`, restart the backend, then confirm the login screen shows
+no setup warning (or `GET /api/health` reports the missing variable names).
 
 ## Development commands
 
@@ -123,7 +180,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Command | What it does |
 |---|---|
 | `npm run dev` | Start dev server (backend `:3001`, frontend `:5173`) |
-| `npm test` | Run that app's test suite (frontend 226, backend 26) |
+| `npm test` | Run that app's test suite |
 | `npm run typecheck` | TypeScript check, no emit |
 | `npm run lint` | ESLint, real failures exit non-zero (warnings do not) |
 | `npm run build` | Production build (`frontend/dist`, `backend/dist`) |
@@ -133,39 +190,59 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Production deployment
 
 - **Backend → Render** via `render.yaml`: service root `backend/`,
-  build `npm ci && npm run build`, start `npm run start`. Set
-  `YOUTUBE_API_KEY` (secret, not synced), `CORS_ORIGIN` (your frontend
-  origin), and the cache/rate-limit vars. Free-tier footprint is small
-  (measured ~17 MB heap / ~77 MB RSS with four cached playlists); the
-  filesystem is ephemeral by design — nothing essential lives there.
+  build `npm ci && npm run build`, start `npm run start`.
+  `render.yaml` requests Node `24.22.1`; `backend/.node-version` and
+  `backend/package.json#engines` pin the same patched 24 LTS line.
+  **Render Dashboard caveat:** a dashboard-level `NODE_VERSION` environment
+  variable overrides the Blueprint value. Confirm it is either absent or set
+  to `24.22.1` — an older pinned version silently defeats this repository
+  setting.
+- Set the secret variables (`MONGODB_URI`, `GOOGLE_CLIENT_SECRET`,
+  `BREVO_API_KEY`, `YOUTUBE_API_KEY`) in Render, never in Git. The Blueprint
+  generates `SESSION_SECRET` and `OTP_HMAC_SECRET`; changing either later
+  invalidates existing sessions and pending OTP challenges.
+- Use a cookie-safe topology. Set `APP_ORIGIN` and `CORS_ORIGIN` to the public
+  app origin. Use either a same-origin Vercel `/api` proxy (keep
+  `VITE_API_BASE_URL` empty, point `GOOGLE_REDIRECT_URI` at the app origin) or
+  same-site custom domains (`app.example.com` + `api.example.com`, with
+  `GOOGLE_REDIRECT_URI` on the API origin). Register the exact redirect URI in
+  Google Cloud.
 - **Frontend → Vercel** (or any static host): project root `frontend/`,
-  build `npm run build`, output `dist`. Set `VITE_API_BASE_URL` to the
-  backend origin when the API is hosted separately.
+  build `npm run build`, output `dist`. Do not configure a `*.vercel.app` →
+  `*.onrender.com` direct API origin with the current `SameSite=Lax` cookie.
 
 ## Data persistence and privacy
 
-- Learning records (progress, sessions, goals, modules, checkpoints,
-  revision data, settings) live **only in your browser's IndexedDB**.
-  There are no accounts and no cloud sync — export JSON backups regularly
-  (Reports → Backup JSON) and keep the file yourself.
-- The backend sees only playlist metadata requests; it stores no learning
-  history. The YouTube API is used solely to resolve public playlist
-  entries and durations.
-- Deleting browser data (or an unrecoverable storage failure) deletes local
-  progress. A storage read failure shows a recovery screen instead of treating
-  the database as empty; a write failure shows one actionable backup notice.
-  Concurrent tabs are last-writer-wins.
-- Small UI-only preferences and an interrupted-focus timer snapshot are kept
-  in `localStorage` on this device; they are never sent to the backend.
+- In production, learning records (playlists, progress, sessions, goals,
+  modules, checkpoints, revision data, settings, XP) are stored in MongoDB
+  and scoped by the authenticated `userId`. The browser is not treated as the
+  source of truth for an authenticated account, and a failed cloud read never
+  falls back to an apparently empty local database.
+- Passwords are hashed with Argon2id. Raw passwords, password hashes, OTPs,
+  reset grants, and session tokens are never included in account exports.
+- Sessions use `HttpOnly` cookies; production uses `Secure`,
+  `SameSite=Lax`, and `__Host-` cookie names. Mutations require a CSRF token
+  and an exact trusted origin.
+- Legacy browser data is offered for explicit import only after sign-in.
+  Existing cloud records win on identical IDs; the local source is retained
+  on failure and can be retried safely. A claim marker prevents another
+  account from inheriting the same local data.
+- Export JSON backups from Reports or the account menu. Deleting the account
+  removes account-owned MongoDB records and sessions; it cannot be undone.
+- Small UI-only preferences and an interrupted-focus timer snapshot remain in
+  `localStorage` on the device.
 
 ## Limitations
 
-- Timed in-browser playback events, overnight soak runs, live quota
-  metering, 2000+-video stress, and live storage-quota exhaustion are
-  verified by unit/integration tests and inspection — not by live runs here.
-  See [`docs/audits/V7_FINAL_ACCEPTANCE.md`](./docs/audits/V7_FINAL_ACCEPTANCE.md).
-- Playlists are capped at **1000 entries** per fetch (larger ones are
-  rejected with a clear error, never silently truncated).
+- Live MongoDB, Google, and Brevo integrations require real credentials and
+  network access; the automated suites use in-memory fakes. See the current
+  multi-user report in `docs/audits/` for the exact verification boundary.
+- Timed in-browser playback events, overnight soak runs, live quota metering,
+  2000+-video stress, and live storage-quota exhaustion are verified by
+  unit/integration tests and inspection — not by live runs here. See
+  [`docs/audits/V7_FINAL_ACCEPTANCE.md`](./docs/audits/V7_FINAL_ACCEPTANCE.md).
+- Playlists are capped at **1000 entries** per fetch (larger ones are rejected
+  with a clear error, never silently truncated).
 - Quota costs ≈ 5 units per 100-video import/refresh, ≈ 21 per 500-video
   one; navigation costs nothing. Your Google Cloud quota may differ from
   the 10,000/day default.
@@ -174,6 +251,10 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 | Symptom | Fix |
 |---|---|
+| Setup/configuration screen | Fill the listed names in `backend/.env`, restart, retry |
+| Google sign-in fails | Check the OAuth client, exact redirect URI, `GOOGLE_CLIENT_ID`/secret, and consent-screen test users |
+| OTP email not received | Verify the Brevo sender/domain and API key; check spam; respect the resend cooldown |
+| MongoDB auth/data errors | Check `MONGODB_URI`, Atlas network access, and database user permissions; no local fallback is used |
 | API key missing | Follow Configuration; restart backend; Recheck in Settings |
 | Invalid/restricted key | Allow YouTube Data API v3 + backend host in Google Cloud; restart |
 | Quota exhausted | Wait for daily reset; use JSON import meanwhile |
@@ -182,12 +263,15 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Player won't embed (101/150) | Use Open on YouTube; log a self-reported History entry |
 | Totals look wrong | Confirm range endpoints and unresolved flags; content duration ≠ study time |
 | Port conflict (`EADDRINUSE`) | Stop the other process or change `PORT` in `backend/.env` |
-| Frontend can't reach backend | Check `VITE_API_BASE_URL` (Production env, exact Render origin, no trailing slash or `/api` suffix, then redeploy), `CORS_ORIGIN` (exact Vercel origin), and that both dev servers run |
+| Frontend can't reach backend | Check the chosen topology in `docs/DEPLOYMENT_MULTIUSER.md`: same-origin `/api` proxy or same-site custom domains. For custom domains, verify `VITE_API_BASE_URL` (no trailing slash or `/api` suffix, then redeploy) and `CORS_ORIGIN`. A `*.vercel.app` → `*.onrender.com` direct API URL fails authentication because the Lax cookie is cross-site |
+| Node version warning on Render | Remove/raise a dashboard `NODE_VERSION` override; the repo pins 24.22.1 |
 
 ## Documentation
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
-- [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — current remediation report and verification matrix.
+- [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup.
+- [docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — current multi-user implementation and verification report.
+- [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — prior remediation report and verification matrix.
 - [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.
 - [docs/audits/V6_FINAL_AUDIT.md](./docs/audits/V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.
 - [docs/audits/TIME_AND_ANALYTICS_AUDIT.md](./docs/audits/TIME_AND_ANALYTICS_AUDIT.md) — time-correctness matrix.

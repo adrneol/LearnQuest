@@ -19,3 +19,4 @@ export * from './competition/aliases.js';
 export * from './analytics/insights.js';
 export * from './revision/revision.js';
 export * from './settings/preferences.js';
+export * from './checkpoints/rangeInput.js';

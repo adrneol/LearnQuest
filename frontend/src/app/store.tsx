@@ -48,9 +48,20 @@ import type {
   PlaylistSnapshot, ProgressRecord, SavedRange, Checkpoint, StudySession, XpEvent, DayGoal,
   PlaySession, AppSettings,
 } from '../domain/index.js';
-import { kvGet, kvSet, kvClearAll, kvReplaceAll } from '../services/persistence/db.js';
+import { kvGet, kvSet, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
 import { notify } from '../services/notifications/notify.js';
+import {
+  type AuthConfig, type AuthUser, type AccountSession,
+  archivePlaylistApi, changePassword as changePasswordApi, completeOnboarding as completeOnboardingApi,
+  deleteAccount as deleteAccountApi, deletePlaylistApi, downloadAccountExport, fetchAccountData,
+  fetchSession, importAccountBackup, listAccountSessions, logout as logoutApi,
+  logoutAll as logoutAllApi, migrateLocalData, passwordLogin, putAccountCollection,
+  requestEmailChange as requestEmailChangeApi,
+  restorePlaylistApi, revokeAccountSession, startGoogleAuth, updateAccountPreferences as updateAccountPreferencesApi,
+  updateProfile as updateProfileApi, verifyEmailChange as verifyEmailChangeApi,
+} from '../services/api/authApi.js';
+import { AuthScreens, OnboardingScreen, SetupRequiredScreen, AccountErrorScreen } from '../features/auth/AuthScreens.js';
 
 export type Prefs = AppPreferences;
 export type { Module, RankSnapshot };
@@ -84,9 +95,7 @@ interface Store {
   settings: AppSettings;
   // actions
   addSnapshot: (s: PlaylistSnapshot) => void;
-  removePlaylist: (id: string) => void;
   renamePlaylist: (id: string, title: string) => void;
-  setArchived: (id: string, archived: boolean) => void;
   setActive: (id: string | null) => void;
   toggleDone: (playlistId: string, position: number, videoId: string) => void;
   updateRecord: (key: string, patch: Partial<ProgressRecord>) => void;
@@ -129,6 +138,43 @@ interface Store {
   clearAllData: () => Promise<void>;
   clearCacheOnly: () => Promise<void>;
   setLastDiff: (s: string | null) => void;
+  // Cloud account mode (local mode keeps the existing IndexedDB test path)
+  mode: 'local' | 'cloud';
+  authReady: boolean;
+  setup: AuthConfig | null;
+  authUser: AuthUser | null;
+  authError: string | null;
+  syncStatus: 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
+  syncError: string | null;
+  serverVersion: number;
+  migrationAvailable: boolean;
+  migrationSummary: string | null;
+  migrationError: string | null;
+  signInWithPassword: (identifier: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  completeAccountSetup: (input: {
+    username: string; displayName: string; password: string; timezone?: string;
+    sessionLenMin?: number; breakMin?: number; minViableMin?: number;
+  }) => Promise<void>;
+  signOut: (allDevices?: boolean) => Promise<void>;
+  refreshSession: () => Promise<void>;
+  updateProfile: (input: { username?: string; displayName?: string }) => Promise<void>;
+  updateAccountPreferences: (input: { timezone?: string; sessionLenMin?: number; breakMin?: number; minViableMin?: number }) => Promise<void>;
+  changeAccountPassword: (currentPassword: string | null, newPassword: string) => Promise<void>;
+  requestEmailChange: (newEmail: string, password?: string) => Promise<{ challengeId: string; expiresInMin: number; targetEmail: string }>;
+  verifyEmailChange: (challengeId: string, code: string) => Promise<void>;
+  listAccountSessions: () => Promise<AccountSession[]>;
+  revokeAccountSession: (sessionId: string) => Promise<void>;
+  deleteAccount: (confirmUsername: string, password?: string) => Promise<void>;
+  exportAccountData: () => Promise<void>;
+  archivePlaylistManaged: (playlistId: string) => Promise<void>;
+  restorePlaylistManaged: (playlistId: string) => Promise<void>;
+  deletePlaylistManaged: (playlistId: string, confirmTitle: string) => Promise<void>;
+  migrateLocalDataNow: () => Promise<void>;
+  exportLegacyBackup: () => Promise<void>;
+  removeLocalLegacyData: () => Promise<void>;
+  retryCloudSave: () => void;
+  reloadCloudData: () => Promise<void>;
 }
 
 export const useStore = () => {
@@ -391,7 +437,85 @@ function rekeyModules(
   });
 }
 
-export function StoreProvider({ children }: { children: React.ReactNode }) {
+const DEFAULT_MODE: 'local' | 'cloud' = import.meta.env.MODE === 'test' ? 'local' : 'cloud';
+
+const CLOUD_COLLECTIONS = [
+  'playlists', 'meta', 'activeId', 'progress', 'ranges', 'checkpoints', 'modules',
+  'sessions', 'goals', 'xp', 'achievements', 'segments', 'playSessions', 'queue',
+  'flexGoals', 'challenge', 'challengeEnabled', 'rankHistory', 'settings', 'prefs',
+] as const;
+type CloudCollection = (typeof CLOUD_COLLECTIONS)[number];
+
+function collectionItems(state: LoadedState, name: CloudCollection): unknown {
+  return (state as any)[name];
+}
+
+function cloudPayload(state: LoadedState): Record<CloudCollection, unknown> {
+  const out = {} as Record<CloudCollection, unknown>;
+  for (const name of CLOUD_COLLECTIONS) out[name] = collectionItems(state, name);
+  return out;
+}
+
+function cloudFingerprints(state: LoadedState): Record<string, string> {
+  const payload = cloudPayload(state);
+  const out: Record<string, string> = {};
+  for (const name of CLOUD_COLLECTIONS) out[name] = JSON.stringify(payload[name]);
+  return out;
+}
+
+function legacyHasData(dump: Record<string, unknown>): boolean {
+  const playlists = dump.playlists as Record<string, unknown> | undefined;
+  const progress = dump.progress as Record<string, unknown> | undefined;
+  const sessions = dump.sessions as unknown[] | undefined;
+  const ranges = dump.ranges as unknown[] | undefined;
+  return Boolean(
+    (playlists && Object.keys(playlists).length > 0)
+    || (progress && Object.keys(progress).length > 0)
+    || (sessions && sessions.length > 0)
+    || (ranges && ranges.length > 0),
+  );
+}
+
+function downloadJson(name: string, text: string): void {
+  const blob = new Blob([text], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function focusKeysForPlaylist(sessions: { playlistId: string | null; clientId?: string; id?: string }[], playlistId: string): Set<string> {
+  return new Set(
+    sessions
+      .filter((s) => s.playlistId === playlistId)
+      .map((s) => `focus:${s.clientId || s.id || ''}`),
+  );
+}
+
+function xpAttributableToPlaylist(
+  dedupKey: string,
+  playlistId: string,
+  checkpointIds: Set<string>,
+  goalIds: Set<string>,
+  focusKeys: Set<string>,
+): boolean {
+  if (
+    dedupKey.startsWith(`done:${playlistId}:`)
+    || dedupKey.startsWith(`rev:${playlistId}:`)
+    || dedupKey.startsWith(`ach:${playlistId}:`)
+    || dedupKey.startsWith(`code:${playlistId}:`)
+    || dedupKey.startsWith(`ex:${playlistId}:`)
+    || dedupKey.startsWith(`built:${playlistId}:`)
+  ) return true;
+  if (dedupKey.startsWith('cp:')) return checkpointIds.has(dedupKey.slice(3).split(':')[0]);
+  if (dedupKey.startsWith('goal:')) return goalIds.has(dedupKey.slice(5).split(':')[0]);
+  if (dedupKey.startsWith('focus:')) return focusKeys.has(dedupKey);
+  return false;
+}
+
+export function StoreProvider({ children, mode: modeProp }: { children: React.ReactNode; mode?: 'local' | 'cloud' }) {
+  const mode = modeProp ?? DEFAULT_MODE;
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playlists, setPlaylists] = useState<Record<string, PlaylistSnapshot>>({});
@@ -416,9 +540,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [lastDiff, setLastDiff] = useState<string | null>(null);
   const [celebration, setCelebration] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(mode === 'local');
+  const [setup, setSetup] = useState<AuthConfig | null>(null);
+  const [authUser, setAuthUserState] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'conflict'>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [serverVersion, setServerVersion] = useState(0);
+  const [migrationAvailable, setMigrationAvailable] = useState(false);
+  const [migrationSummary, setMigrationSummary] = useState<string | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [saveNonce, setSaveNonce] = useState(0);
   const saveT = useRef<ReturnType<typeof setTimeout> | null>(null);
   const writeChain = useRef<Promise<void>>(Promise.resolve());
   const loadAttempt = useRef(0);
+  const serverVersionRef = useRef(0);
+  const lastSyncedRef = useRef<Record<string, string>>({});
+  const migrationIdRef = useRef<string | null>(null);
+  const cloudUserRef = useRef<string | null>(null);
   // Client-generated session ids are a second idempotency barrier in memory:
   // two finish clicks in one tick cannot both pass the stale `sessions` closure.
   const sessionKeys = useRef<Set<string>>(new Set());
@@ -520,14 +659,113 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyState]);
 
+  const resetAccountState = useCallback(() => {
+    applyState(normalizeLoadedState({}, defaultPreferences()).state);
+    lastSyncedRef.current = {};
+    serverVersionRef.current = 0;
+    setServerVersion(0);
+    setSyncStatus('idle');
+    setSyncError(null);
+    setMigrationAvailable(false);
+    setMigrationSummary(null);
+    setMigrationError(null);
+    setLastDiff(null);
+    setCelebration(null);
+  }, [applyState]);
+
+  const loadCloud = useCallback(async (user: AuthUser) => {
+    setLoadError(null);
+    setReady(false);
+    try {
+      const { state, version } = await fetchAccountData();
+      const normalized = normalizeLoadedState(state as Partial<LoadedState>, defaultPreferences());
+      applyState(normalized.state);
+      serverVersionRef.current = version;
+      setServerVersion(version);
+      lastSyncedRef.current = cloudFingerprints(normalized.state);
+      cloudUserRef.current = user.userId;
+      setSyncStatus('idle');
+      setSyncError(null);
+      setReady(true);
+    } catch (e: any) {
+      setLoadError(e?.message ?? 'LearnQuest could not load your cloud learning data. Nothing was overwritten; retry the load.');
+      setReady(false);
+    }
+  }, [applyState]);
+
+  const bootstrap = useCallback(async () => {
+    setAuthReady(false);
+    setAuthError(null);
+    try {
+      const session = await fetchSession();
+      setSetup(session);
+      if (session.authenticated && session.user) {
+        setAuthUserState(session.user);
+        await loadCloud(session.user);
+      } else {
+        resetAccountState();
+        setAuthUserState(null);
+        setReady(false);
+      }
+    } catch (e: any) {
+      setAuthError(e?.message ?? 'The LearnQuest account service is unreachable. Check the connection and retry.');
+      setReady(false);
+    } finally {
+      setAuthReady(true);
+    }
+  }, [loadCloud, resetAccountState]);
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (mode === 'local') void load();
+    else void bootstrap();
+  }, [mode, load, bootstrap]);
+
+  useEffect(() => {
+    if (mode !== 'cloud') return;
+    const expired = () => {
+      setAuthUserState(null);
+      setReady(false);
+      setAuthError('Your session expired or was signed out elsewhere. Sign in again — no local-only fallback was used.');
+    };
+    window.addEventListener('lq:auth-expired', expired);
+    return () => window.removeEventListener('lq:auth-expired', expired);
+  }, [mode]);
+
+  // Detect unclaimed legacy IndexedDB data only AFTER authentication. The
+  // login screen never reads or displays learning records. A claim made by a
+  // different account suppresses the offer so data can never be inherited.
+  useEffect(() => {
+    if (mode !== 'cloud' || !ready || !authUser) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rawClaim = localStorage.getItem('lq-legacy-claim-v1');
+        if (rawClaim) {
+          let claim: { userId?: string } | null = null;
+          try { claim = JSON.parse(rawClaim); } catch { claim = null; }
+          if (claim?.userId && claim.userId !== authUser.userId) {
+            setMigrationAvailable(false);
+            return;
+          }
+          if (claim?.userId === authUser.userId) {
+            setMigrationAvailable(false);
+            return;
+          }
+        }
+        const dump = await kvDump();
+        if (!cancelled) setMigrationAvailable(legacyHasData(dump));
+      } catch {
+        // A legacy read failure must not affect cloud data.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mode, ready, authUser]);
 
   // debounced persist. Writes are best-effort per key: a quota failure on one
   // key must not break the session, and the user gets one actionable notice.
   const persistWarned = useRef(false);
   useEffect(() => {
+    if (mode !== 'local') return;
     if (!ready) return;
     if (saveT.current) clearTimeout(saveT.current);
     saveT.current = setTimeout(() => {
@@ -577,7 +815,54 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       if (saveT.current) clearTimeout(saveT.current);
     };
-  }, [ready, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
+  }, [mode, ready, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
+
+  // Cloud persistence: only changed collections are sent, sequentially, with
+  // the server's optimistic version. Success is shown only after every write
+  // has been confirmed. IndexedDB is never written in this mode.
+  useEffect(() => {
+    if (mode !== 'cloud' || !ready || !authUser) return;
+    if (saveT.current) clearTimeout(saveT.current);
+    saveT.current = setTimeout(() => {
+      const state: LoadedState = {
+        playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals,
+        xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge,
+        challengeEnabled, rankHistory, settings,
+      };
+      const payload = cloudPayload(state);
+      const changed = CLOUD_COLLECTIONS.filter((name) => JSON.stringify(payload[name]) !== lastSyncedRef.current[name]);
+      if (changed.length === 0) {
+        setSyncStatus('saved');
+        return;
+      }
+      const run = (async () => {
+        setSyncStatus('saving');
+        setSyncError(null);
+        let version = serverVersionRef.current;
+        try {
+          for (const name of changed) {
+            const result = await putAccountCollection(name, payload[name], version);
+            version = result.version;
+            serverVersionRef.current = version;
+            setServerVersion(version);
+            lastSyncedRef.current[name] = JSON.stringify(payload[name]);
+          }
+          setSyncStatus('saved');
+        } catch (e: any) {
+          setSyncStatus(e?.code === 'VERSION_CONFLICT' ? 'conflict' : 'error');
+          setSyncError(
+            e?.code === 'VERSION_CONFLICT'
+              ? 'Another session changed your account data. Reload account data before making more changes; nothing was silently overwritten.'
+              : (e?.message ?? 'Your changes were not saved to the server. Retry the save.'),
+          );
+        }
+      })();
+      writeChain.current = run.catch(() => undefined);
+    }, 350);
+    return () => {
+      if (saveT.current) clearTimeout(saveT.current);
+    };
+  }, [mode, ready, authUser, saveNonce, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
 
   const awardXp = useCallback((reason: string, points: number, dedupKey: string) => {
     if (!Number.isFinite(points) || !dedupKey) return;
@@ -693,9 +978,241 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [progress, segments, sessions, playSessions, checkpoints, ready]);
 
   const value: Store = useMemo(() => ({
-    ready, loadError, retryLoad: () => { void load(); },
+    ready, loadError, retryLoad: () => {
+      if (mode === 'cloud') {
+        if (authUser) void loadCloud(authUser);
+        else void bootstrap();
+      } else {
+        void load();
+      }
+    },
     playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration,
     segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings,
+    mode, authReady, setup, authUser, authError, syncStatus, syncError, serverVersion,
+    migrationAvailable, migrationSummary, migrationError,
+
+    signInWithPassword: async (identifier, password) => {
+      resetAccountState();
+      const res = await passwordLogin(identifier, password);
+      setSetup(res);
+      if (!res.user) throw new Error('The server did not return an account profile.');
+      setAuthUserState(res.user);
+      setAuthError(null);
+      await loadCloud(res.user);
+    },
+    signInWithGoogle: async () => {
+      await startGoogleAuth();
+    },
+    completeAccountSetup: async (input) => {
+      const res = await completeOnboardingApi(input);
+      setAuthUserState(res.user);
+      setAuthError(null);
+      await loadCloud(res.user);
+    },
+    signOut: async (allDevices = false) => {
+      let serverError: string | null = null;
+      try {
+        if (allDevices) await logoutAllApi();
+        else await logoutApi();
+      } catch (e: any) {
+        serverError = e?.message ?? 'The server could not confirm session revocation.';
+      } finally {
+        resetAccountState();
+        setAuthUserState(null);
+        setReady(false);
+        setAuthReady(true);
+        setSetup((prev) => prev);
+        cloudUserRef.current = null;
+        sessionKeys.current.clear();
+        try {
+          localStorage.removeItem('lq-focus-timer-v1');
+        } catch { /* unavailable */ }
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+      }
+      if (serverError) notify(`Signed out on this device. ${serverError}`);
+    },
+    refreshSession: async () => {
+      const res = await fetchSession();
+      setSetup(res);
+      if (res.authenticated && res.user) setAuthUserState(res.user);
+      else {
+        setAuthUserState(null);
+        setReady(false);
+      }
+    },
+    updateProfile: async (input) => {
+      const user = await updateProfileApi(input);
+      setAuthUserState(user);
+      setLastDiff('Profile saved to your account.');
+    },
+    updateAccountPreferences: async (input) => {
+      const user = await updateAccountPreferencesApi(input);
+      setAuthUserState(user);
+      const check = validatePreferencePatch(prefs, {
+        ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
+        ...(input.sessionLenMin !== undefined ? { sessionLenMin: input.sessionLenMin } : {}),
+        ...(input.breakMin !== undefined ? { breakMin: input.breakMin } : {}),
+        ...(input.minViableMin !== undefined ? { minViableMin: input.minViableMin } : {}),
+      });
+      if (check.errors.length) throw new Error(check.errors[0]);
+      setPrefsState(check.value);
+      setLastDiff('Learning preferences saved to your account.');
+    },
+    changeAccountPassword: async (currentPassword, newPassword) => {
+      await changePasswordApi(currentPassword, newPassword);
+      setLastDiff('Password changed. Other sessions were signed out.');
+    },
+    requestEmailChange: async (newEmail, password) => requestEmailChangeApi(newEmail, password),
+    verifyEmailChange: async (challengeId, code) => {
+      const res = await verifyEmailChangeApi(challengeId, code);
+      setAuthUserState(res.user);
+      setLastDiff('Email address verified and updated. Your Google sign-in remains linked.');
+    },
+    listAccountSessions: async () => (await listAccountSessions()).sessions,
+    revokeAccountSession: async (sessionId) => {
+      await revokeAccountSession(sessionId);
+      setLastDiff('That session was signed out.');
+    },
+    deleteAccount: async (confirmUsername, password) => {
+      await deleteAccountApi(confirmUsername, password);
+      resetAccountState();
+      setAuthUserState(null);
+      setReady(false);
+      setAuthReady(true);
+      cloudUserRef.current = null;
+      try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* ignore */ }
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+    },
+    exportAccountData: async () => {
+      await downloadAccountExport();
+      setLastDiff('Account export downloaded. It contains your learning data but no password hashes or session tokens.');
+    },
+    archivePlaylistManaged: async (playlistId) => {
+      if (mode === 'local') {
+        setMeta((prev) => ({ ...prev, [playlistId]: { ...(prev[playlistId] ?? { addedAt: new Date().toISOString() }), archived: true } }));
+        setActiveId((current) => {
+          if (current !== playlistId) return current;
+          return Object.keys(playlists).find((id) => id !== playlistId && !meta[id]?.archived) ?? null;
+        });
+        setLastDiff('Playlist archived. Its progress, notes, sessions, checkpoints, and XP were preserved.');
+        return;
+      }
+      const result = await archivePlaylistApi(playlistId, serverVersionRef.current);
+      serverVersionRef.current = result.version;
+      setServerVersion(result.version);
+      await loadCloud(authUser!);
+      setLastDiff('Playlist removed from your dashboard and archived. All learning data was preserved and can be restored.');
+    },
+    restorePlaylistManaged: async (playlistId) => {
+      if (mode === 'local') {
+        setMeta((prev) => ({ ...prev, [playlistId]: { ...(prev[playlistId] ?? { addedAt: new Date().toISOString() }), archived: false } }));
+        setLastDiff('Playlist restored with its existing learning records. No XP was recreated.');
+        return;
+      }
+      const result = await restorePlaylistApi(playlistId, serverVersionRef.current);
+      serverVersionRef.current = result.version;
+      setServerVersion(result.version);
+      await loadCloud(authUser!);
+      setLastDiff('Playlist restored with its existing learning records. No XP was recreated.');
+    },
+    deletePlaylistManaged: async (playlistId, confirmTitle) => {
+      if (mode === 'local') {
+        const snap = playlists[playlistId];
+        const effectiveTitle = meta[playlistId]?.customTitle ?? snap?.title;
+        if (!snap || effectiveTitle !== confirmTitle) throw new Error('The playlist changed since this dialog opened. Review the current title before deleting.');
+        const plan = playlistRemovalPlan({
+          progress, ranges, checkpoints, modules, sessions, segments, playSessions, flexGoals, queue,
+        }, playlistId);
+        const checkpointIds = new Set(checkpoints.filter((c) => c.playlistId === playlistId).map((c) => c.id));
+        const goalIds = new Set(
+          flexGoals
+            .filter((g) => g.playlistId === playlistId || (g.checkpointId ? checkpointIds.has(g.checkpointId) : false))
+            .map((g) => g.id),
+        );
+        const focusKeys = focusKeysForPlaylist(sessions, playlistId);
+        setPlaylists((prev) => { const next = { ...prev }; delete next[playlistId]; return next; });
+        setMeta((prev) => { const next = { ...prev }; delete next[playlistId]; return next; });
+        setProgress(plan.progress as Record<string, ProgressRecord>);
+        setRanges(plan.ranges);
+        setCheckpoints(plan.checkpoints);
+        setModules(plan.modules);
+        setSessions(plan.sessions);
+        setSegments(plan.segments);
+        setPlaySessions(plan.playSessions);
+        setFlexGoals(plan.flexGoals as Goal[]);
+        setQueueState(plan.queue);
+        setXp((prev) => prev.filter((e) => !xpAttributableToPlaylist(e.dedupKey, playlistId, checkpointIds, goalIds, focusKeys)));
+        setActiveId((current) => {
+          if (current !== playlistId) return current;
+          return Object.keys(playlists).find((id) => id !== playlistId && !meta[id]?.archived) ?? null;
+        });
+        setLastDiff(`Permanently deleted "${confirmTitle}" and its attributable learning records. Other playlists were not changed.`);
+        return;
+      }
+      const result = await deletePlaylistApi(playlistId, serverVersionRef.current, confirmTitle);
+      await loadCloud(authUser!);
+      setLastDiff(`Permanently deleted "${confirmTitle}" and its attributable learning records. ${result.alreadyDeleted ? 'This deletion had already completed; the retry was safe.' : 'Other playlists were not changed.'}`);
+    },
+    migrateLocalDataNow: async () => {
+      if (!authUser) throw new Error('Sign in before migrating local data.');
+      const dump = await kvDump();
+      const normalized = normalizeLoadedState(dump as Partial<LoadedState>, defaultPreferences());
+      const payload = { version: 3, state: normalized.state };
+      if (!migrationIdRef.current) {
+        migrationIdRef.current = `mig-${authUser.userId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      }
+      setMigrationError(null);
+      try {
+        const result = await migrateLocalData(migrationIdRef.current, payload, serverVersionRef.current);
+        const summaryParts = Object.entries(result.collections ?? {})
+          .filter(([, v]) => v.added > 0 || v.skipped > 0)
+          .map(([k, v]) => `${k}: ${v.added} added, ${v.skipped} already present`);
+        localStorage.setItem('lq-legacy-claim-v1', JSON.stringify({
+          userId: authUser.userId,
+          migratedAt: new Date().toISOString(),
+          cleanup: 'pending',
+        }));
+        if (result.version !== undefined) {
+          serverVersionRef.current = result.version;
+          setServerVersion(result.version);
+        }
+        await loadCloud(authUser);
+        setMigrationAvailable(false);
+        setMigrationSummary(
+          `Local data imported into ${authUser.username ?? authUser.email}. ${summaryParts.join('; ') || 'Everything was already present.'} `
+          + 'The local copy was kept. Use Reports or the migration card to remove it after checking the imported data.',
+        );
+      } catch (e: any) {
+        setMigrationError(e?.message ?? 'Local data migration failed. The source data was not deleted; retry is safe.');
+        throw e;
+      }
+    },
+    exportLegacyBackup: async () => {
+      const dump = await kvDump();
+      const normalized = normalizeLoadedState(dump as Partial<LoadedState>, defaultPreferences());
+      const json = await buildBackup(normalized.state as BackupState);
+      downloadJson(`learnquest-legacy-backup-${Date.now()}.json`, json);
+    },
+    removeLocalLegacyData: async () => {
+      await kvClearAll();
+      try {
+        localStorage.removeItem('lq-focus-timer-v1');
+        if (authUser) {
+          localStorage.setItem('lq-legacy-claim-v1', JSON.stringify({
+            userId: authUser.userId,
+            migratedAt: new Date().toISOString(),
+            cleanup: 'removed',
+          }));
+        }
+      } catch { /* ignore */ }
+      setMigrationSummary('The verified local backup/import source was removed from this browser. Your cloud learning data is unchanged.');
+      setMigrationAvailable(false);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+    },
+    retryCloudSave: () => setSaveNonce((n) => n + 1),
+    reloadCloudData: async () => {
+      if (authUser) await loadCloud(authUser);
+    },
 
     addSnapshot: (input) => {
       if (!input || !Array.isArray(input.entries)) {
@@ -745,33 +1262,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         : { ...prev, [s.playlistId]: { archived: false, addedAt: new Date().toISOString() } });
       setActiveId(s.playlistId);
     },
-    removePlaylist: (id) => {
-      const plan = playlistRemovalPlan({
-        progress,
-        ranges,
-        checkpoints,
-        modules,
-        sessions,
-        segments,
-        playSessions,
-        flexGoals,
-        queue,
-      }, id);
-      setPlaylists((p) => { const n = { ...p }; delete n[id]; return n; });
-      setMeta((p) => { const n = { ...p }; delete n[id]; return n; });
-      setProgress(plan.progress as Record<string, ProgressRecord>);
-      setRanges(plan.ranges);
-      setCheckpoints(plan.checkpoints);
-      setModules(plan.modules);
-      setSessions(plan.sessions);
-      setSegments(plan.segments);
-      setPlaySessions(plan.playSessions);
-      setFlexGoals(plan.flexGoals as Goal[]);
-      setQueueState(plan.queue);
-      setActiveId((a) => (a === id ? null : a));
-    },
     renamePlaylist: (id, title) => setMeta((p) => ({ ...p, [id]: { ...(p[id] ?? { archived: false, addedAt: new Date().toISOString() }), customTitle: title } })),
-    setArchived: (id, archived) => setMeta((p) => ({ ...p, [id]: { ...(p[id] ?? { addedAt: new Date().toISOString() }), archived } })),
     setActive: (id) => setActiveId(id && playlists[id] ? id : null),
 
     toggleDone: (playlistId, position, videoId) => {
@@ -1056,6 +1547,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!validated.ok) throw new Error(validated.errors.join(' '));
       const normalized = normalizeLoadedState(validated.backup.state, defaultPreferences());
       const state = normalized.state;
+      if (mode === 'cloud') {
+        if (saveT.current) clearTimeout(saveT.current);
+        await writeChain.current;
+        const result = await importAccountBackup(validated.backup, serverVersionRef.current);
+        serverVersionRef.current = result.version;
+        setServerVersion(result.version);
+        if (authUser) await loadCloud(authUser);
+        setLastDiff(
+          `Account backup restored (version ${validated.backup.version}) on the server.`
+          + (validated.backup.warnings.length ? ` ${validated.backup.warnings.join(' ')}` : ''),
+        );
+        return { warnings: validated.backup.warnings };
+      }
       const data: Record<string, unknown> = {
         playlists: state.playlists,
         meta: state.meta,
@@ -1093,6 +1597,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     clearAllData: async () => {
       if (saveT.current) clearTimeout(saveT.current);
       await writeChain.current;
+      if (mode === 'cloud') {
+        const defaults = normalizeLoadedState({}, defaultPreferences()).state;
+        const result = await importAccountBackup({ version: 3, state: defaults }, serverVersionRef.current);
+        serverVersionRef.current = result.version;
+        setServerVersion(result.version);
+        if (authUser) await loadCloud(authUser);
+        setLastDiff('All learning data was cleared on the server. Your account, profile, and security settings were preserved.');
+        setCelebration(null);
+        try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* ignore */ }
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+        return;
+      }
       await kvClearAll();
       const defaults = normalizeLoadedState({}, defaultPreferences()).state;
       applyState(defaults);
@@ -1113,12 +1629,64 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setPlaylists({});
       setActiveId(null);
       setQueueState({});
-      await kvSet('playlists', {});
-      await kvSet('activeId', null);
-      await kvSet('queue', {});
+      if (mode === 'local') {
+        await kvSet('playlists', {});
+        await kvSet('activeId', null);
+        await kvSet('queue', {});
+      } else {
+        setLastDiff('Playlist metadata cache cleared. Learning records were kept; the change will be confirmed by the server save indicator.');
+      }
     },
     setLastDiff: (s) => setLastDiff(s),
-  }), [ready, loadError, load, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp]);
+  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, syncStatus, syncError, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState]);
+
+  if (mode === 'cloud') {
+    if (!authReady) {
+      return (
+        <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
+          <p className="text-lg font-semibold">Connecting to your LearnQuest account…</p>
+          <p className="mt-1 text-sm text-slate-500">Learning data is loaded from the server; the browser is not used as an authoritative store.</p>
+        </div>
+      );
+    }
+    const coreMissing = !setup?.configured.mongodb || !setup?.configured.session || !setup?.configured.otp;
+    if (coreMissing) {
+      return <SetupRequiredScreen setup={setup} onRetry={() => { void bootstrap(); }} />;
+    }
+    if (authError) {
+      return <AccountErrorScreen message={authError} onRetry={() => { void bootstrap(); }} onSignOut={() => { void logoutApi().finally(() => setAuthError(null)); }} />;
+    }
+    if (!authUser) {
+      return (
+        <AuthScreens
+          setup={setup}
+          authError={authError}
+          onPasswordLogin={value.signInWithPassword}
+          onGoogle={value.signInWithGoogle}
+        />
+      );
+    }
+    if (!authUser.onboardingComplete) {
+      return (
+        <OnboardingScreen
+          user={authUser}
+          onSubmit={value.completeAccountSetup}
+          onSignOut={() => { void value.signOut(); }}
+        />
+      );
+    }
+    if (loadError) {
+      return <AccountErrorScreen message={loadError} onRetry={() => { void loadCloud(authUser); }} onSignOut={() => { void value.signOut(); }} />;
+    }
+    if (!ready) {
+      return (
+        <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
+          <p className="text-lg font-semibold">Loading your cloud learning data…</p>
+          <p className="mt-1 text-sm text-slate-500">Nothing has been written to IndexedDB.</p>
+        </div>
+      );
+    }
+  }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

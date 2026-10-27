@@ -14,6 +14,9 @@ import { Checkpoints } from '../features/checkpoints/Checkpoints';
 import { Settings } from '../features/settings/Settings';
 import { Notifier } from '../components/layout/Notifier';
 import { DialogHost } from '../components/ui/dialog';
+import { Account } from '../features/account/Account';
+import { AccountMenu, type AccountSection } from '../features/account/AccountMenu';
+import { LegacyMigrationCard } from '../features/account/LegacyMigrationCard';
 import type { Tab } from './tabs';
 
 // Chart-heavy screens are split out so the initial shell stays small.
@@ -46,8 +49,8 @@ export class AppErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // The local database is never touched here. Surfacing the error beats a
-    // blank screen; reload restores from IndexedDB without data loss.
+    // Rendering never changes authoritative storage. Surfacing the error beats
+    // a blank screen; reload re-reads the account or local store safely.
     console.error('LearnQuest UI error:', error, info.componentStack);
   }
 
@@ -58,7 +61,7 @@ export class AppErrorBoundary extends React.Component<
         <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/10 p-5 text-slate-100">
           <h1 className="text-lg font-bold">Something went wrong in this view</h1>
           <p className="mt-1 text-sm text-slate-300">
-            Your learning data is stored locally and was not deleted. Reload to reopen it; export a backup from
+            Your stored learning data was not deleted here. Reload to re-read it; export a backup from
             Reports if the problem repeats.
           </p>
           <p className="mt-2 break-words font-mono text-[11px] text-red-200">{this.state.error.message}</p>
@@ -122,13 +125,37 @@ const ALL_IDS = new Set<Tab>(GROUPS.flatMap((g) => g.items.map((i) => i.id)));
 
 function tabFromHash(): Tab {
   const h = window.location.hash.replace(/^#\/?/, '');
+  if (h.startsWith('account')) return 'account';
   return (ALL_IDS.has(h as Tab) ? h : 'dash') as Tab;
+}
+
+function SyncIndicator() {
+  const s = useStore();
+  if (s.mode !== 'cloud') return null;
+  if (s.syncStatus === 'saving') return <span className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200" role="status">Saving…</span>;
+  if (s.syncStatus === 'saved') return <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-[11px] text-emerald-200" role="status">Saved</span>;
+  if (s.syncStatus === 'conflict') {
+    return (
+      <button type="button" onClick={() => { void s.reloadCloudData(); }} className="rounded-full bg-red-500/15 px-2 py-1 text-[11px] text-red-200 hover:bg-red-500/25" title={s.syncError ?? 'Save conflict'}>
+        Save conflict · reload
+      </button>
+    );
+  }
+  if (s.syncStatus === 'error') {
+    return (
+      <button type="button" onClick={s.retryCloudSave} className="rounded-full bg-red-500/15 px-2 py-1 text-[11px] text-red-200 hover:bg-red-500/25" title={s.syncError ?? 'Save failed'}>
+        Save failed · retry
+      </button>
+    );
+  }
+  return <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-slate-400" role="status">Cloud account</span>;
 }
 
 function AppInner() {
   const s = useStore();
   const [tab, setTab] = useState<Tab>(() => tabFromHash());
   const [drawer, setDrawer] = useState(false);
+  const [accountSection, setAccountSection] = useState<AccountSection>('profile');
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lq-nav-collapsed') === '1');
   const [health, setHealth] = useState<{ ok: boolean; hasKey: boolean }>({ ok: false, hasKey: false });
   const menuBtnRef = useRef<HTMLButtonElement>(null);
@@ -174,6 +201,11 @@ function AppInner() {
     if (tabFromHash() !== t) window.location.hash = `/${t}`;
     window.scrollTo({ top: 0 });
   }, []);
+
+  const goAccount = useCallback((section: AccountSection) => {
+    setAccountSection(section);
+    go('account');
+  }, [go]);
 
   useEffect(() => {
     localStorage.setItem('lq-nav-collapsed', collapsed ? '1' : '0');
@@ -246,11 +278,11 @@ function AppInner() {
     return (
       <div className="mx-auto max-w-2xl p-6 text-slate-200">
         <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5">
-          <h1 className="text-lg font-bold">Could not open your local learning data</h1>
+          <h1 className="text-lg font-bold">Could not open your learning data</h1>
           <p className="mt-2 text-sm text-slate-300">{s.loadError}</p>
           <p className="mt-2 text-xs text-slate-400">
-            Nothing was overwritten and no defaults were saved. If this persists, open LearnQuest in the same browser
-            profile (private windows cannot see the original IndexedDB), or restore a JSON backup after fixing browser storage.
+            Nothing was overwritten and no defaults were saved. If this persists, retry before restoring a JSON backup;
+            in local test mode, use the same browser profile because private windows cannot see the original IndexedDB.
           </p>
           <button
             type="button"
@@ -268,7 +300,7 @@ function AppInner() {
     return (
       <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
         <p className="text-lg font-semibold">Loading LearnQuest…</p>
-        <p className="text-sm text-slate-500">Restoring your local learning data from IndexedDB.</p>
+        <p className="text-sm text-slate-500">{s.mode === 'cloud' ? 'Loading your account learning data…' : 'Restoring your local learning data from IndexedDB.'}</p>
       </div>
     );
   }
@@ -393,6 +425,7 @@ function AppInner() {
           >
             {health.ok && health.hasKey ? '●' : health.ok ? '● key?' : '○'}
           </button>
+          {s.authUser && <AccountMenu onNavigate={goAccount} />}
         </div>
         <div className="px-3 pb-2">
           <PlaylistSwitcher />
@@ -433,8 +466,23 @@ function AppInner() {
 
       {/* Content */}
       <div data-app-background className={collapsed ? 'lg:pl-[68px]' : 'lg:pl-60'}>
+        {s.authUser && (
+          <div className="sticky top-0 z-20 hidden border-b border-white/10 bg-[#0b0e1a]/90 backdrop-blur lg:block">
+            <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-slate-200">{displayTitle ?? 'LearnQuest'}</p>
+                <p className="truncate text-[10px] text-slate-500">
+                  {snap ? `N=${snap.entries.length} · ${snap.source} · fetched ${new Date(snap.fetchedAt).toLocaleString()}` : 'No active playlist'}
+                </p>
+              </div>
+              <SyncIndicator />
+              <AccountMenu onNavigate={goAccount} />
+            </div>
+          </div>
+        )}
         <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
           {!snap && <Onboarding onGo={(t) => go(t)} />}
+          <LegacyMigrationCard />
           {s.lastDiff && (
             <div className="flex items-start gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm">
               <p className="min-w-0 flex-1">{s.lastDiff}</p>
@@ -468,11 +516,14 @@ function AppInner() {
             {tab === 'history' && <HistoryView />}
             {tab === 'reports' && <Reports />}
             {tab === 'settings' && <Settings />}
+            {tab === 'account' && <Account section={accountSection} onSection={setAccountSection} />}
           </Suspense>
         </main>
 
         <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] text-slate-600">
-          Local-first: progress lives in your browser (IndexedDB). Export JSON backups regularly — no cloud sync.
+          {s.mode === 'cloud'
+            ? 'Cloud account: learning data is stored on the LearnQuest server and scoped to your authenticated account. Exports and backups are available in Reports and Account.'
+            : 'Local test mode: progress lives in this browser (IndexedDB). Production builds use authenticated cloud persistence.'}
         </footer>
       </div>
       <Notifier />
