@@ -9,6 +9,12 @@ clean, stash, or destructive checkout was performed.
 **Authoritative requirements:** `learnquest-multimuser-platform-prompt.txt`,
 including the mandatory addendum, plus `learnquest-multimuser-continuation.txt`.
 
+> **Superseded 2026-10-27:** This is a historical progress ledger. Its numeric
+> OTP references describe the implementation at that time, not current
+> behavior. Current recovery and email verification use single-use email
+> action links; see
+> [`LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md`](./LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md).
+
 ---
 
 ## 1. Status

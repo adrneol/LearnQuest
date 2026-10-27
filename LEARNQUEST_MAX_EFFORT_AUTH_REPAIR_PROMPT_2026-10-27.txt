@@ -1,0 +1,419 @@
+# LEARNQUEST — MAX-EFFORT AUTHENTICATION, SECURITY, EMAIL, AND PRODUCTION REPAIR
+
+You are working inside my existing LearnQuest repository:
+
+`E:\progressGameTracker`
+
+Repository: `adrneol/LearnQuest`
+
+Expected branch: `main`
+
+Current frontend: `https://learn-quest-one.vercel.app`
+
+Current Render backend: `https://learnquest-hhiv.onrender.com`
+
+## EXECUTION MODE — MANDATORY
+
+Use the highest reasoning-effort setting supported by the current DeepSeek model and coding CLI. Enable thinking mode and set reasoning effort to `max` when the CLI supports it. Prefer the strongest available model for repository-wide engineering and security analysis.
+
+Perform a complete audit, implement the required corrections, and run verification. Do not stop after producing a plan or an audit report.
+
+Do not ask me questions that can be resolved by inspecting the repository, its documentation, configuration, and existing implementation. Make reasonable, security-conscious decisions and document any genuinely blocked external action.
+
+Preserve all existing user changes and work in progress. The current working tree intentionally contains uncommitted work.
+
+**Prohibited actions:**
+- Do not commit, push, reset, clean, stash, or switch branches.
+- Do not discard or overwrite existing work merely to make the tree clean.
+- Do not print `.env` contents, API keys, database URIs, OAuth secrets, passwords, session secrets, email tokens, or other credentials in terminal output or reports.
+- Do not run destructive tests against a real Atlas database or actual user accounts.
+- Do not clear browser storage, delete production data, or run a destructive migration to work around a bug.
+- Do not hide exceptions, weaken authentication, introduce mock production authentication, or silently fall back to local-only storage.
+- Do not claim that a live integration works unless it was genuinely tested.
+- Do not claim that any system is impossible to hack or perfectly secure.
+
+## PHASE 1 — INSPECT THE REAL CURRENT STATE
+
+Before editing anything, inspect:
+
+1. `git status --short --branch`
+2. The complete relevant `git diff`, including staged and unstaged changes.
+3. All relevant untracked files, preserving their contents.
+4. `README.md`, `HOW_TO_USE_LEARNQUEST.md`, `DEPLOYMENT_MULTIUSER.md`, and the dated audit/progress reports under `docs/audits/`.
+5. Backend environment validation, authentication, Google OAuth, session management, database repositories, email delivery, account routes, frontend authentication services, application routing, error boundaries, Vercel configuration, Render configuration, and frontend API URL handling.
+6. Existing test suites and the exact scripts provided by both package manifests.
+7. The actual code and configuration against the prior implementation report. Treat the report as historical evidence, not proof that the current working tree or deployed application is correct.
+
+The previous audit reported 54/54 backend tests and 272/272 frontend tests passing, with typecheck and builds passing. It also explicitly said that live MongoDB, Google OAuth, Brevo, Vercel, Render, and browser cookie behavior had not been verified.
+
+Do not assume a previously passing test means a reported user-facing bug is fixed.
+
+## PHASE 2 — FIX THE EXISTING SIGN-IN BYPASS
+
+This is the highest-priority authentication defect.
+
+I observed that LearnQuest can apparently let me sign in even when the account does not exist. Reproduce this behavior and identify its actual root cause.
+
+Inspect every relevant layer:
+- Login form validation and submit handler.
+- Authentication service and API request construction.
+- Backend login routes and account repository lookups.
+- Session creation and session-cookie issuance.
+- OAuth login and registration intent handling.
+- App route guards, authenticated-user state, initialization, and redirects.
+- Error handling when the backend is unavailable or configuration is missing.
+- Any stale mock, development shortcut, optimistic authenticated state, local fallback, or incorrectly accepted response.
+
+Do not fix the symptom by changing only the UI message.
+
+### Password sign-in requirements
+
+For username/email and password sign-in:
+
+- An account must already exist.
+- The password must verify against that account's stored Argon2id hash.
+- Unknown accounts, missing passwords, incorrect passwords, and other invalid credentials must not establish an authenticated session.
+- A failed login must not set an authenticated session cookie, initialize cloud account state, or redirect the user to the authenticated application.
+- The frontend must remain on the sign-in page and display a clear, professional failure message.
+- Do not reveal whether a particular email address exists through distinguishable public login responses. Keep missing-account and wrong-password responses consistent to reduce account enumeration.
+- The backend, not the frontend, must be authoritative about authentication.
+- If the backend is unavailable, return a truthful unavailable/setup-required state. Never simulate success.
+
+Add regression tests that prove this behavior at both backend and frontend levels. Verify that a failed login leaves no newly issued session and grants no account-data access.
+
+## PHASE 3 — MAKE GOOGLE REGISTRATION STRICT
+
+Google must remain the only registration method.
+
+The intended user journey is:
+
+1. The user explicitly selects Create an account.
+2. LearnQuest starts a genuine Google OAuth/OIDC flow.
+3. The backend validates the identity response, issuer, audience, expiry, nonce, OAuth state, and verified Google email.
+4. Identity is bound to Google's stable `sub`, not email alone.
+5. The user completes onboarding with a unique username, display name, and password.
+6. The account and login session are established only after the correct server-side flow has completed.
+
+### Registration restrictions
+
+- Never allow someone to register by merely typing an arbitrary email address.
+- Never trust a client-supplied Google email, Google subject, `email_verified` flag, onboarding identity, or `userId`.
+- Do not silently create an account when someone clicks Google sign-in and Google returns an identity that has never registered.
+- Google login intent and Google registration intent must remain distinct and protected by single-use server-validated OAuth state.
+- If an existing account attempts registration, do not create a duplicate account.
+- A Google identity already linked to an account must not be linked to another account just because the email matches.
+- Enforce normalized unique username and email constraints in the database.
+- Ensure onboarding can only be completed for the specific short-lived, server-validated Google authentication transaction that initiated it.
+- Prevent replay, account takeover, email-linking vulnerabilities, and session fixation.
+
+For an unknown Google identity arriving through the login flow, provide a safe failure and an explicit route back to Create an account. Do not silently switch login into registration.
+
+Preserve password sign-in for accounts that have completed Google registration and onboarding. Google-only registration does not mean password login must be removed.
+
+Write end-to-end-style tests using mocked Google OIDC responses for:
+- New Google identity attempting login.
+- New identity deliberately registering.
+- Existing Google identity signing in.
+- Existing identity trying to create a duplicate account.
+- Unverified email.
+- Invalid audience, issuer, nonce, expiry, state, and replayed state.
+- OAuth identity not matching the server-side onboarding transaction.
+
+## PHASE 4 — REMOVE ALL NUMERIC OTP AUTHENTICATION
+
+I explicitly do not want LearnQuest's six-digit Brevo OTP recovery flow.
+
+Remove the numeric OTP feature from active application behavior, including its UI, API, implementation, tests, and current user-facing documentation.
+
+Do not merely remove the phrase from the login screen while leaving the old feature active.
+
+Do not create fake OTP values, invented example codes, predictable codes, or client-generated authentication tokens.
+
+### Replace OTP with secure, single-use email action links
+
+Keep Brevo as LearnQuest's transactional email provider, but replace numeric password-recovery and email-change verification with secure, single-use email action links.
+
+Implement:
+
+- Cryptographically random, high-entropy opaque tokens; never sequential or predictable tokens.
+- A digest or HMAC of each token in the database, not the raw token.
+- Purpose binding, account binding, and email-address binding where applicable.
+- Short configurable expiry enforced by the server.
+- Atomic single-use consumption so concurrent requests cannot reuse a token.
+- Rate limiting, resend cooldowns, anti-replay handling, and appropriate invalidation of previous active links.
+- Generic password-recovery responses that do not reveal whether the account exists.
+- Safe invalid, expired, already-used, and malformed-link states.
+- Password validation and Argon2id password hashing on the backend.
+- Revocation of existing sessions after a successful password reset, with a fresh login required.
+- Verification of a new email before replacing the account's existing verified email.
+- A security notification to the previous email address when an email change succeeds, where appropriate.
+- No sensitive tokens in ordinary server logs, analytics, exception messages, or email-provider diagnostic output.
+
+Prefer a reset link that carries the token in the URL fragment and exchanges it through an explicit POST after the reset page loads. Remove the token from browser history as early as practicable. Do not consume tokens through a GET request that may be automatically opened by email security scanners.
+
+Use appropriate `Cache-Control: no-store` and `Referrer-Policy: no-referrer` behavior for sensitive recovery pages. Avoid third-party resources on pages handling reset tokens.
+
+Ensure password-reset completion cannot be called successfully without the correct, valid, unused token.
+
+Inspect existing reset-grant and challenge collections before choosing a migration. Remove obsolete OTP code without breaking account storage or unrelated learning data. Rename obsolete configuration only where necessary, preserve existing secrets, and document any new environment variable the owner must configure.
+
+Do not manufacture environment secrets. If a dedicated email-action HMAC secret is introduced, generate it securely, never print it, and explicitly document the local and production configuration required.
+
+Add tests for expired tokens, replay, concurrent consumption, purpose mismatch, account mismatch, token leakage prevention, generic responses, resend limits, and session revocation.
+
+## PHASE 5 — CREATE PROFESSIONAL LEARNQUEST EMAILS
+
+The emails must look like a polished product from LearnQuest, not a raw developer notification.
+
+Implement responsive, accessible HTML emails with a useful plain-text alternative, including:
+- LearnQuest branding and a clear subject.
+- A concise explanation of why the recipient is receiving the email.
+- A clear primary action, such as Reset password or Verify email.
+- The actual secure one-time action link.
+- A truthful expiry duration matching the backend implementation.
+- A statement that the recipient may ignore the message if they did not request it.
+- No passwords, numeric OTPs, raw database data, session tokens, or unnecessary personal information.
+- No invented sender addresses, fake verification codes, or fabricated delivery claims.
+- Sensible typography, spacing, mobile rendering, accessible contrast, and a restrained visual style.
+
+Use the configured `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, and `BREVO_SENDER_NAME`. Keep `LearnQuest` as the display name.
+
+Never hardcode an unverified sender address into source code. Do not assume Brevo's automatically rewritten sender domain or invent an `@brevosend.com` value. Preserve the configured sender and report clearly when it is absent or not verified.
+
+Handle provider failures without falsely telling users that an email was sent. Never return a successful reset result until the server has safely processed the request according to the designed flow.
+
+Keep API keys and email tokens secret. Update tests for HTML/text content and correct action URL construction without sending real email during automated tests.
+
+## PHASE 6 — INVESTIGATE THE `mongodb` RUNTIME ERROR
+
+One of the supplied screenshots shows the actual UI error:
+
+`Cannot read properties of undefined (reading 'mongodb')`
+
+The page also says the stored learning data was not deleted and provides a Reload LearnQuest action.
+
+Trace this error to its exact component, source line, API response, dependency, and execution path. Search the whole repository for the relevant MongoDB property access and related error handling.
+
+Determine whether it originates in:
+- Frontend database or storage initialization.
+- Backend health/configuration response handling.
+- An absent or malformed API response.
+- An exception renderer or error-boundary bug.
+- An actual database connection or repository failure.
+
+Do not guess. Capture the stack trace and reproduce it with a safe fixture or test.
+
+Fix the root cause. Validate the shape of external/API responses, handle unavailable values explicitly, and display an accurate recovery state. Do not suppress the exception, silently revert to local-only data, or claim a destructive operation succeeded when it failed.
+
+Do not delete any stored learning data during this repair. Add regression tests for the exact failing condition and the correct error/recovery behavior.
+
+## PHASE 7 — FIX PRODUCTION SESSION COOKIES AND THE VERCEL/RENDER CONNECTION
+
+This must be treated as a production blocker until verified.
+
+Current known deployment URLs:
+
+- Vercel frontend: `https://learn-quest-one.vercel.app`
+- Render backend: `https://learnquest-hhiv.onrender.com`
+
+The prior report identifies a critical cookie-topology problem: direct browser calls from `*.vercel.app` to `*.onrender.com` are cross-site, while the production cookie is configured with `SameSite=Lax`. A successful OAuth redirect alone does not prove subsequent authenticated API requests will include the session cookie.
+
+Implement the documented same-origin Vercel `/api` proxy approach unless current repository inspection reveals a concrete incompatibility.
+
+### Required topology
+
+The production browser should call relative `/api/...` routes through the Vercel frontend origin. Vercel should rewrite those API requests to the Render backend.
+
+Requirements:
+
+- Inspect Vercel's actual configured project root before choosing the location for the rewrite configuration.
+- Configure the `/api/:path*` rewrite to `https://learnquest-hhiv.onrender.com/api/:path*`.
+- Ensure all frontend API clients use relative `/api` URLs in production.
+- Leave `VITE_API_BASE_URL` empty for this same-origin proxy arrangement.
+- Ensure API path prefixes are not duplicated or dropped by the rewrite.
+- Preserve query parameters, request methods, request bodies, status codes, and relevant response headers, including `Set-Cookie`.
+- Ensure the SPA and its routing still work.
+- Avoid adding multiple contradictory Vercel configurations.
+- Keep local development working with Vite on port `5173` and the backend on port `3001`.
+
+For production, align the server configuration with the actual public topology:
+
+`APP_ORIGIN=https://learn-quest-one.vercel.app`
+
+`CORS_ORIGIN=https://learn-quest-one.vercel.app`
+
+`GOOGLE_REDIRECT_URI=https://learn-quest-one.vercel.app/api/auth/google/callback`
+
+`API_ORIGIN=https://learnquest-hhiv.onrender.com`
+
+Treat `API_ORIGIN` as the backend's public service origin/fallback setting as required by the existing code. Do not make the production browser call that Render origin directly when using the proxy.
+
+The public Google production redirect URI must match the URL the browser visits, including the `/api/auth/google/callback` path. Do not use the private/direct Render callback as the registered production redirect while the public callback is routed through Vercel.
+
+Retain the correct local callback:
+
+`http://localhost:3001/api/auth/google/callback`
+
+Inspect the backend's origin validation, OAuth URL generation, callback handling, CORS configuration, proxy trust settings, and session handling before changing them. Do not simply disable origin checks or set wildcard CORS.
+
+### Session cookie requirements
+
+Preserve secure server-side sessions and verify the production session cookie has the intended properties:
+
+- `__Host-lq_session`
+- `Secure`
+- `HttpOnly`
+- `SameSite=Lax`
+- `Path=/`
+- No `Domain` attribute
+
+Keep a suitable development cookie configuration for localhost.
+
+Mutating requests must continue to require the appropriate CSRF protection. Verify exact-origin checks, session rotation, session revocation, expiry, and logout.
+
+Audit `TRUST_PROXY_HOPS` against the real Render/Vercel proxy chain. Never increase it arbitrarily or trust arbitrary forwarding headers. Document the final setting and why it is correct.
+
+Add tests for configuration and proxy-sensitive behavior where the environment supports it. If actual browser and deployment verification cannot be performed locally, provide precise owner-side instructions for testing the live `Set-Cookie` header and an authenticated `/api/account/data` request after reload.
+
+## PHASE 8 — VERIFY THE NODE RUNTIME AND RENDER CONFIGURATION
+
+The project is a Node.js/TypeScript application, not a PHP application.
+
+The earlier report documented a Node `24.22.1` pin, but also stated that local tests ran on Node `24.11.0`, and the actual Render runtime was not verified.
+
+Inspect and reconcile:
+
+- `backend/.node-version`
+- `backend/package.json` `engines`
+- Backend lockfile and build/start scripts.
+- `render.yaml`
+- Render root directory and service configuration.
+- Dashboard-level `NODE_VERSION` risk.
+- Any configuration that may override the repository's declared Node version.
+
+Keep the runtime configuration consistent with the intended Node `24.22.1` release if supported by the current project and Render environment.
+
+Do not claim that Render uses the intended version just because `render.yaml` specifies it. Distinguish repository configuration from the runtime actually used by a deployment.
+
+If the required runtime is unavailable locally, report that limitation and give the owner an exact Render verification procedure. Do not weaken engine requirements just to silence a local warning.
+
+Do not update unrelated packages unnecessarily. Never use `npm audit fix --force` without a separately justified compatibility analysis.
+
+## PHASE 9 — AUDIT THE AUTHENTICATION SECURITY BOUNDARY
+
+Perform a focused security review of the real implementation. Do not guarantee zero vulnerabilities; identify what was inspected, which tests support the conclusions, and what remains unverified.
+
+Inspect at least:
+
+- Google OAuth state, PKCE, nonce, issuer, audience, expiry, verified email, stable `sub`, replay prevention, and account-linking logic.
+- Username/email normalization and database uniqueness.
+- Argon2id password storage and verification.
+- Login error behavior and timing considerations.
+- Session token generation, hashing, expiry, rotation, revocation, and cookie settings.
+- CSRF token lifecycle and validation.
+- Exact-origin validation, CORS, reverse proxy trust, and rate limiting.
+- Password-reset and email-change action-token lifecycle.
+- Account ownership and isolation in all reads, updates, exports, archives, and deletes.
+- Mass assignment, client-supplied `userId`, privilege escalation, and IDOR risks.
+- Sensitive error details, stack traces, secrets in logs, credential exposure, and incorrect setup messages.
+- Dependency audit results and unneeded privileged dependencies.
+
+Do not weaken existing safeguards to make tests pass. Add a regression test for each real defect found.
+
+## PHASE 10 — UI POLISH AND ACCURATE PRODUCT MESSAGING
+
+Retain the current polished dark visual style, spacing, and card layout where they work.
+
+Improve the authentication UI so it is professional, responsive, accessible, and truthful.
+
+Remove the six-digit OTP references from active UI copy. Replace awkward or unsupported wording such as "No invented numbers" with clear product language that describes actual behavior without making unverifiable guarantees.
+
+The sign-in page must clearly distinguish:
+- Google sign-in for previously registered users.
+- Username/email plus password for an existing LearnQuest account.
+- Create an account, which starts with Google verification.
+- Password recovery, using a single-use email reset link.
+
+Provide useful loading, success, failure, unavailable, and expired-link states. Avoid accidental duplicate submissions, misleading success messages, uncontrolled navigation, or flashing authenticated content before the server has validated the session.
+
+Do not redesign the whole application unnecessarily. Keep the authentication flow cohesive with the existing LearnQuest design.
+
+## PHASE 11 — TEST, BUILD, AND VALIDATE
+
+After implementing the fixes, run verification in a sensible sequence. Do not overload the machine by running concurrent builds and timing-sensitive frontend tests together.
+
+At minimum:
+
+1. Backend tests.
+2. Frontend tests.
+3. Backend typecheck and lint.
+4. Frontend typecheck and lint.
+5. Backend production build.
+6. Frontend production build.
+7. Dependency audit in both packages.
+8. Backend health smoke test.
+9. Regression tests for every reproduced bug.
+10. Static review of active UI copy, route definitions, environment-variable validation, and the production rewrite.
+
+Tests must cover:
+- Nonexistent-account login rejection.
+- Wrong-password rejection.
+- No session issued on either failed-login path.
+- Unknown Google login identity does not auto-register.
+- Explicit Google registration and protected onboarding.
+- Existing identity login and duplicate-registration rejection.
+- Numeric OTP routes no longer authenticate users.
+- Secure password-reset links, expiry, invalidation, and single use.
+- Email-change link verification where applicable.
+- CSRF, origin validation, session rotation and revocation.
+- User-data isolation.
+- The `mongodb` runtime-error regression.
+- API routing and cookie configuration for the proxy architecture.
+- Professional HTML and plain-text email output.
+
+Do not relax assertions, skip tests, or add tests that merely repeat the implementation's assumptions. Make sure tests fail against the defective behavior before treating them as regression coverage.
+
+Use mocks for external providers in automated tests. Never use actual production accounts or user data in destructive tests.
+
+If an external integration requires secrets or a dashboard action, state precisely what was not tested. Do not fabricate successful Google, MongoDB, Brevo, Vercel, or Render checks.
+
+## PHASE 12 — UPDATE DOCUMENTATION AND REPORT
+
+Preserve historic reports and add a dated continuation section or new dated report recording the current work.
+
+Update the relevant deployment and authentication documentation to reflect the final implementation, including:
+- Google-only registration and password sign-in.
+- The absence of numeric OTPs.
+- The new secure email-action-link recovery flow.
+- Brevo's verified sender and transactional email settings.
+- All required current environment-variable names.
+- The same-origin Vercel proxy.
+- Exact public Google callback requirements.
+- Node runtime requirements.
+- Local versus live integration verification.
+- Remaining owner-side tasks.
+
+Do not leave contradictory documentation claiming that six-digit OTP remains the active flow or that the browser should call Render directly while using the Vercel proxy.
+
+Do not include any real secret values in the report.
+
+## FINAL RESPONSE REQUIREMENTS
+
+When work is done, provide a factual implementation report with:
+
+1. Root cause of the nonexistent-account login defect.
+2. Root cause of the `mongodb` runtime error.
+3. Exact files changed and why.
+4. Confirmation that registration remains Google-only.
+5. Confirmation that numeric OTP was removed and secure email action links were implemented.
+6. The security controls retained or added.
+7. The final Vercel/Render topology and Google callback configuration.
+8. Node runtime configuration and what was actually verified.
+9. Test, typecheck, lint, build, and dependency audit results, including failures and warnings.
+10. What was verified locally versus what requires real credentials or deployed services.
+11. Exact owner-side steps required in Google Cloud, Render, Vercel, Atlas, or Brevo.
+12. Final `git status --short --branch` and confirmation that no commit or push was performed.
+
+Do not stop at code changes that compile. Reproduce the reported problems, fix their root causes, add regression tests, and verify the new behavior.
+
+Begin by inspecting the current repository and the previous reports. Then execute the full repair.

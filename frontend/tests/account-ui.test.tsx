@@ -38,9 +38,8 @@ function makeStore() {
     revokeAccountSession: vi.fn(async () => undefined),
     changeAccountPassword: vi.fn(async () => undefined),
     requestEmailChange: vi.fn(async (email: string) => ({
-      challengeId: 'challenge-1', expiresInMin: 10, targetEmail: email,
+      ok: true, email, expiresInMin: 30, message: `A verification link was sent to ${email}.`,
     })),
-    verifyEmailChange: vi.fn(async () => undefined),
     signOut: vi.fn(async () => undefined),
   };
 }

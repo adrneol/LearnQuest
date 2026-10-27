@@ -1,24 +1,26 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { DataStore } from '../store.js';
 import { env, configStatus } from '../config/env.js';
 import type { EmailService } from '../email/brevo.js';
-import type { GoogleOAuthService } from '../auth/google.js';
+import type { GoogleOAuthService, GoogleAuthIntent } from '../auth/google.js';
 import {
-  boundedInt, completeOnboarding, createAccountFromGoogle, findAccountByIdentifier, findAccountById,
-  safeAccount, setAccountPassword, updateAccountPreferences, validatePassword, validateTimezone, http,
+  boundedInt, completeOnboarding, createAccountFromGoogle, findAccountByGoogleSub,
+  findAccountById, findAccountByIdentifier, safeAccount, setAccountPassword,
+  updateAccountPreferences, validatePassword, validateTimezone, http,
   type Account, type SafeAccount,
 } from '../auth/accounts.js';
 import {
   burnPasswordCheck, hashCode, normalizeEmail, verifyCode,
 } from '../auth/crypto.js';
 import {
-  findSessionByToken, markReauthenticated, revokeAllSessions, revokeSession,
-  rotateSession, isRecentAuth,
+  findSessionByToken, isGoogleOnboardingSession, isRecentAuth, markReauthenticated,
+  revokeAllSessions, revokeSession, rotateSession,
 } from '../auth/sessions.js';
-import { issueChallenge, issueResetGrant, consumeResetGrant, verifyChallenge } from '../auth/otp.js';
+import {
+  consumeEmailActionToken, invalidateEmailAction, issueEmailActionToken, latestEmailAction,
+} from '../auth/actionTokens.js';
 import {
   clearSessionCookie, clientInfo, noStore, readSessionToken, requireAuth, requireCsrf,
   requireRecentAuth, setSessionCookie, type AuthedRequest,
@@ -27,7 +29,7 @@ import {
 const loginSchema = z.object({
   identifier: z.string().trim().min(1).max(320),
   password: z.string().min(1).max(128),
-});
+}).strict();
 const onboardingSchema = z.object({
   username: z.string().max(64),
   displayName: z.string().max(120),
@@ -36,18 +38,19 @@ const onboardingSchema = z.object({
   sessionLenMin: z.number().optional(),
   breakMin: z.number().optional(),
   minViableMin: z.number().optional(),
-});
-const forgotSchema = z.object({ identifier: z.string().trim().min(1).max(320) });
-const verifyOtpSchema = z.object({
-  challengeId: z.string().min(1).max(100),
-  code: z.string().min(1).max(10),
-});
-const resetSchema = z.object({ resetToken: z.string().min(20).max(200), newPassword: z.string().max(128) });
+}).strict();
+const forgotSchema = z.object({ identifier: z.string().trim().min(1).max(320) }).strict();
+const resetSchema = z.object({
+  token: z.string().min(20).max(512),
+  newPassword: z.string().max(128),
+}).strict();
 const passwordChangeSchema = z.object({
   currentPassword: z.string().max(128).optional(),
   newPassword: z.string().max(128),
-});
-const reauthSchema = z.object({ password: z.string().max(128).optional() });
+}).strict();
+const reauthSchema = z.object({ password: z.string().max(128).optional() }).strict();
+
+const GOOGLE_ONBOARDING_MINUTES = 30;
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -56,7 +59,7 @@ function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
 }
 
 async function requireSetup(store: DataStore): Promise<void> {
-  if (!env.sessionConfigured || !env.mongodbConfigured) {
+  if (!env.sessionConfigured || !env.mongodbConfigured || !env.emailActionConfigured) {
     throw http(503, 'Account services are not configured yet. Ask the administrator to complete backend setup.', 'SETUP_REQUIRED');
   }
   void store;
@@ -68,6 +71,10 @@ async function safeNotice(email: EmailService, input: { to: string; subject: str
   } catch {
     // Delivery failure must not turn a completed password change into an error.
   }
+}
+
+function onboardingExpiry(): string {
+  return new Date(Date.now() + GOOGLE_ONBOARDING_MINUTES * 60_000).toISOString();
 }
 
 export interface AuthRouterDeps {
@@ -87,12 +94,12 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     legacyHeaders: false,
     message: { error: 'Too many sign-in attempts. Wait 15 minutes and try again.' },
   });
-  const otpLimiter = rateLimit({
+  const emailActionLimiter = rateLimit({
     windowMs: 15 * 60_000,
-    max: env.otpRateLimitPer15Min,
+    max: env.emailActionRateLimitPer15Min,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    message: { error: 'Too many verification requests. Wait 15 minutes and try again.' },
+    message: { error: 'Too many email verification requests. Wait 15 minutes and try again.' },
   });
 
   router.get('/config', noStore, (_req, res) => {
@@ -125,37 +132,98 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         user: safeAccount(account),
         csrfToken: session.csrfToken,
         onboardingRequired: !account.onboardingComplete,
-        config,
+        ...config,
       });
     } catch (e) {
       next(e);
     }
   });
 
-  router.get('/google/start', loginLimiter, async (_req, res, next) => {
+  router.get('/google/start', loginLimiter, noStore, async (req, res, next) => {
     try {
       await requireSetup(store);
-      const { url } = await google.start();
-      res.json({ url });
+      const rawIntent = typeof req.query.intent === 'string' ? req.query.intent : 'login';
+      if (rawIntent !== 'login' && rawIntent !== 'register') {
+        throw http(400, 'Choose whether to sign in or create an account.', 'INVALID_OAUTH_INTENT');
+      }
+      const intent: GoogleAuthIntent = rawIntent;
+      const { url } = await google.start(intent);
+      res.json({ url, intent });
     } catch (e) {
       next(e);
     }
   });
 
-  router.get('/google/callback', loginLimiter, async (req, res) => {
+  /**
+   * Google callback. Login and registration intents are deliberately distinct:
+   * an unknown identity arriving through login is never turned into an account.
+   */
+  router.get('/google/callback', loginLimiter, noStore, async (req, res) => {
     const fail = (code: string) => res.redirect(303, `${env.appOrigin}/#/auth?error=${encodeURIComponent(code)}`);
     try {
       if (typeof req.query.error === 'string') return fail('google_cancelled');
       const code = typeof req.query.code === 'string' ? req.query.code : '';
       const state = typeof req.query.state === 'string' ? req.query.state : '';
-      const identity = await google.complete(code, state);
-      const account = await createAccountFromGoogle(store, identity);
+      const { identity, intent } = await google.complete(code, state);
+      if (!identity.emailVerified) return fail('EMAIL_NOT_VERIFIED');
+
+      const account = await findAccountByGoogleSub(store, identity.sub);
       const oldToken = readSessionToken(req);
       const info = clientInfo(req);
-      const created = await rotateSession(store, oldToken, account.userId, info);
+
+      if (intent === 'login') {
+        if (!account) return fail('google_account_not_found');
+        if (account.status !== 'active') return fail('ACCOUNT_UNAVAILABLE');
+        const onboarding = !account.onboardingComplete;
+        const created = await rotateSession(store, oldToken, account.userId, {
+          ...info,
+          authMethod: onboarding ? 'google_register' : 'google_login',
+          onboardingExpiresAt: onboarding ? onboardingExpiry() : null,
+          onboardingGoogleSub: onboarding ? identity.sub : null,
+        });
+        setSessionCookie(res, created.token, created.maxAgeSec);
+        await store.accounts.updateOne({ userId: account.userId }, { $set: { lastLoginAt: new Date().toISOString() } });
+        return res.redirect(303, `${env.appOrigin}/#/${onboarding ? 'onboarding' : 'dash'}`);
+      }
+
+      // Registration intent.
+      if (account) {
+        if (account.status !== 'active') return fail('ACCOUNT_UNAVAILABLE');
+        if (account.onboardingComplete) {
+          // An existing account is never silently signed in through the
+          // registration route; the person must choose sign-in explicitly.
+          return fail('google_account_exists');
+        }
+        // Resume an interrupted registration for the same Google subject. No
+        // duplicate account is created.
+        const created = await rotateSession(store, oldToken, account.userId, {
+          ...info,
+          authMethod: 'google_register',
+          onboardingExpiresAt: onboardingExpiry(),
+          onboardingGoogleSub: identity.sub,
+        });
+        setSessionCookie(res, created.token, created.maxAgeSec);
+        await store.accounts.updateOne({ userId: account.userId }, { $set: { lastLoginAt: new Date().toISOString() } });
+        return res.redirect(303, `${env.appOrigin}/#/onboarding`);
+      }
+
+      const emailOwner = await store.accounts.findOne({ emailNormalized: normalizeEmail(identity.email) });
+      if (emailOwner) return fail('LINK_REQUIRED');
+
+      let pending: Account;
+      try {
+        pending = await createAccountFromGoogle(store, identity);
+      } catch (e: any) {
+        return fail(typeof e?.code === 'string' ? e.code : 'google_registration_failed');
+      }
+      const created = await rotateSession(store, oldToken, pending.userId, {
+        ...info,
+        authMethod: 'google_register',
+        onboardingExpiresAt: onboardingExpiry(),
+        onboardingGoogleSub: identity.sub,
+      });
       setSessionCookie(res, created.token, created.maxAgeSec);
-      await store.accounts.updateOne({ userId: account.userId }, { $set: { lastLoginAt: new Date().toISOString() } });
-      return res.redirect(303, `${env.appOrigin}/#/${account.onboardingComplete ? 'dash' : 'onboarding'}`);
+      return res.redirect(303, `${env.appOrigin}/#/onboarding`);
     } catch (e: any) {
       const code = typeof e?.code === 'string' ? e.code : 'google_failed';
       return fail(code);
@@ -173,9 +241,10 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       }
       const ok = await verifyCode(body.password, account.passwordHash);
       if (!ok) throw http(401, 'Invalid username/email or password.', 'INVALID_CREDENTIALS');
-      const oldToken = readSessionToken(req);
-      const info = clientInfo(req);
-      const created = await rotateSession(store, oldToken, account.userId, info);
+      const created = await rotateSession(store, readSessionToken(req), account.userId, {
+        ...clientInfo(req),
+        authMethod: 'password',
+      });
       setSessionCookie(res, created.token, created.maxAgeSec);
       await store.accounts.updateOne({ userId: account.userId }, { $set: { lastLoginAt: new Date().toISOString() } });
       res.json({ authenticated: true, user: safeAccount(account), csrfToken: created.session.csrfToken });
@@ -184,7 +253,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     }
   });
 
-  router.post('/logout', async (req, res, next) => {
+  router.post('/logout', noStore, async (req, res, next) => {
     try {
       const token = readSessionToken(req);
       if (token) await revokeSession(store, token);
@@ -195,7 +264,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     }
   });
 
-  router.post('/logout-all', auth, csrf, async (req: AuthedRequest, res, next) => {
+  router.post('/logout-all', auth, csrf, noStore, async (req: AuthedRequest, res, next) => {
     try {
       await revokeAllSessions(store, req.auth!.userId);
       clearSessionCookie(res);
@@ -209,6 +278,9 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     try {
       const account = req.auth!.account;
       if (account.onboardingComplete) throw http(409, 'This account has already completed setup.', 'ONBOARDING_COMPLETE');
+      if (!isGoogleOnboardingSession(req.auth!.session, account.googleSub)) {
+        throw http(403, 'This Google registration session has expired or does not belong to this account. Start account creation again.', 'ONBOARDING_SESSION_INVALID');
+      }
       const body = parseBody(onboardingSchema, req.body);
       validatePassword(body.password);
       const passwordHash = await hashCode(body.password);
@@ -221,8 +293,10 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         breakMin: body.breakMin,
         minViableMin: body.minViableMin,
       }, passwordHash);
-      const info = clientInfo(req);
-      const created = await rotateSession(store, readSessionToken(req), updated.userId, info);
+      const created = await rotateSession(store, readSessionToken(req), updated.userId, {
+        ...clientInfo(req),
+        authMethod: 'password',
+      });
       setSessionCookie(res, created.token, created.maxAgeSec);
       res.json({ user: safeAccount(updated), csrfToken: created.session.csrfToken });
     } catch (e) {
@@ -259,7 +333,10 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const newHash = await hashCode(body.newPassword);
       await setAccountPassword(store, account, newHash);
       await revokeAllSessions(store, account.userId, req.auth!.session.sessionId);
-      const created = await rotateSession(store, readSessionToken(req), account.userId, clientInfo(req));
+      const created = await rotateSession(store, readSessionToken(req), account.userId, {
+        ...clientInfo(req),
+        authMethod: 'password',
+      });
       setSessionCookie(res, created.token, created.maxAgeSec);
       await safeNotice(email, {
         to: account.email,
@@ -272,47 +349,50 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     }
   });
 
-  router.post('/forgot', otpLimiter, noStore, async (req, res, next) => {
+  /**
+   * Request a password-reset link. The response is identical for known and
+   * unknown accounts, and never contains a token or challenge identifier.
+   */
+  router.post('/forgot', emailActionLimiter, noStore, async (req, res, next) => {
     try {
       await requireSetup(store);
       if (!email.configured) {
         throw http(503, 'Password recovery email is not configured yet. Ask the administrator to set Brevo credentials.', 'SETUP_REQUIRED');
       }
       const body = parseBody(forgotSchema, req.body);
-      const generic: { ok: true; challengeId: string; message: string } = {
-        ok: true,
-        challengeId: randomUUID(),
-        message: 'If an account matches that username or email, a six-digit reset code has been sent. The code expires shortly.',
+      const generic = {
+        ok: true as const,
+        message: `If an account matches that username or email, a password reset link has been sent. The link expires in ${env.emailActionTtlMin} minutes and can be used once.`,
       };
       const account = await findAccountByIdentifier(store, body.identifier);
       if (!account || account.status !== 'active') {
         res.status(202).json(generic);
         return;
       }
-      const prior = await store.challenges.find({ userId: account.userId, purpose: 'password_reset' }, { sort: { createdAt: -1 }, limit: 1 });
-      const last = prior[0];
-      if (last && Date.now() - Date.parse(last.createdAt) < env.otpResendSec * 1000) {
-        res.status(202).json({ ...generic, challengeId: String(last.challengeId) });
+      const latest = await latestEmailAction(store, account.userId, 'password_reset');
+      if (latest && Date.now() - Date.parse(latest.createdAt) < env.emailActionResendSec * 1000) {
+        res.status(202).json(generic);
         return;
       }
-      const issued = await issueChallenge(store, {
+      const issued = await issueEmailActionToken(store, {
         userId: account.userId,
         purpose: 'password_reset',
-        emailNormalized: normalizeEmail(account.email),
+        accountEmailNormalized: account.emailNormalized,
+        emailNormalized: account.emailNormalized,
         targetEmail: account.email,
       });
-      generic.challengeId = issued.challengeId;
       try {
-        await email.sendOtp({
+        await email.sendActionEmail({
           to: account.email,
-          code: issued.code,
-          expiresInMin: issued.expiresInMin,
           purpose: 'password_reset',
+          actionUrl: issued.actionUrl,
+          expiresInMin: issued.expiresInMin,
         });
-      } catch (e) {
-        await store.challenges.updateOne({ challengeId: issued.challengeId }, { $set: { consumedAt: new Date().toISOString() } });
-        // Still generic: delivery failure must not reveal account existence.
-        void e;
+      } catch {
+        // The response stays generic to avoid account enumeration. The token is
+        // invalidated immediately and no success email claim is stored.
+        await invalidateEmailAction(store, issued.tokenId);
+        console.error('LearnQuest password-reset email delivery failed; the issued link was invalidated.');
       }
       res.status(202).json(generic);
     } catch (e) {
@@ -320,43 +400,28 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     }
   });
 
-  router.post('/otp/verify', otpLimiter, noStore, async (req, res, next) => {
-    try {
-      await requireSetup(store);
-      const body = parseBody(verifyOtpSchema, req.body);
-      const verified = await verifyChallenge(store, {
-        challengeId: body.challengeId,
-        code: body.code,
-        purpose: 'password_reset',
-      });
-      if (!verified.ok || !verified.challenge) {
-        throw http(400, 'The code is invalid or has expired. Request a new code.', 'INVALID_OTP');
-      }
-      const account = await findAccountById(store, verified.challenge.userId);
-      if (!account || account.status !== 'active') throw http(400, 'The code is invalid or has expired.', 'INVALID_OTP');
-      const grant = await issueResetGrant(store, account.userId);
-      res.json({ ok: true, resetToken: grant.token, expiresAt: grant.expiresAt });
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  router.post('/password/reset', otpLimiter, noStore, async (req, res, next) => {
+  /** Complete a reset with the single-use link token. GET never consumes it. */
+  router.post('/password/reset', emailActionLimiter, noStore, async (req, res, next) => {
     try {
       await requireSetup(store);
       const body = parseBody(resetSchema, req.body);
+      // Validate before consuming so a weak password does not burn the link.
       validatePassword(body.newPassword);
-      const grant = await consumeResetGrant(store, body.resetToken);
-      if (!grant) throw http(400, 'The reset authorization is invalid or expired. Request a new code.', 'INVALID_RESET_GRANT');
-      const account = await findAccountById(store, grant.userId);
-      if (!account || account.status !== 'active') throw http(400, 'The reset authorization is invalid.', 'INVALID_RESET_GRANT');
+      const record = await consumeEmailActionToken(store, body.token, 'password_reset');
+      if (!record) {
+        throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
+      }
+      const account = await findAccountById(store, record.userId);
+      if (!account || account.status !== 'active' || account.emailNormalized !== record.emailNormalized) {
+        throw http(400, 'This password reset link is invalid, expired, or already used. Request a new link.', 'INVALID_RESET_TOKEN');
+      }
       const newHash = await hashCode(body.newPassword);
       await setAccountPassword(store, account, newHash);
       await revokeAllSessions(store, account.userId);
       await safeNotice(email, {
         to: account.email,
         subject: 'Your LearnQuest password was reset',
-        message: `Your LearnQuest password was reset on ${new Date().toUTCString()}. All existing sessions were signed out. If this was not you, contact support immediately.`,
+        message: `Your LearnQuest password was reset on ${new Date().toUTCString()}. All existing sessions were signed out. If this was not you, request another reset link immediately.`,
       });
       res.status(204).end();
     } catch (e) {

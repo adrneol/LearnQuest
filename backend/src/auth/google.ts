@@ -12,10 +12,17 @@ export interface GoogleIdentity {
   name?: string;
 }
 
+export type GoogleAuthIntent = 'login' | 'register';
+
+export interface GoogleOAuthResult {
+  identity: GoogleIdentity;
+  intent: GoogleAuthIntent;
+}
+
 export interface GoogleOAuthService {
   readonly configured: boolean;
-  start(): Promise<{ url: string; state: string }>;
-  complete(code: string, state: string): Promise<GoogleIdentity>;
+  start(intent: GoogleAuthIntent): Promise<{ url: string; state: string }>;
+  complete(code: string, state: string): Promise<GoogleOAuthResult>;
 }
 
 interface GoogleStateDoc {
@@ -23,6 +30,7 @@ interface GoogleStateDoc {
   stateHash: string;
   nonce: string;
   verifier: string;
+  intent: GoogleAuthIntent;
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
@@ -80,9 +88,12 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
     get configured() {
       return env.googleConfigured;
     },
-    async start() {
+    async start(intent) {
       if (!env.googleConfigured) {
         throw Object.assign(new Error('Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.'), { status: 503, code: 'SETUP_REQUIRED' });
+      }
+      if (intent !== 'login' && intent !== 'register') {
+        throw Object.assign(new Error('Choose whether to sign in or create an account.'), { status: 400, code: 'INVALID_OAUTH_INTENT' });
       }
       const state = randomToken(32);
       const nonce = randomToken(24);
@@ -92,6 +103,7 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
         stateHash: sha256(state),
         nonce,
         verifier,
+        intent,
         createdAt: new Date(now).toISOString(),
         expiresAt: new Date(now + 10 * 60_000).toISOString(),
         usedAt: null,
@@ -158,7 +170,11 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
         throw Object.assign(new Error('Google did not return an identity token.'), { status: 401, code: 'INVALID_GOOGLE_TOKEN' });
       }
       try {
-        return await verify(tokenResponse.id_token, { nonce: record.nonce, clientId: env.googleClientId });
+        const identity = await verify(tokenResponse.id_token, { nonce: record.nonce, clientId: env.googleClientId });
+        // State documents created by an older deployment have no intent. They
+        // are treated as login, never as implicit registration.
+        const intent: GoogleAuthIntent = record.intent === 'register' ? 'register' : 'login';
+        return { identity, intent };
       } catch (e: any) {
         if (e?.status) throw e;
         throw Object.assign(new Error('Google identity token validation failed.'), { status: 401, code: 'INVALID_GOOGLE_TOKEN' });

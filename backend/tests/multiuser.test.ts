@@ -8,9 +8,8 @@ import { createAccountFromGoogle, completeOnboarding } from '../src/auth/account
 import { assertProductionConfig } from '../src/config/env.js';
 import { hashCode } from '../src/auth/crypto.js';
 import { validateGoogleClaims, createGoogleOAuthService } from '../src/auth/google.js';
-import { issueChallenge } from '../src/auth/otp.js';
-import type { EmailService, OtpEmailInput, SecurityNoticeInput } from '../src/email/brevo.js';
-import type { GoogleIdentity, GoogleOAuthService } from '../src/auth/google.js';
+import type { ActionEmailInput, EmailService, SecurityNoticeInput } from '../src/email/brevo.js';
+import type { GoogleIdentity, GoogleAuthIntent, GoogleOAuthService } from '../src/auth/google.js';
 import {
   readUserState, replaceAllUserState, replaceUserCollection, emptyUserState,
 } from '../src/services/userData.js';
@@ -28,7 +27,7 @@ const ENV: Record<string, string> = {
   MONGODB_URI: 'mongodb://127.0.0.1:27017/learnquest-test',
   MONGODB_DB_NAME: 'learnquest_test',
   SESSION_SECRET: 'test-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz',
-  OTP_HMAC_SECRET: 'test-otp-secret-0123456789-abcdefghijklmnopqrstuvwxyz',
+  EMAIL_ACTION_HMAC_SECRET: 'test-email-action-secret-0123456789-abcdefghijklmnopqrstuvwxyz',
   GOOGLE_CLIENT_ID: 'test-google-client.apps.googleusercontent.com',
   GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
   GOOGLE_REDIRECT_URI: 'http://localhost:3001/api/auth/google/callback',
@@ -37,22 +36,21 @@ const ENV: Record<string, string> = {
   BREVO_SENDER_NAME: 'LearnQuest Test',
   RATE_LIMIT_PER_MIN: '10000',
   AUTH_RATE_LIMIT_PER_MIN: '10000',
-  OTP_RATE_LIMIT_PER_15MIN: '10000',
+  EMAIL_ACTION_RATE_LIMIT_PER_15MIN: '10000',
   TRUST_PROXY_HOPS: '0',
   SESSION_IDLE_HOURS: '168',
   SESSION_ABSOLUTE_DAYS: '30',
-  OTP_TTL_MIN: '10',
-  OTP_RESEND_SEC: '60',
-  OTP_MAX_ATTEMPTS: '5',
+  EMAIL_ACTION_TTL_MIN: '30',
+  EMAIL_ACTION_RESEND_SEC: '60',
 };
 const savedEnv: Record<string, string | undefined> = {};
 for (const k of Object.keys(ENV)) savedEnv[k] = process.env[k];
 
 class FakeEmail implements EmailService {
   configured = true;
-  otps: OtpEmailInput[] = [];
+  actions: ActionEmailInput[] = [];
   notices: SecurityNoticeInput[] = [];
-  async sendOtp(input: OtpEmailInput) { this.otps.push({ ...input }); }
+  async sendActionEmail(input: ActionEmailInput) { this.actions.push({ ...input }); }
   async sendSecurityNotice(input: SecurityNoticeInput) { this.notices.push({ ...input }); }
 }
 
@@ -69,12 +67,17 @@ beforeEach(() => {
   store = createDataStore(db);
   email = new FakeEmail();
   googleIdentity = { sub: 'google-sub-1', email: 'one@example.test', emailVerified: true, name: 'One' };
+  const started = new Map<string, GoogleAuthIntent>();
   google = {
     configured: true,
-    async start() { return { url: 'https://accounts.google.test/auth', state: 'fake-state' }; },
+    async start(intent: GoogleAuthIntent) {
+      const state = `fake-state-${intent}`;
+      started.set(state, intent);
+      return { url: `https://accounts.google.test/auth?state=${encodeURIComponent(state)}`, state };
+    },
     async complete(code: string, state: string) {
-      if (code !== 'code-ok' || state !== 'fake-state') throw Object.assign(new Error('bad oauth'), { status: 400, code: 'INVALID_OAUTH_STATE' });
-      return { ...googleIdentity };
+      if (code !== 'code-ok' || !started.has(state)) throw Object.assign(new Error('bad oauth'), { status: 400, code: 'INVALID_OAUTH_STATE' });
+      return { identity: { ...googleIdentity }, intent: started.get(state)! };
     },
   };
   app = createApp({ store, email, google });
@@ -87,6 +90,25 @@ afterEach(async () => {
   }
   await db.close();
 });
+
+async function startGoogle(intent: GoogleAuthIntent) {
+  const res = await request(app).get('/api/auth/google/start').query({ intent });
+  expect(res.status).toBe(200);
+  const state = new URL(res.body.url).searchParams.get('state');
+  expect(state).toBeTruthy();
+  return state!;
+}
+
+async function callback(state: string, code = 'code-ok') {
+  return request(app).get('/api/auth/google/callback').query({ code, state });
+}
+
+function actionToken(actionUrl: string): string {
+  const url = new URL(actionUrl);
+  const token = new URLSearchParams(url.hash.split('?')[1] ?? '').get('token');
+  expect(token).toBeTruthy();
+  return token!;
+}
 
 function snapshot(playlistId: string, title: string, count = 3) {
   return {
@@ -172,17 +194,17 @@ async function stateVersion(session: { cookie: string; csrf: string }) {
 }
 
 describe('account registration and sessions', () => {
-  it('creates a Google account through onboarding and rotates the session', async () => {
-    const start = await request(app).get('/api/auth/google/start');
-    expect(start.status).toBe(200);
-    expect(start.body.url).toContain('accounts.google.test');
-    const callback = await request(app).get('/api/auth/google/callback').query({ code: 'code-ok', state: 'fake-state' });
-    expect(callback.status).toBe(303);
-    expect(callback.headers.location).toContain('/#/onboarding');
-    const cookie = String(callback.headers['set-cookie'][0]).split(';')[0];
+  it('creates a Google account through explicit registration and rotates the session', async () => {
+    const state = await startGoogle('register');
+    const callbackRes = await callback(state);
+    expect(callbackRes.status).toBe(303);
+    expect(callbackRes.headers.location).toContain('/#/onboarding');
+    const cookie = String(callbackRes.headers['set-cookie'][0]).split(';')[0];
     const session1 = await request(app).get('/api/auth/session').set('Cookie', cookie);
     expect(session1.body.authenticated).toBe(true);
     expect(session1.body.onboardingRequired).toBe(true);
+    expect(session1.body.configured.emailLinks).toBe(true);
+    expect(session1.body.configured.otp).toBeUndefined();
     const onboard = await request(app)
       .post('/api/auth/onboarding')
       .set('Cookie', cookie)
@@ -202,12 +224,45 @@ describe('account registration and sessions', () => {
     expect(String(stored?.passwordHash)).toMatch(/^\$argon2id\$/);
   });
 
+  it('does not create an account when an unknown Google identity uses sign-in', async () => {
+    const state = await startGoogle('login');
+    const callbackRes = await callback(state);
+    expect(callbackRes.status).toBe(303);
+    expect(callbackRes.headers.location).toContain('error=google_account_not_found');
+    expect(callbackRes.headers['set-cookie']).toBeUndefined();
+    expect(await store.accounts.count({})).toBe(0);
+  });
+
+  it('signs in an existing Google identity only through the login intent', async () => {
+    await seedUser('google_login', 'glogin@example.test', 'correct horse battery staple', 'google-sub-glogin');
+    googleIdentity = { sub: 'google-sub-glogin', email: 'glogin@example.test', emailVerified: true, name: 'Google Login' };
+    const loginState = await startGoogle('login');
+    const loggedIn = await callback(loginState);
+    expect(loggedIn.status).toBe(303);
+    expect(loggedIn.headers.location).toContain('/#/dash');
+    expect(loggedIn.headers['set-cookie']).toBeTruthy();
+
+    const duplicate = await callback(await startGoogle('register'));
+    expect(duplicate.headers.location).toContain('error=google_account_exists');
+    expect(duplicate.headers['set-cookie']).toBeUndefined();
+    expect(await store.accounts.count({ googleSub: 'google-sub-glogin' })).toBe(1);
+  });
+
+  it('rejects an unverified Google email without creating an account', async () => {
+    googleIdentity = { sub: 'unverified-sub', email: 'unverified@example.test', emailVerified: false };
+    const state = await startGoogle('register');
+    const res = await callback(state);
+    expect(res.headers.location).toContain('error=EMAIL_NOT_VERIFIED');
+    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(await store.accounts.count({ googleSub: 'unverified-sub' })).toBe(0);
+  });
+
   it('does not auto-link an existing email to a different Google identity', async () => {
     await seedUser('existing', 'linked@example.test', 'correct horse battery staple', 'google-sub-existing');
     googleIdentity = { sub: 'different-google-sub', email: 'linked@example.test', emailVerified: true };
-    const callback = await request(app).get('/api/auth/google/callback').query({ code: 'code-ok', state: 'fake-state' });
-    expect(callback.status).toBe(303);
-    expect(callback.headers.location).toContain('error=LINK_REQUIRED');
+    const cb = await callback(await startGoogle('register'));
+    expect(cb.status).toBe(303);
+    expect(cb.headers.location).toContain('error=LINK_REQUIRED');
     expect(await store.accounts.count({ emailNormalized: 'linked@example.test' })).toBe(1);
   });
 
@@ -238,6 +293,9 @@ describe('account registration and sessions', () => {
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('SameSite=Lax');
     expect(cookie).toContain('Path=/');
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).not.toMatch(/;\s*Domain=/i);
+    expect(cookie).toContain('Expires=');
   });
 
   it('returns the same generic response for unknown and wrong-password logins', async () => {
@@ -257,8 +315,8 @@ describe('account registration and sessions', () => {
   });
 });
 
-describe('OAuth and OTP security', () => {
-  it('rejects forged Google claims (audience, issuer, nonce, expiry)', () => {
+describe('OAuth, email links, and password recovery security', () => {
+  it('rejects forged Google claims (audience, issuer, nonce, expiry, unverified email)', () => {
     const base = { sub: 's', email: 'a@example.test', email_verified: true, aud: 'client', iss: 'https://accounts.google.com', nonce: 'n', exp: Math.floor(Date.now() / 1000) + 60 };
     expect(validateGoogleClaims(base, { nonce: 'n', clientId: 'client' }).sub).toBe('s');
     expect(() => validateGoogleClaims({ ...base, aud: 'other' }, { nonce: 'n', clientId: 'client' })).toThrow(/audience/);
@@ -268,7 +326,7 @@ describe('OAuth and OTP security', () => {
     expect(() => validateGoogleClaims({ ...base, email_verified: false }, { nonce: 'n', clientId: 'client' })).toThrow();
   });
 
-  it('consumes OAuth state once and rejects replay', async () => {
+  it('consumes OAuth state once, preserves the server-side intent, and rejects replay', async () => {
     const fetchImpl = async () => ({ ok: true, json: async () => ({ id_token: 'fake-id-token' }) } as any);
     const svc = createGoogleOAuthService(store, {
       fetchImpl,
@@ -278,89 +336,194 @@ describe('OAuth and OTP security', () => {
         exp: Math.floor(Date.now() / 1000) + 60,
       }, expected),
     });
-    const { url, state } = await svc.start();
+    const { url, state } = await svc.start('register');
     expect(url).toContain('code_challenge=');
     expect(url).toContain('nonce=');
-    const identity = await svc.complete('auth-code', state);
-    expect(identity.sub).toBe('google-state');
+    const result = await svc.complete('auth-code', state);
+    expect(result.intent).toBe('register');
+    expect(result.identity.sub).toBe('google-state');
     await expect(svc.complete('auth-code', state)).rejects.toMatchObject({ code: 'INVALID_OAUTH_STATE' });
   });
 
-  it('issues purpose-bound single-use OTPs with attempt limits and rejects reuse', async () => {
-    const account = await seedUser('otpuser', 'otp@example.test', 'correct horse battery staple', 'google-sub-otp');
-    const issued = await issueChallenge(store, {
-      userId: account.userId, purpose: 'password_reset',
-      emailNormalized: 'otp@example.test', targetEmail: 'otp@example.test',
-    });
-    const wrong = await request(app).post('/api/auth/otp/verify').send({ challengeId: issued.challengeId, code: '000000' === issued.code ? '111111' : '000000' });
-    expect(wrong.status).toBe(400);
-    const good = await request(app).post('/api/auth/otp/verify').send({ challengeId: issued.challengeId, code: issued.code });
-    expect(good.status).toBe(200);
-    expect(good.body.resetToken).toBeTruthy();
-    const reuse = await request(app).post('/api/auth/otp/verify').send({ challengeId: issued.challengeId, code: issued.code });
-    expect(reuse.status).toBe(400);
-    const wrongPurpose = await issueChallenge(store, {
-      userId: account.userId, purpose: 'email_change',
-      emailNormalized: 'new@example.test', targetEmail: 'new@example.test',
-    });
-    const crossPurpose = await request(app).post('/api/auth/otp/verify').send({ challengeId: wrongPurpose.challengeId, code: wrongPurpose.code });
-    expect(crossPurpose.status).toBe(400);
+  it('rejects an invalid OAuth intent without starting a flow', async () => {
+    const res = await request(app).get('/api/auth/google/start').query({ intent: 'admin' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_OAUTH_INTENT');
   });
 
-  it('expires OTPs and locks after five failed attempts', async () => {
-    const account = await seedUser('otplock', 'lock@example.test', 'correct horse battery staple', 'google-sub-lock');
-    const first = await issueChallenge(store, { userId: account.userId, purpose: 'password_reset', emailNormalized: 'lock@example.test', targetEmail: 'lock@example.test' });
-    const wrongCode = first.code === '000000' ? '111111' : '000000';
-    for (let i = 0; i < 5; i++) {
-      await request(app).post('/api/auth/otp/verify').send({ challengeId: first.challengeId, code: wrongCode });
-    }
-    const locked = await request(app).post('/api/auth/otp/verify').send({ challengeId: first.challengeId, code: first.code });
-    expect(locked.status).toBe(400);
+  it('rejects onboarding from a password session or a tampered Google onboarding binding', async () => {
+    await seedUser('onboard_guard', 'guard@example.test', 'correct horse battery staple', 'google-sub-guard');
+    const s = await login('onboard_guard', 'correct horse battery staple');
+    const passwordSession = await authed(request(app).post('/api/auth/onboarding'), s)
+      .send({ username: 'other_name', displayName: 'Other', password: 'another long password value' });
+    expect(passwordSession.status).toBe(409); // already onboarded; never re-runs setup
+    expect(passwordSession.body.code).toBe('ONBOARDING_COMPLETE');
 
-    const second = await issueChallenge(store, { userId: account.userId, purpose: 'password_reset', emailNormalized: 'lock@example.test', targetEmail: 'lock@example.test' });
-    await store.challenges.updateOne({ challengeId: second.challengeId }, { $set: { expiresAt: new Date(Date.now() - 1000).toISOString() } });
-    const expired = await request(app).post('/api/auth/otp/verify').send({ challengeId: second.challengeId, code: second.code });
+    const pendingState = await startGoogle('register');
+    const cb = await callback(pendingState);
+    const cookie = String(cb.headers['set-cookie'][0]).split(';')[0];
+    const session = await request(app).get('/api/auth/session').set('Cookie', cookie);
+    const sessionDoc = await store.sessions.findOne({ userId: session.body.user.userId });
+    await store.sessions.updateOne({ sessionId: sessionDoc!.sessionId }, { $set: { onboardingGoogleSub: 'someone-else' } });
+    const tampered = await request(app)
+      .post('/api/auth/onboarding')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', session.body.csrfToken)
+      .send({ username: 'tampered_name', displayName: 'Tampered', password: 'long enough password' });
+    expect(tampered.status).toBe(403);
+    expect(tampered.body.code).toBe('ONBOARDING_SESSION_INVALID');
+  });
+
+  it('returns an identical generic response for known and unknown password-recovery identifiers', async () => {
+    await seedUser('recover_a', 'recover@example.test', 'correct horse battery staple', 'google-sub-recover');
+    const known = await request(app).post('/api/auth/forgot').send({ identifier: 'recover_a' });
+    const unknown = await request(app).post('/api/auth/forgot').send({ identifier: 'nobody@example.test' });
+    expect(known.status).toBe(202);
+    expect(unknown.status).toBe(202);
+    expect(known.body).toEqual(unknown.body);
+    expect(known.body.challengeId).toBeUndefined();
+    expect(known.body.resetToken).toBeUndefined();
+    expect(email.actions).toHaveLength(1);
+  });
+
+  it('stores only an HMAC digest and delivers a fragment action link, never a numeric code', async () => {
+    const account = await seedUser('linkhash', 'linkhash@example.test', 'correct horse battery staple', 'google-sub-linkhash');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'linkhash' });
+    const action = email.actions.at(-1)!;
+    const token = actionToken(action.actionUrl);
+    expect(action.actionUrl).toContain('/#/reset-password?token=');
+    expect(new URL(action.actionUrl).search).toBe(''); // token is never in the server-visible query string
+    expect(new URL(action.actionUrl).hash).toContain('token=');
+    expect(action).not.toHaveProperty('code');
+    const record = await store.actionTokens.findOne({ userId: account.userId, purpose: 'password_reset' });
+    expect(record?.tokenHash).toBeTruthy();
+    expect(record?.tokenHash).not.toBe(token);
+    expect(JSON.stringify(record)).not.toContain(token);
+    expect(JSON.stringify(record)).not.toMatch(/"code"/);
+  });
+
+  it('enforces the resend cooldown and invalidates older links when a new one is sent', async () => {
+    const account = await seedUser('resend_a', 'resend@example.test', 'correct horse battery staple', 'google-sub-resend');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'resend_a' });
+    const firstToken = actionToken(email.actions[0].actionUrl);
+    await request(app).post('/api/auth/forgot').send({ identifier: 'resend_a' });
+    expect(email.actions).toHaveLength(1); // cooldown suppressed a second message
+    await store.actionTokens.updateOne(
+      { userId: account.userId, purpose: 'password_reset' },
+      { $set: { createdAt: new Date(Date.now() - 120_000).toISOString() } },
+    );
+    await request(app).post('/api/auth/forgot').send({ identifier: 'resend_a' });
+    expect(email.actions).toHaveLength(2);
+    const secondToken = actionToken(email.actions[1].actionUrl);
+    expect(secondToken).not.toBe(firstToken);
+    const old = await request(app).post('/api/auth/password/reset').send({ token: firstToken, newPassword: 'new long password value' });
+    expect(old.status).toBe(400);
+    const fresh = await request(app).post('/api/auth/password/reset').send({ token: secondToken, newPassword: 'new long password value' });
+    expect(fresh.status).toBe(204);
+  });
+
+  it('expires links and rejects wrong-purpose, account-mismatched, malformed, and reused tokens', async () => {
+    const a = await seedUser('tok_a', 'toka@example.test', 'correct horse battery staple', 'google-sub-toka');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'tok_a' });
+    const resetToken = actionToken(email.actions.at(-1)!.actionUrl);
+    const record = await store.actionTokens.findOne({ userId: a.userId, purpose: 'password_reset' });
+    await store.actionTokens.updateOne({ tokenId: record!.tokenId }, { $set: { expiresAt: new Date(Date.now() - 1000).toISOString() } });
+    const expired = await request(app).post('/api/auth/password/reset').send({ token: resetToken, newPassword: 'another long password' });
     expect(expired.status).toBe(400);
+    expect(expired.body.code).toBe('INVALID_RESET_TOKEN');
+
+    const malformed = await request(app).post('/api/auth/password/reset').send({ token: 'short', newPassword: 'another long password' });
+    expect(malformed.status).toBe(400);
+
+    // A valid reset token cannot be used for email-change confirmation.
+    await store.actionTokens.updateOne({ tokenId: record!.tokenId }, { $set: { expiresAt: new Date(Date.now() + 60_000).toISOString(), consumedAt: null } });
+    const wrongPurpose = await request(app).post('/api/account/email/confirm').send({ token: resetToken });
+    expect(wrongPurpose.status).toBe(400);
+
+    // Account/email binding: a link issued for A is invalid after A's email changes.
+    await request(app).post('/api/auth/forgot').send({ identifier: 'tok_a' });
+    const boundToken = actionToken(email.actions.at(-1)!.actionUrl);
+    await store.accounts.updateOne({ userId: a.userId }, { $set: { email: 'changed@example.test', emailNormalized: 'changed@example.test' } });
+    const mismatch = await request(app).post('/api/auth/password/reset').send({ token: boundToken, newPassword: 'yet another long password' });
+    expect(mismatch.status).toBe(400);
   });
 
-  it('resets the password only with a valid grant, revoking existing sessions', async () => {
-    const account = await seedUser('resetuser', 'reset@example.test', 'correct horse battery staple', 'google-sub-reset');
+  it('atomically allows only one concurrent use of a reset link', async () => {
+    await seedUser('concurrent_a', 'concurrent@example.test', 'correct horse battery staple', 'google-sub-concurrent');
+    await request(app).post('/api/auth/forgot').send({ identifier: 'concurrent_a' });
+    const token = actionToken(email.actions.at(-1)!.actionUrl);
+    const [one, two] = await Promise.all([
+      request(app).post('/api/auth/password/reset').send({ token, newPassword: 'first new long password' }),
+      request(app).post('/api/auth/password/reset').send({ token, newPassword: 'second new long password' }),
+    ]);
+    expect([one.status, two.status].sort()).toEqual([204, 400]);
+    const stored = await store.accounts.findOne({ emailNormalized: 'concurrent@example.test' });
+    const firstWorks = await request(app).post('/api/auth/login').send({ identifier: 'concurrent_a', password: 'first new long password' });
+    const secondWorks = await request(app).post('/api/auth/login').send({ identifier: 'concurrent_a', password: 'second new long password' });
+    expect(stored).toBeTruthy();
+    expect([firstWorks.status, secondWorks.status].filter((s) => s === 200)).toHaveLength(1);
+  });
+
+  it('resets the password only with a valid single-use link and revokes existing sessions', async () => {
+    await seedUser('resetuser', 'reset@example.test', 'correct horse battery staple', 'google-sub-reset');
     const s = await login('resetuser', 'correct horse battery staple');
     const forgot = await request(app).post('/api/auth/forgot').send({ identifier: 'resetuser' });
     expect(forgot.status).toBe(202);
-    expect(email.otps).toHaveLength(1);
-    const code = email.otps[0].code;
-    const challenge = (await store.challenges.find({ userId: account.userId, purpose: 'password_reset' }))[0];
-    const verify = await request(app).post('/api/auth/otp/verify').send({ challengeId: challenge.challengeId, code });
-    expect(verify.status).toBe(200);
-    const reset = await request(app).post('/api/auth/password/reset').send({ resetToken: verify.body.resetToken, newPassword: 'new correct horse battery staple' });
+    expect(email.actions).toHaveLength(1);
+    const token = actionToken(email.actions[0].actionUrl);
+    const reset = await request(app).post('/api/auth/password/reset').send({ token, newPassword: 'new correct horse battery staple' });
     expect(reset.status).toBe(204);
     expect((await request(app).get('/api/account/data').set('Cookie', s.cookie)).status).toBe(401);
     const oldLogin = await request(app).post('/api/auth/login').send({ identifier: 'resetuser', password: 'correct horse battery staple' });
     expect(oldLogin.status).toBe(401);
     const newLogin = await request(app).post('/api/auth/login').send({ identifier: 'resetuser', password: 'new correct horse battery staple' });
     expect(newLogin.status).toBe(200);
-    const reuse = await request(app).post('/api/auth/password/reset').send({ resetToken: verify.body.resetToken, newPassword: 'another correct horse battery staple' });
+    const reuse = await request(app).post('/api/auth/password/reset').send({ token, newPassword: 'another correct horse battery staple' });
     expect(reuse.status).toBe(400);
   });
 
-  it('requires a new-address OTP before changing email and keeps Google linked', async () => {
+  it('verifies a new email through a link, revokes sessions, notifies the old address, and keeps Google linked', async () => {
     const account = await seedUser('mailuser', 'old@example.test', 'correct horse battery staple', 'google-sub-mail');
     const s = await login('mailuser', 'correct horse battery staple');
     const change = await authed(request(app).post('/api/account/email/change'), s)
       .send({ newEmail: 'new@example.test', password: 'correct horse battery staple' });
     expect(change.status).toBe(202);
-    expect(email.otps.at(-1)?.to).toBe('new@example.test');
-    const wrong = await authed(request(app).post('/api/account/email/verify'), s).send({ challengeId: change.body.challengeId, code: '000000' });
+    expect(change.body.email).toBe('new@example.test');
+    expect(change.body.challengeId).toBeUndefined();
+    expect(email.actions.at(-1)?.to).toBe('new@example.test');
+    const token = actionToken(email.actions.at(-1)!.actionUrl);
+    expect(email.actions.at(-1)!.actionUrl).toContain('/#/verify-email?token=');
+    const wrong = await request(app).post('/api/account/email/confirm').send({ token: 'x'.repeat(43) });
     expect(wrong.status).toBe(400);
-    const challenge = await store.challenges.findOne({ challengeId: change.body.challengeId });
-    const code = email.otps.at(-1)!.code;
-    const verified = await authed(request(app).post('/api/account/email/verify'), s).send({ challengeId: challenge!.challengeId, code });
+    const verified = await request(app).post('/api/account/email/confirm').send({ token });
     expect(verified.status).toBe(200);
-    expect(verified.body.user.email).toBe('new@example.test');
+    expect(verified.body.email).toBe('new@example.test');
     const stored = await store.accounts.findOne({ userId: account.userId });
     expect(stored?.googleSub).toBe('google-sub-mail');
+    expect(stored?.email).toBe('new@example.test');
     expect(email.notices.some((n) => n.to === 'old@example.test')).toBe(true);
+    expect((await request(app).get('/api/account/data').set('Cookie', s.cookie)).status).toBe(401);
+    const reuse = await request(app).post('/api/account/email/confirm').send({ token });
+    expect(reuse.status).toBe(400);
+  });
+
+  it('rate-limits password-recovery requests before doing account work', async () => {
+    process.env.EMAIL_ACTION_RATE_LIMIT_PER_15MIN = '1';
+    const limitedApp = createApp({ store, email, google });
+    const first = await request(limitedApp).post('/api/auth/forgot').send({ identifier: 'nobody@example.test' });
+    const second = await request(limitedApp).post('/api/auth/forgot').send({ identifier: 'nobody@example.test' });
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(429);
+  });
+
+  it('no longer exposes numeric OTP authentication routes', async () => {
+    const otp = await request(app).post('/api/auth/otp/verify').send({ challengeId: 'x', code: '123456' });
+    const legacyVerify = await request(app).post('/api/auth/verify-otp').send({});
+    expect(otp.status).toBe(404);
+    expect(legacyVerify.status).toBe(404);
+    const config = await request(app).get('/api/auth/config');
+    expect(config.body.configured.otp).toBeUndefined();
+    expect(config.body.configured.emailLinks).toBe(true);
   });
 });
 
@@ -752,7 +915,7 @@ describe('user isolation, data versions, migration, archive and delete', () => {
     process.env.NODE_ENV = 'production';
     for (const key of [
       'MONGODB_URI', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'BREVO_API_KEY',
-      'BREVO_SENDER_EMAIL', 'SESSION_SECRET', 'OTP_HMAC_SECRET',
+      'BREVO_SENDER_EMAIL', 'SESSION_SECRET', 'EMAIL_ACTION_HMAC_SECRET', 'OTP_HMAC_SECRET',
     ]) delete process.env[key];
     expect(() => assertProductionConfig()).toThrow(/Refusing to start with insecure production configuration/);
     expect(() => assertProductionConfig()).toThrow(/MONGODB_URI is required/);

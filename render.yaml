@@ -5,27 +5,37 @@ services:
     rootDir: backend
     buildCommand: npm ci && npm run build
     startCommand: npm run start
+    healthCheckPath: /api/health
     envVars:
       - key: YOUTUBE_API_KEY
         sync: false
+      # Public origin of the Vercel-deployed frontend. The browser talks to
+      # this origin only; Vercel rewrites /api/* to the Render service below.
+      - key: APP_ORIGIN
+        value: https://learn-quest-one.vercel.app
       - key: CORS_ORIGIN
-        value: https://learnquest.vercel.app
+        value: https://learn-quest-one.vercel.app
+      - key: API_ORIGIN
+        value: https://learnquest-hhiv.onrender.com
+      # The public callback the browser actually visits, routed through the
+      # Vercel same-origin /api proxy.
+      - key: GOOGLE_REDIRECT_URI
+        value: https://learn-quest-one.vercel.app/api/auth/google/callback
       - key: CACHE_TTL_SEC
         value: '600'
       - key: CACHE_MAX_ENTRIES
         value: '50'
       - key: RATE_LIMIT_PER_MIN
         value: '30'
+      # Browser -> Vercel edge -> Render edge -> Express = two trusted proxies.
+      # The app only reads the hop count from this value; arbitrary forwarding
+      # headers are never trusted beyond it.
       - key: TRUST_PROXY_HOPS
-        value: '1'
-      # Patched Node 24 LTS. .node-version is the source of truth; this value
-      # can be overridden by a dashboard-level NODE_VERSION variable.
+        value: '2'
+      # Patched Node 24 LTS. .node-version is also pinned; a dashboard-level
+      # NODE_VERSION variable overrides both and must be checked after deploy.
       - key: NODE_VERSION
         value: '24.22.1'
-      - key: APP_ORIGIN
-        value: https://learnquest.vercel.app
-      - key: API_ORIGIN
-        sync: false
       - key: MONGODB_URI
         sync: false
       - key: MONGODB_DB_NAME
@@ -33,8 +43,6 @@ services:
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_REDIRECT_URI
         sync: false
       - key: BREVO_API_KEY
         sync: false
@@ -44,11 +52,14 @@ services:
         value: LearnQuest
       - key: SESSION_SECRET
         generateValue: true
-      - key: OTP_HMAC_SECRET
+      # Dedicated HMAC key for single-use email action links. The legacy
+      # OTP_HMAC_SECRET is accepted as a fallback by the server, but this is
+      # the active production variable.
+      - key: EMAIL_ACTION_HMAC_SECRET
         generateValue: true
       - key: AUTH_RATE_LIMIT_PER_MIN
         value: '20'
-      - key: OTP_RATE_LIMIT_PER_15MIN
+      - key: EMAIL_ACTION_RATE_LIMIT_PER_15MIN
         value: '8'
       - key: SESSION_IDLE_HOURS
         value: '168'
@@ -56,11 +67,9 @@ services:
         value: '30'
       - key: REAUTH_WINDOW_MIN
         value: '10'
-      - key: OTP_TTL_MIN
-        value: '10'
-      - key: OTP_RESEND_SEC
+      - key: EMAIL_ACTION_TTL_MIN
+        value: '30'
+      - key: EMAIL_ACTION_RESEND_SEC
         value: '60'
-      - key: OTP_MAX_ATTEMPTS
-        value: '5'
       - key: ACCOUNT_MAX_STATE_BYTES
         value: '8388608'

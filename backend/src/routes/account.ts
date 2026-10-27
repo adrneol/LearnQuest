@@ -1,20 +1,23 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import type { DataStore } from '../store.js';
 import { env } from '../config/env.js';
 import type { EmailService } from '../email/brevo.js';
 import {
   safeAccount, setAccountEmail, setAccountPassword, updateAccountPreferences,
-  updateProfile, http, type Account,
+  updateProfile, findAccountById, http, type Account,
 } from '../auth/accounts.js';
 import { hashCode, normalizeEmail, verifyCode } from '../auth/crypto.js';
 import {
-  isRecentAuth, listSessions, revokeAllSessions, revokeSessionById, rotateSession,
+  isRecentAuth, listSessions, revokeAllSessions, revokeSessionById,
 } from '../auth/sessions.js';
-import { issueChallenge, verifyChallenge } from '../auth/otp.js';
 import {
-  clearSessionCookie, noStore, readSessionToken, requireAuth, requireCsrf, requireRecentAuth,
-  setSessionCookie, type AuthedRequest,
+  consumeEmailActionToken, invalidateEmailAction, issueEmailActionToken, latestEmailAction,
+} from '../auth/actionTokens.js';
+import {
+  clearSessionCookie, noStore, requireAuth, requireCsrf, requireRecentAuth,
+  type AuthedRequest,
 } from '../auth/middleware.js';
 import {
   USER_COLLECTIONS, type UserCollectionName,
@@ -27,39 +30,38 @@ import {
 const profileSchema = z.object({
   username: z.string().max(64).optional(),
   displayName: z.string().max(120).optional(),
-});
+}).strict();
 const prefsSchema = z.object({
   timezone: z.string().max(100).optional(),
   sessionLenMin: z.number().optional(),
   breakMin: z.number().optional(),
   minViableMin: z.number().optional(),
-});
+}).strict();
 const collectionSchema = z.object({
   version: z.number().int().min(0),
   items: z.unknown(),
-});
+}).strict();
 const importSchema = z.object({
   version: z.number().int().min(0).optional(),
   backup: z.unknown().optional(),
   state: z.unknown().optional(),
-});
+}).strict();
 const migrateSchema = z.object({
   migrationId: z.string().min(8).max(100),
   version: z.number().int().min(0).optional(),
   state: z.unknown(),
-});
+}).strict();
 const emailChangeSchema = z.object({
   newEmail: z.string().trim().max(320),
   password: z.string().max(128).optional(),
-});
-const emailVerifySchema = z.object({
-  challengeId: z.string().min(1).max(100),
-  code: z.string().min(1).max(10),
-});
+}).strict();
+const emailConfirmSchema = z.object({
+  token: z.string().min(20).max(512),
+}).strict();
 const deleteSchema = z.object({
   confirmUsername: z.string().max(64),
   password: z.string().max(128).optional(),
-});
+}).strict();
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -128,9 +130,72 @@ export interface AccountRouterDeps {
   email: EmailService;
 }
 
+async function notifyPreviousEmail(
+  email: EmailService,
+  input: { to: string; subject: string; message: string },
+): Promise<void> {
+  try {
+    if (email.configured) await email.sendSecurityNotice(input);
+  } catch {
+    // The email change already committed; a notice failure is non-fatal but
+    // is not reported as a successful delivery.
+  }
+}
+
 export function createAccountRouter({ store, email }: AccountRouterDeps): Router {
   const router = Router();
   const auth = requireAuth(store);
+  const emailActionLimiter = rateLimit({
+    windowMs: 15 * 60_000,
+    max: env.emailActionRateLimitPer15Min,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many email verification requests. Wait 15 minutes and try again.' },
+  });
+
+  /**
+   * Public, token-only endpoint. The action token is a bearer secret delivered
+   * to the new email address; the POST is explicit so mail scanners that open
+   * links via GET cannot change an account.
+   */
+  router.post('/email/confirm', emailActionLimiter, noStore, async (req, res, next) => {
+    try {
+      const body = parseBody(emailConfirmSchema, req.body);
+      const record = await consumeEmailActionToken(store, body.token, 'email_change');
+      if (!record) {
+        throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
+      }
+      const account = await findAccountById(store, record.userId);
+      if (
+        !account
+        || account.status !== 'active'
+        || account.emailNormalized !== record.accountEmailNormalized
+      ) {
+        throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
+      }
+      let updated: Account;
+      try {
+        updated = await setAccountEmail(store, account, record.emailNormalized);
+      } catch (e: any) {
+        throw e?.status ? e : http(409, 'That email address is unavailable.', 'EMAIL_TAKEN');
+      }
+      // A verified email change is security-sensitive: every existing session
+      // is revoked and the person must authenticate with the new address.
+      await revokeAllSessions(store, updated.userId);
+      await notifyPreviousEmail(email, {
+        to: account.email,
+        subject: 'Your LearnQuest account email was changed',
+        message: `The account email was changed to ${updated.email} on ${new Date().toUTCString()}. All sessions were signed out. If this was not you, reset your password and contact the LearnQuest administrator.`,
+      });
+      res.json({
+        ok: true,
+        email: updated.email,
+        message: 'Email verified and updated. All sessions were signed out; sign in again with the new address.',
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
 
   router.use(auth);
   router.use(noStore);
@@ -299,60 +364,34 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         const ok = body.password ? await verifyCode(body.password, account.passwordHash) : false;
         if (!ok) throw http(401, 'The password is incorrect.', 'INVALID_CREDENTIALS');
       }
-      const recent = await store.challenges.find({ userId: account.userId, purpose: 'email_change' }, { sort: { createdAt: -1 }, limit: 1 });
-      if (recent[0] && Date.now() - Date.parse(recent[0].createdAt) < env.otpResendSec * 1000) {
-        throw http(429, `Wait ${env.otpResendSec} seconds before requesting another code.`, 'OTP_COOLDOWN');
+      const latest = await latestEmailAction(store, account.userId, 'email_change');
+      if (latest && Date.now() - Date.parse(latest.createdAt) < env.emailActionResendSec * 1000) {
+        throw http(429, `Wait ${env.emailActionResendSec} seconds before requesting another verification link.`, 'EMAIL_ACTION_COOLDOWN');
       }
-      const issued = await issueChallenge(store, {
+      const issued = await issueEmailActionToken(store, {
         userId: account.userId,
         purpose: 'email_change',
+        accountEmailNormalized: account.emailNormalized,
         emailNormalized: normalizeEmail(newEmail),
         targetEmail: newEmail,
       });
       try {
-        await email.sendOtp({ to: newEmail, code: issued.code, expiresInMin: issued.expiresInMin, purpose: 'email_change' });
+        await email.sendActionEmail({
+          to: newEmail,
+          purpose: 'email_change',
+          actionUrl: issued.actionUrl,
+          expiresInMin: issued.expiresInMin,
+        });
       } catch (e) {
-        await store.challenges.updateOne({ challengeId: issued.challengeId }, { $set: { consumedAt: new Date().toISOString() } });
+        await invalidateEmailAction(store, issued.tokenId);
         throw e;
       }
-      res.status(202).json({ ok: true, challengeId: issued.challengeId, expiresInMin: issued.expiresInMin, targetEmail: newEmail });
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  router.post('/email/verify', requireCsrf, async (req: AuthedRequest, res, next) => {
-    try {
-      const body = parseBody(emailVerifySchema, req.body);
-      const verified = await verifyChallenge(store, {
-        challengeId: body.challengeId,
-        code: body.code,
-        purpose: 'email_change',
+      res.status(202).json({
+        ok: true,
+        email: newEmail,
+        expiresInMin: issued.expiresInMin,
+        message: `A verification link was sent to ${newEmail}. Your current email remains active until it is opened.`,
       });
-      if (!verified.ok || !verified.challenge) throw http(400, 'The code is invalid or has expired. Request a new code.', 'INVALID_OTP');
-      if (verified.challenge.userId !== req.auth!.userId) throw http(400, 'The code is invalid or has expired.', 'INVALID_OTP');
-      const oldEmail = req.auth!.account.email;
-      let updated: Account;
-      try {
-        updated = await setAccountEmail(store, req.auth!.account, verified.challenge.targetEmail);
-      } catch (e: any) {
-        throw e?.status ? e : http(409, 'That email address is unavailable.', 'EMAIL_TAKEN');
-      }
-      await revokeAllSessions(store, updated.userId, req.auth!.session.sessionId);
-      const created = await rotateSession(store, readSessionToken(req), updated.userId, { userAgent: req.get('user-agent') ?? '' });
-      setSessionCookie(res, created.token, created.maxAgeSec);
-      try {
-        if (email.configured) {
-          await email.sendSecurityNotice({
-            to: oldEmail,
-            subject: 'Your LearnQuest account email was changed',
-            message: `The account email was changed to ${updated.email} on ${new Date().toUTCString()}. If this was not you, reset your password and contact support.`,
-          });
-        }
-      } catch {
-        // The email change already committed; notice failure is non-fatal.
-      }
-      res.json({ user: safeAccount(updated), csrfToken: created.session.csrfToken });
     } catch (e) {
       next(e);
     }

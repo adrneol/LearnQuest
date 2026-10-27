@@ -839,7 +839,7 @@ export async function deleteAllUserData(store: DataStore, userId: string): Promi
   await store.deletions.deleteMany({ userId });
   await store.migrations.deleteMany({ userId });
   await store.stateVersions.deleteMany({ userId });
-  await store.challenges.deleteMany({ userId });
+  await store.actionTokens.deleteMany({ userId });
 }
 
 export { httpError };

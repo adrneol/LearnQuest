@@ -3,12 +3,18 @@ import type { DataStore } from '../store.js';
 import { env } from '../config/env.js';
 import { csrfToken, randomToken, safeEqual, sessionTokenHash } from './crypto.js';
 
+export type SessionAuthMethod = 'password' | 'google_login' | 'google_register';
+
 export interface SessionRecord {
   _id?: unknown;
   sessionId: string;
   userId: string;
   tokenHash: string;
   csrfToken: string;
+  authMethod: SessionAuthMethod;
+  /** Only for a short-lived Google registration onboarding session. */
+  onboardingExpiresAt: string | null;
+  onboardingGoogleSub: string | null;
   createdAt: string;
   lastSeenAt: string;
   idleExpiresAt: string;
@@ -17,6 +23,14 @@ export interface SessionRecord {
   reauthenticatedAt: string;
   userAgent: string;
   ipHash: string;
+}
+
+export interface SessionOptions {
+  userAgent?: string;
+  ipHash?: string;
+  authMethod?: SessionAuthMethod;
+  onboardingExpiresAt?: string | null;
+  onboardingGoogleSub?: string | null;
 }
 
 export interface CreatedSession {
@@ -34,7 +48,7 @@ export function sessionMaxAgeSec(): number {
 export async function createSession(
   store: DataStore,
   userId: string,
-  opts?: { userAgent?: string; ipHash?: string },
+  opts?: SessionOptions,
 ): Promise<CreatedSession> {
   if (!env.sessionConfigured) throw Object.assign(new Error('Session configuration is incomplete.'), { status: 503, code: 'SETUP_REQUIRED' });
   const token = randomToken(32);
@@ -46,6 +60,9 @@ export async function createSession(
     userId,
     tokenHash: sessionTokenHash(token),
     csrfToken: csrfToken(),
+    authMethod: opts?.authMethod ?? 'password',
+    onboardingExpiresAt: opts?.onboardingExpiresAt ?? null,
+    onboardingGoogleSub: opts?.onboardingGoogleSub ?? null,
     createdAt: new Date(now).toISOString(),
     lastSeenAt: new Date(now).toISOString(),
     idleExpiresAt: new Date(idle).toISOString(),
@@ -85,7 +102,7 @@ export async function rotateSession(
   store: DataStore,
   oldToken: string | null,
   userId: string,
-  opts?: { userAgent?: string; ipHash?: string },
+  opts?: SessionOptions,
 ): Promise<CreatedSession> {
   if (oldToken) {
     await revokeSession(store, oldToken);
@@ -145,6 +162,18 @@ export async function markReauthenticated(store: DataStore, sessionId: string): 
 
 export function isRecentAuth(session: SessionRecord): boolean {
   return Date.now() - Date.parse(session.reauthenticatedAt) <= env.reauthWindowMin * 60_000;
+}
+
+/**
+ * Onboarding is only possible during the short-lived server-side Google
+ * registration session that created the pending account. The Google subject is
+ * stored on both the account and the session and must match.
+ */
+export function isGoogleOnboardingSession(session: SessionRecord, googleSub: string | null): boolean {
+  if (!googleSub || session.authMethod !== 'google_register') return false;
+  if (session.onboardingGoogleSub !== googleSub) return false;
+  if (!session.onboardingExpiresAt) return false;
+  return Date.parse(session.onboardingExpiresAt) > Date.now();
 }
 
 export function verifyCsrf(session: SessionRecord, headerValue: string | undefined): boolean {

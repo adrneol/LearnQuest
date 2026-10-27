@@ -19,6 +19,20 @@ function stringEnv(name: string, fallback = ''): string {
   return (process.env[name] ?? fallback).trim();
 }
 
+/**
+ * Read an integer from the current variable name, with a documented legacy
+ * alias so existing deployments keep working through a configuration rename.
+ */
+function intEnvAlias(name: string, legacyName: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name] ?? process.env[legacyName];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw.trim());
+  if (!Number.isFinite(n) || !Number.isSafeInteger(n) || n < min || n > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max} (received an invalid value).`);
+  }
+  return n;
+}
+
 function originEnv(name: string, fallback: string): string {
   const raw = stringEnv(name, fallback).replace(/\/+$/, '');
   let url: URL;
@@ -103,8 +117,8 @@ export const env = {
   get authRateLimitPerMin(): number {
     return intEnv('AUTH_RATE_LIMIT_PER_MIN', 20, 1, 10_000);
   },
-  get otpRateLimitPer15Min(): number {
-    return intEnv('OTP_RATE_LIMIT_PER_15MIN', 8, 1, 10_000);
+  get emailActionRateLimitPer15Min(): number {
+    return intEnvAlias('EMAIL_ACTION_RATE_LIMIT_PER_15MIN', 'OTP_RATE_LIMIT_PER_15MIN', 8, 1, 10_000);
   },
   /** Number of trusted reverse-proxy hops in front of Express (0 = direct). */
   get trustProxyHops(): number {
@@ -164,14 +178,21 @@ export const env = {
   get sessionSecret(): string {
     return secretEnv('SESSION_SECRET');
   },
-  get otpHmacSecret(): string {
+  /**
+   * HMAC key for opaque email-action tokens. The legacy OTP_HMAC_SECRET is
+   * accepted as a fallback so existing deployments can rotate credentials on
+   * their own schedule; new installations should use the dedicated name.
+   */
+  get emailActionHmacSecret(): string {
+    const current = stringEnv('EMAIL_ACTION_HMAC_SECRET');
+    if (current) return secretEnv('EMAIL_ACTION_HMAC_SECRET');
     return secretEnv('OTP_HMAC_SECRET');
   },
   get sessionConfigured(): boolean {
     return Boolean(this.sessionSecret);
   },
-  get otpConfigured(): boolean {
-    return Boolean(this.otpHmacSecret);
+  get emailActionConfigured(): boolean {
+    return Boolean(this.emailActionHmacSecret);
   },
   get sessionIdleHours(): number {
     return intEnv('SESSION_IDLE_HOURS', 24 * 7, 1, 24 * 90);
@@ -182,14 +203,11 @@ export const env = {
   get reauthWindowMin(): number {
     return intEnv('REAUTH_WINDOW_MIN', 10, 1, 120);
   },
-  get otpTtlMin(): number {
-    return intEnv('OTP_TTL_MIN', 10, 2, 30);
+  get emailActionTtlMin(): number {
+    return intEnvAlias('EMAIL_ACTION_TTL_MIN', 'OTP_TTL_MIN', 30, 5, 120);
   },
-  get otpResendSec(): number {
-    return intEnv('OTP_RESEND_SEC', 60, 15, 600);
-  },
-  get otpMaxAttempts(): number {
-    return intEnv('OTP_MAX_ATTEMPTS', 5, 1, 10);
+  get emailActionResendSec(): number {
+    return intEnvAlias('EMAIL_ACTION_RESEND_SEC', 'OTP_RESEND_SEC', 60, 15, 900);
   },
   get sessionCookieName(): string {
     return this.isProduction ? '__Host-lq_session' : 'lq_session';
@@ -211,7 +229,7 @@ export interface PublicConfigStatus {
     google: boolean;
     brevo: boolean;
     session: boolean;
-    otp: boolean;
+    emailLinks: boolean;
     youtube: boolean;
   };
   missing: string[];
@@ -226,16 +244,16 @@ export function configStatus(): PublicConfigStatus {
     google: env.googleConfigured,
     brevo: env.brevoConfigured,
     session: env.sessionConfigured,
-    otp: env.otpConfigured,
+    emailLinks: env.emailActionConfigured,
     youtube: Boolean(env.youtubeApiKey),
   };
   const missing: string[] = [];
   if (!configured.mongodb) missing.push('MONGODB_URI');
   if (!configured.session) missing.push('SESSION_SECRET');
-  if (!configured.otp) missing.push('OTP_HMAC_SECRET');
+  if (!configured.emailLinks) missing.push('EMAIL_ACTION_HMAC_SECRET');
   if (!configured.google) missing.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET');
   if (!configured.brevo) missing.push('BREVO_API_KEY', 'BREVO_SENDER_EMAIL');
-  const core = configured.mongodb && configured.session && configured.otp;
+  const core = configured.mongodb && configured.session && configured.emailLinks;
   return {
     nodeEnv: env.nodeEnv,
     // Password sign-in still requires Google-created accounts; Google is the
@@ -260,9 +278,14 @@ export function assertProductionConfig(): void {
   if (!env.googleConfigured) problems.push('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in production.');
   if (!env.brevoConfigured) problems.push('BREVO_API_KEY and BREVO_SENDER_EMAIL are required in production.');
   if (!env.sessionConfigured) problems.push('SESSION_SECRET is required in production.');
-  if (!env.otpConfigured) problems.push('OTP_HMAC_SECRET is required in production.');
-  if (!env.appOrigin.startsWith('https://')) problems.push('APP_ORIGIN must use https in production for Secure cookies.');
-  if (!env.googleRedirectUri.startsWith('https://')) problems.push('GOOGLE_REDIRECT_URI must use https in production.');
+  if (!env.emailActionConfigured) problems.push('EMAIL_ACTION_HMAC_SECRET is required in production (OTP_HMAC_SECRET is accepted only as a legacy fallback).');
+  if (!env.appOrigin.startsWith('https://') || !env.apiOrigin.startsWith('https://')) {
+    problems.push('APP_ORIGIN and API_ORIGIN must use https in production.');
+  }
+  const redirectOrigin = new URL(env.googleRedirectUri).origin;
+  if (redirectOrigin !== env.appOrigin && redirectOrigin !== env.apiOrigin) {
+    problems.push('GOOGLE_REDIRECT_URI must use the public APP_ORIGIN (same-origin proxy) or API_ORIGIN (same-site API domain).');
+  }
   if (problems.length) {
     throw new Error(`Refusing to start with insecure production configuration:\n- ${problems.join('\n- ')}`);
   }

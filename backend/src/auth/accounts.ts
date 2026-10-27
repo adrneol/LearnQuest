@@ -119,6 +119,11 @@ export async function findAccountById(store: DataStore, userId: string): Promise
   return (await store.accounts.findOne({ userId })) as Account | null;
 }
 
+export async function findAccountByGoogleSub(store: DataStore, sub: string): Promise<Account | null> {
+  if (!sub) return null;
+  return (await store.accounts.findOne({ googleSub: sub })) as Account | null;
+}
+
 export async function findAccountByIdentifier(store: DataStore, identifier: string): Promise<Account | null> {
   const trimmed = identifier.trim();
   if (!trimmed || trimmed.length > 320) return null;
@@ -222,6 +227,13 @@ export async function completeOnboarding(
       { $set: { ...updated } },
     );
     return updated;
+  }).catch((e) => {
+    // The cross-instance unique index is the final authority; report a usable
+    // conflict instead of a generic 500 when two tabs race for one username.
+    if (isDuplicateKey(e)) {
+      throw http(409, 'That username is already taken. Choose another.', 'USERNAME_TAKEN');
+    }
+    throw e;
   });
 }
 

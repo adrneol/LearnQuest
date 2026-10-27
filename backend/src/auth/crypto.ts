@@ -1,15 +1,10 @@
-import { randomBytes, randomInt, timingSafeEqual, createHash, createHmac } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 import { hash as argonHash, verify as argonVerify, Algorithm } from '@node-rs/argon2';
 import { env } from '../config/env.js';
 
 /** Opaque, URL-safe random token. */
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString('base64url');
-}
-
-/** Six-digit OTP from a cryptographically secure source (never Math.random). */
-export function generateOtp(): string {
-  return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
 export function sha256(value: string): string {
@@ -74,12 +69,16 @@ export function csrfToken(): string {
 
 export function cookieHeader(token: string | null, maxAgeSec: number): string {
   const name = env.sessionCookieName;
+  const age = Math.max(0, Math.floor(maxAgeSec));
   const parts = [
     `${name}=${token ?? ''}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
-    `Max-Age=${Math.max(0, Math.floor(maxAgeSec))}`,
+    `Max-Age=${age}`,
+    // Explicit Expires makes deletion immediate even in clients that ignore
+    // Max-Age. No Domain attribute: __Host- requires host-only scope.
+    `Expires=${age === 0 ? 'Thu, 01 Jan 1970 00:00:00 GMT' : new Date(Date.now() + age * 1000).toUTCString()}`,
   ];
   if (env.cookieSecure) parts.push('Secure');
   return parts.join('; ');

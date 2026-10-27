@@ -34,11 +34,10 @@ export interface DataStore {
   adapter: DbAdapter;
   accounts: CollectionAdapter;
   sessions: CollectionAdapter;
-  challenges: CollectionAdapter;
+  actionTokens: CollectionAdapter;
   oauthStates: CollectionAdapter;
   deletions: CollectionAdapter;
   migrations: CollectionAdapter;
-  resetGrants: CollectionAdapter;
   stateVersions: CollectionAdapter;
   data(name: UserCollectionName): CollectionAdapter;
 }
@@ -48,11 +47,10 @@ export function createDataStore(adapter: DbAdapter): DataStore {
     adapter,
     accounts: adapter.collection('lq_accounts'),
     sessions: adapter.collection('lq_sessions'),
-    challenges: adapter.collection('lq_challenges'),
+    actionTokens: adapter.collection('lq_action_tokens'),
     oauthStates: adapter.collection('lq_oauth_states'),
     deletions: adapter.collection('lq_deletions'),
     migrations: adapter.collection('lq_migrations'),
-    resetGrants: adapter.collection('lq_reset_grants'),
     stateVersions: adapter.collection('lq_state_versions'),
     data(name: UserCollectionName): CollectionAdapter {
       if (!USER_COLLECTIONS.includes(name)) throw new Error('Unknown user-data collection.');

@@ -72,15 +72,16 @@ async function ensureIndexes(db: Db): Promise<void> {
     db.collection('lq_sessions').createIndex({ tokenHash: 1 }, { unique: true }),
     db.collection('lq_sessions').createIndex({ userId: 1, revokedAt: 1 }),
     db.collection('lq_sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    db.collection('lq_challenges').createIndex({ challengeId: 1 }, { unique: true }),
-    db.collection('lq_challenges').createIndex({ userId: 1, purpose: 1, consumedAt: 1 }),
-    db.collection('lq_challenges').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    // Legacy lq_challenges / lq_reset_grants documents are intentionally left
+    // untouched for a non-destructive rollout. New email action links use the
+    // collection below and never write numeric codes or reset grants.
+    db.collection('lq_action_tokens').createIndex({ tokenHash: 1 }, { unique: true }),
+    db.collection('lq_action_tokens').createIndex({ userId: 1, purpose: 1, consumedAt: 1 }),
+    db.collection('lq_action_tokens').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('lq_oauth_states').createIndex({ stateHash: 1 }, { unique: true }),
     db.collection('lq_oauth_states').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('lq_deletions').createIndex({ userId: 1, playlistId: 1 }, { unique: true }),
     db.collection('lq_migrations').createIndex({ userId: 1, migrationId: 1 }, { unique: true }),
-    db.collection('lq_reset_grants').createIndex({ tokenHash: 1 }, { unique: true }),
-    db.collection('lq_reset_grants').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('lq_state_versions').createIndex({ userId: 1 }, { unique: true }),
   ]);
   // One compound unique index for every per-user record collection.

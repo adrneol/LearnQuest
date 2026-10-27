@@ -37,6 +37,25 @@ export function getCsrfToken(): string | null {
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Endpoints that are intentionally usable before a session exists. A 401 from
+ * these means "wrong credentials" or "expired one-time link", not "the
+ * session this tab already had has ended". Treating those as session expiry
+ * replaces the sign-in form (and its server message) with a global account
+ * error, which is how a failed password login used to lose its error text.
+ */
+const SESSIONLESS_AUTH_PATHS = new Set([
+  '/auth/login',
+  '/auth/forgot',
+  '/auth/password/reset',
+  '/account/email/confirm',
+]);
+
+function isSessionlessAuthPath(path: string): boolean {
+  const withoutQuery = path.split('?')[0].replace(/\/+$/, '');
+  return SESSIONLESS_AUTH_PATHS.has(withoutQuery);
+}
+
 export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
@@ -74,7 +93,15 @@ export async function apiRequest<T = any>(path: string, opts: ApiRequestOptions 
     let parsed: any = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     if (!res.ok) {
-      if (res.status === 401 && typeof window !== 'undefined') {
+      // Only a request made with an established session context can prove that
+      // the session expired. A 401 from a sign-in/recovery endpoint, or from a
+      // tab that never had a session, is a normal domain error.
+      if (
+        res.status === 401
+        && typeof window !== 'undefined'
+        && csrfToken
+        && !isSessionlessAuthPath(path)
+      ) {
         window.dispatchEvent(new CustomEvent('lq:auth-expired'));
       }
       throw new ApiError(

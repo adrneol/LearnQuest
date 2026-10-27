@@ -196,7 +196,7 @@ function SettingsSection() {
 
       <Card>
         <h2 className="text-base font-bold">Account data</h2>
-        <p className="mt-1 text-sm text-slate-400">Download a JSON export with account profile and all learning data. It never includes password hashes, OTPs, or session tokens.</p>
+        <p className="mt-1 text-sm text-slate-400">Download a JSON export with account profile and all learning data. It never includes password hashes, email action tokens, or session tokens.</p>
         <div className="mt-2 flex flex-wrap gap-2">
           <Btn onClick={exportData}><Download size={14} /> Export account data</Btn>
           <Btn disabled={busy} onClick={() => { void s.listAccountSessions().then(() => s.refreshSession()); }}><RefreshCw size={14} /> Refresh account state</Btn>
@@ -236,8 +236,7 @@ function SecuritySection() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [newEmail, setNewEmail] = useState('');
   const [emailPassword, setEmailPassword] = useState('');
-  const [code, setCode] = useState('');
-  const [challenge, setChallenge] = useState<{ challengeId: string; targetEmail: string; expiresInMin: number } | null>(null);
+  const [emailRequest, setEmailRequest] = useState<{ email: string; expiresInMin: number } | null>(null);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -285,29 +284,11 @@ function SecuritySection() {
     setEmailBusy(true);
     try {
       const result = await s.requestEmailChange(newEmail.trim(), emailPassword || undefined);
-      setChallenge(result);
-      setEmailMessage(`A six-digit code was sent to ${result.targetEmail}. Your current email remains active until verification.`);
-    } catch (e: any) {
-      setEmailError(e?.message ?? 'Email change could not be started.');
-    } finally {
-      setEmailBusy(false);
-    }
-  };
-
-  const verifyEmail = async () => {
-    if (!challenge) return;
-    setEmailError(null);
-    setEmailMessage(null);
-    setEmailBusy(true);
-    try {
-      await s.verifyEmailChange(challenge.challengeId, code.trim());
-      setEmailMessage('Email verified and updated. Your Google identity remains linked by its stable subject.');
-      setChallenge(null);
-      setCode('');
-      setNewEmail('');
+      setEmailRequest({ email: result.email, expiresInMin: result.expiresInMin });
+      setEmailMessage(`A secure verification link was sent to ${result.email}. It expires in ${result.expiresInMin} minutes; your current email remains active until you open it.`);
       setEmailPassword('');
     } catch (e: any) {
-      setEmailError(e?.message ?? 'The code could not be verified.');
+      setEmailError(e?.message ?? 'Email change could not be started.');
     } finally {
       setEmailBusy(false);
     }
@@ -350,7 +331,10 @@ function SecuritySection() {
 
       <Card>
         <h2 className="flex items-center gap-1.5 text-base font-bold"><Mail size={16} /> Email address</h2>
-        <p className="mt-1 text-xs text-slate-400">The current verified email is <b className="text-slate-200">{user.email}</b>. A six-digit code sent to the new address is required; the old address stays active until then.</p>
+        <p className="mt-1 text-xs text-slate-400">
+          The current verified email is <b className="text-slate-200">{user.email}</b>. A secure single-use link sent to the new
+          address must be opened before the change takes effect; the old address stays active until then.
+        </p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <Field label="New email address">
             <input className={inputCls} type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} autoComplete="email" />
@@ -363,16 +347,9 @@ function SecuritySection() {
         </div>
         {emailError && <p role="alert" className="mt-2 text-sm text-red-300">{emailError}</p>}
         {emailMessage && <p role="status" className="mt-2 text-sm text-cyan-200">{emailMessage}</p>}
-        {!challenge ? (
-          <Btn className="mt-3" onClick={requestEmail} disabled={emailBusy || !newEmail.trim() || (user.hasPassword && !emailPassword)}>Send verification code</Btn>
-        ) : (
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
-            <Field label="Six-digit code">
-              <input className={inputCls} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6} />
-            </Field>
-            <Btn variant="primary" onClick={verifyEmail} disabled={emailBusy || code.length !== 6}>Verify and update email</Btn>
-          </div>
-        )}
+        <Btn className="mt-3" onClick={requestEmail} disabled={emailBusy || !newEmail.trim() || (user.hasPassword && !emailPassword)}>
+          {emailRequest ? 'Send another verification link' : 'Send verification link'}
+        </Btn>
       </Card>
 
       <Card>

@@ -5,8 +5,8 @@ exact duration math, verified watch tracking, focus sessions, modules,
 checkpoints, goals, efficiency analytics, revision scheduling, and an
 optional fictional Arena. Learning data belongs to your **authenticated
 account** and is stored server-side in MongoDB, so it is available on other
-devices. Google is the only registration path; password sign-in and email OTP
-recovery are available after registration.
+devices. Google is the only registration path; password sign-in and single-use
+email-link recovery are available after registration.
 
 > Start with [A](#a-getting-started), then follow the journey in order.
 > Technical verification lives in [`docs/audits/`](./docs/audits/).
@@ -17,7 +17,8 @@ recovery are available after registration.
 - **Node.js 24.22.1+ (24 LTS)** and **npm 9+** (`node --version`,
   `npm --version`). `backend/.node-version` pins the patched version.
 - **MongoDB**, a **Google OAuth web client**, and a **Brevo** API key with a
-  verified sender for accounts, sign-in, and OTP recovery. Full setup:
+  verified sender for accounts, sign-in, password-reset links, and email
+  verification. Full setup:
   [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md).
 - For live playlist imports, a **YouTube Data API v3 key** (read-only, no
   billing). Without one, JSON snapshot import still works fully offline.
@@ -54,7 +55,7 @@ fake local login.
 2. Fill in `MONGODB_URI`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
    `BREVO_API_KEY`, and `BREVO_SENDER_EMAIL`.
 3. Generate two independent secrets and set `SESSION_SECRET` and
-   `OTP_HMAC_SECRET`:
+   `EMAIL_ACTION_HMAC_SECRET`:
    `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`.
 4. Keep `APP_ORIGIN=http://localhost:5173`,
    `CORS_ORIGIN=http://localhost:5173`, and
@@ -83,17 +84,26 @@ Google Cloud immediately and update the replacement in Render.
 ### Sign in, recovery, and account security
 - **Google** is the only registration path. Your verified Google email is the
   initial account email; you never type an arbitrary address at signup.
+- **Sign in with Google** only signs in. **Create an account → Continue with
+  Google** creates a new account. An unknown Google identity arriving through
+  the sign-in button is told to create an account, not silently registered.
 - Afterwards you can sign in with your username or email and password.
   Passwords are hashed with Argon2id.
-- **Forgot password?** Enter your username or email, then the six-digit code
-  sent by Brevo. The code expires in about 10 minutes, is single-use, and has
-  limited attempts. Resetting signs out all existing sessions.
+- **Forgot password?** Enter your username or email. If an account matches,
+  Brevo sends a single-use link; the response does not reveal whether the
+  account exists. The link expires after about 30 minutes (configurable) and
+  is invalidated when a newer link is requested. The link opens a reset screen
+  in the app; the token is exchanged only when you press **Set new password**,
+  and the token is removed from the address bar immediately. Resetting signs
+  out all existing sessions.
 - The **account menu at the top-right of the main header** opens Profile,
   Account settings, Security & sessions, export, and sign-out. It is not in
   the sidebar.
 - **Security & sessions** lists active devices, lets you sign out other
   devices or all devices, change your password, and verify a new email address
-  with a six-digit code. The old email stays active until verification.
+  with a single-use link sent to that new address. The old email stays active
+  until verification. Successful verification signs out all sessions and
+  notifies the previous address.
 - **Account settings** stores learning preferences (timezone, default session
   length, break, minimum viable session) in your account, offers a JSON export
   of account data, and supports permanent account deletion after typing your
@@ -355,8 +365,8 @@ network, no real leaderboard.
 
 - Your account is the primary copy in MongoDB. **Download:** Reports →
   **Backup JSON** (everything, schema v3), or the account menu → **Export
-  account data**. Account exports never include password hashes, OTPs, or
-  session tokens. Keep an offline copy before major cleanups.
+  account data**. Account exports never include password hashes, raw email
+  action tokens, or session tokens. Keep an offline copy before major cleanups.
 - **Restore:** Reports → **Restore backup** validates the complete file first;
   v3 restores v2/v1 backups too. You are offered a fresh pre-restore JSON
   download before anything is replaced. The restore is all-or-nothing, and
@@ -398,7 +408,7 @@ network, no real leaderboard.
 |---|---|
 | Setup/configuration screen | Add the listed names to `backend/.env`, restart, and retry. Accounts fail closed; there is no fake local login |
 | Google sign-in fails | Check the OAuth web client, exact redirect URI, consent-screen test user, and `GOOGLE_CLIENT_ID`/secret |
-| OTP email missing | Verify the Brevo sender/domain and API key; check spam; wait for the resend cooldown |
+| Recovery or verification email missing | Verify the Brevo sender/domain and API key; check spam; wait for the resend cooldown; request a new link (older links stop working) |
 | MongoDB errors | Check the connection string, database user, and network allow-list. No local fallback is used |
 | Cloud save conflict | Another session changed the account. Use the conflict banner to reload before editing again |
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |

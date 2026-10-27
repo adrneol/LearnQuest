@@ -6,7 +6,7 @@ export function errorHandler(e: any, req: Request, res: Response, _next: NextFun
   const code = typeof e?.code === 'string' ? e.code : undefined;
   if (status >= 500) {
     // Safe structured log: request id, method, route, status — never bodies,
-    // cookies, credentials, OTPs, or connection strings.
+    // cookies, credentials, email action tokens, or connection strings.
     console.error(JSON.stringify({
       level: 'error',
       requestId: res.getHeader('X-Request-Id') ?? null,

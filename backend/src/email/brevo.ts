@@ -1,10 +1,12 @@
 import { env } from '../config/env.js';
 
-export interface OtpEmailInput {
+export type EmailActionPurpose = 'password_reset' | 'email_change';
+
+export interface ActionEmailInput {
   to: string;
-  code: string;
+  purpose: EmailActionPurpose;
+  actionUrl: string;
   expiresInMin: number;
-  purpose: 'password_reset' | 'email_change';
 }
 
 export interface SecurityNoticeInput {
@@ -15,7 +17,7 @@ export interface SecurityNoticeInput {
 
 export interface EmailService {
   readonly configured: boolean;
-  sendOtp(input: OtpEmailInput): Promise<void>;
+  sendActionEmail(input: ActionEmailInput): Promise<void>;
   sendSecurityNotice(input: SecurityNoticeInput): Promise<void>;
 }
 
@@ -28,56 +30,133 @@ export function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
-function heading(purpose: OtpEmailInput['purpose']): string {
-  return purpose === 'password_reset' ? 'Reset your LearnQuest password' : 'Verify your new LearnQuest email';
+function assertActionUrl(actionUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(actionUrl);
+  } catch {
+    throw new Error('The email action URL is invalid.');
+  }
+  if (url.protocol !== 'https:' && !(env.nodeEnv !== 'production' && url.protocol === 'http:')) {
+    throw new Error('The email action URL must use HTTPS.');
+  }
+  // The token belongs in the fragment so it is never sent to a web server,
+  // email scanner, or analytics service in the page request.
+  if (!url.hash.includes('token=')) {
+    throw new Error('The email action URL must carry its token in the fragment.');
+  }
+  return url;
 }
 
-function intro(purpose: OtpEmailInput['purpose']): string {
-  return purpose === 'password_reset'
-    ? 'Use the code below to choose a new password. If you did not request a reset, you can ignore this email — your password has not changed.'
-    : 'Use the code below to confirm this email address for your LearnQuest account. Until it is verified, your current email remains active.';
+const COPY: Record<EmailActionPurpose, {
+  subject: string;
+  title: string;
+  intro: string;
+  button: string;
+  ignore: string;
+}> = {
+  password_reset: {
+    subject: 'Reset your LearnQuest password',
+    title: 'Reset your LearnQuest password',
+    intro: 'We received a request to reset the password for your LearnQuest account. Choose a new password using the secure one-time link below.',
+    button: 'Reset password',
+    ignore: 'If you did not request a password reset, you can ignore this email. Your password will not change.',
+  },
+  email_change: {
+    subject: 'Verify your new LearnQuest email address',
+    title: 'Verify your new LearnQuest email address',
+    intro: 'We received a request to use this address for your LearnQuest account. Confirm it with the secure one-time link below.',
+    button: 'Verify email address',
+    ignore: 'If you did not request this change, you can ignore this email. Your current email address will stay active.',
+  },
+};
+
+/** Responsive, accessible HTML plus a useful plain-text alternative. */
+export function buildActionEmail(input: ActionEmailInput): { subject: string; html: string; text: string } {
+  const url = assertActionUrl(input.actionUrl);
+  const copy = COPY[input.purpose];
+  const href = escapeHtml(url.toString());
+  const expiry = `${input.expiresInMin} minute${input.expiresInMin === 1 ? '' : 's'}`;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="supported-color-schemes" content="dark light">
+<title>${escapeHtml(copy.subject)}</title>
+</head>
+<body style="margin:0;padding:0;background:#0b0e1a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(copy.subject)}. This link expires in ${expiry}.</div>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#0b0e1a;">
+<tr><td align="center" style="padding:28px 14px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background:#141830;border:1px solid #2a3150;border-radius:16px;overflow:hidden;">
+<tr><td style="padding:22px 28px;background:#6d28d9;background:linear-gradient(135deg,#6d28d9,#0891b2);">
+<span style="display:inline-block;background:rgba(255,255,255,.16);border-radius:10px;padding:8px 12px;font-weight:800;font-size:18px;line-height:1;color:#ffffff;">LearnQuest</span>
+</td></tr>
+<tr><td style="padding:30px 28px;">
+<h1 style="margin:0 0 14px;font-size:23px;line-height:1.3;color:#f8fafc;">${escapeHtml(copy.title)}</h1>
+<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#cbd5e1;">${escapeHtml(copy.intro)}</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px;"><tr>
+<td style="border-radius:10px;background:#7c3aed;">
+<a href="${href}" style="display:inline-block;padding:13px 22px;font-size:15px;font-weight:700;line-height:1.2;color:#ffffff;text-decoration:none;border-radius:10px;">${escapeHtml(copy.button)}</a>
+</td></tr></table>
+<p style="margin:0 0 12px;font-size:13px;line-height:1.65;color:#94a3b8;">This secure link expires in <strong style="color:#e2e8f0;">${expiry}</strong> and can be used once. If the button does not work, copy this address into your browser:</p>
+<p style="margin:0 0 18px;font-size:12px;line-height:1.6;word-break:break-all;color:#a5f3fc;">${href}</p>
+<p style="margin:0 0 10px;font-size:13px;line-height:1.65;color:#94a3b8;">${escapeHtml(copy.ignore)}</p>
+<p style="margin:0;font-size:12px;line-height:1.6;color:#64748b;">For your security, LearnQuest will never ask for your password, a verification code, or this link by email or chat.</p>
+</td></tr>
+<tr><td style="padding:18px 28px;border-top:1px solid #2a3150;font-size:12px;line-height:1.6;color:#64748b;">
+LearnQuest · learning progress for your account.<br>
+This message was sent because an action was requested for a LearnQuest account.
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+  const text = `LearnQuest — ${copy.title}
+
+${copy.intro}
+
+${copy.button}: ${url.toString()}
+
+This secure link expires in ${expiry} and can be used once.
+
+${copy.ignore}
+
+For your security, LearnQuest will never ask for your password, a verification code, or this link by email or chat.
+
+— LearnQuest
+This message was sent because an action was requested for a LearnQuest account.`;
+  return { subject: copy.subject, html, text };
 }
 
-export function buildOtpEmail(input: OtpEmailInput): { subject: string; html: string; text: string } {
-  const safeCode = escapeHtml(input.code);
-  const subject = input.purpose === 'password_reset'
-    ? 'Your LearnQuest password reset code'
-    : 'Verify your new LearnQuest email address';
-  const title = heading(input.purpose);
+export function buildSecurityNoticeEmail(input: SecurityNoticeInput): { subject: string; html: string; text: string } {
+  const subject = input.subject.trim().slice(0, 180) || 'LearnQuest security notice';
+  const message = input.message.trim().slice(0, 4_000);
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(subject)}</title></head>
 <body style="margin:0;padding:0;background:#0b0e1a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Your LearnQuest verification code expires in ${input.expiresInMin} minutes.</div>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#0b0e1a;padding:24px 12px;">
-<tr><td align="center">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background:#141830;border:1px solid #2a3150;border-radius:16px;overflow:hidden;">
-<tr><td style="padding:24px 28px;background:linear-gradient(135deg,#6d28d9,#0891b2);">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#0b0e1a;"><tr><td align="center" style="padding:28px 14px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background:#141830;border:1px solid #2a3150;border-radius:16px;">
+<tr><td style="padding:20px 28px;background:#6d28d9;background:linear-gradient(135deg,#6d28d9,#0891b2);">
 <span style="display:inline-block;background:rgba(255,255,255,.16);border-radius:10px;padding:8px 12px;font-weight:800;font-size:18px;color:#ffffff;">LearnQuest</span>
 </td></tr>
 <tr><td style="padding:28px;">
-<h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;color:#f8fafc;">${escapeHtml(title)}</h1>
-<p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#cbd5e1;">${escapeHtml(intro(input.purpose))}</p>
-<div style="margin:0 0 18px;padding:18px;text-align:center;background:#0b0e1a;border:1px solid #334155;border-radius:12px;letter-spacing:10px;font-size:34px;font-weight:800;color:#a5f3fc;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${safeCode}</div>
-<p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#cbd5e1;">This code expires in <strong>${input.expiresInMin} minutes</strong>.</p>
-<p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#fca5a5;">Never share this code. LearnQuest staff will never ask you for it.</p>
-<p style="margin:0;font-size:13px;line-height:1.6;color:#94a3b8;">If you did not request this, you can safely ignore this email.</p>
+<h1 style="margin:0 0 12px;font-size:21px;line-height:1.35;color:#f8fafc;">${escapeHtml(subject)}</h1>
+<p style="margin:0;font-size:15px;line-height:1.65;color:#cbd5e1;">${escapeHtml(message)}</p>
+<p style="margin:20px 0 0;font-size:12px;line-height:1.6;color:#64748b;">This is an automated security notice from LearnQuest. If you did not make this change, reset your password and contact the LearnQuest administrator.</p>
 </td></tr>
-<tr><td style="padding:18px 28px;border-top:1px solid #2a3150;font-size:12px;color:#64748b;">LearnQuest · learning progress, without invented numbers.</td></tr>
 </table>
-</td></tr></table></body></html>`;
-  const text = `LearnQuest — ${title}
+</td></tr></table>
+</body></html>`;
+  const text = `LearnQuest — ${subject}
 
-${intro(input.purpose)}
+${message}
 
-Your code: ${input.code}
-
-This code expires in ${input.expiresInMin} minutes.
-Never share this code. LearnQuest staff will never ask you for it.
-
-If you did not request this, you can safely ignore this email.
-
-— LearnQuest`;
+This is an automated security notice from LearnQuest. If you did not make this change, reset your password and contact the LearnQuest administrator.`;
   return { subject, html, text };
 }
 
@@ -118,8 +197,8 @@ export function createBrevoEmailService(): EmailService {
     get configured() {
       return env.brevoConfigured;
     },
-    async sendOtp(input) {
-      const email = buildOtpEmail(input);
+    async sendActionEmail(input) {
+      const email = buildActionEmail(input);
       await brevoSend({
         sender: { email: env.brevoSenderEmail, name: env.brevoSenderName },
         to: [{ email: input.to }],
@@ -129,18 +208,13 @@ export function createBrevoEmailService(): EmailService {
       });
     },
     async sendSecurityNotice(input) {
-      const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#0b0e1a;color:#e2e8f0;font-family:Arial,sans-serif;">
-<div style="max-width:560px;margin:0 auto;background:#141830;border:1px solid #2a3150;border-radius:16px;padding:24px;">
-<h1 style="font-size:20px;color:#f8fafc;margin:0 0 12px;">${escapeHtml(input.subject)}</h1>
-<p style="font-size:15px;line-height:1.6;color:#cbd5e1;margin:0;">${escapeHtml(input.message)}</p>
-<p style="font-size:12px;color:#64748b;margin:20px 0 0;">This is a security notice from LearnQuest.</p>
-</div></body></html>`;
+      const email = buildSecurityNoticeEmail(input);
       await brevoSend({
         sender: { email: env.brevoSenderEmail, name: env.brevoSenderName },
         to: [{ email: input.to }],
-        subject: input.subject,
-        htmlContent: html,
-        textContent: `${input.subject}\n\n${input.message}\n\n— LearnQuest`,
+        subject: email.subject,
+        htmlContent: email.html,
+        textContent: email.text,
       });
     },
   };

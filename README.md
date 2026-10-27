@@ -6,9 +6,9 @@ verified-coverage tracking, focus sessions, modules, checkpoints, goals,
 revision scheduling, efficiency analytics, and an optional fictional Arena.
 
 LearnQuest now has **authenticated multi-user accounts**: Google is the only
-registration path, password sign-in and OTP recovery are available afterwards,
-and learning data is stored server-side in MongoDB and scoped to the signed-in
-account. A local IndexedDB path remains for automated tests and development.
+registration path, password sign-in and single-use email-link recovery are
+available afterwards, and learning data is stored server-side in MongoDB and
+scoped to the signed-in account. A local IndexedDB path remains for automated tests and development.
 
 > **New here?** Start the app in minutes below, then read the full user manual:
 > [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md).
@@ -33,8 +33,9 @@ account. A local IndexedDB path remains for automated tests and development.
   aggregate-vs-daily semantics documented in the UI.
 - **Arena (optional, off by default)** — a clearly labeled fictional
   simulation that ranks average daily efficiency; never real people.
-- **Accounts** — Google-only registration, Argon2id password sign-in, Brevo
-  OTP password recovery, server-side sessions, account export and deletion.
+- **Accounts** — Google-only registration, Argon2id password sign-in,
+  single-use Brevo email links for password recovery and email verification,
+  server-side sessions, account export and deletion.
 - **Reports** — versioned (v3) JSON backups, CSV exports, validated atomic restore.
 
 ## How it works
@@ -51,8 +52,9 @@ progressGameTracker/
 
 - The **backend** fetches and normalizes public playlist metadata, serves the
   authenticated account API, and stores learning collections in MongoDB.
-  Password hashes use Argon2id; OTPs are HMAC-verified and single-use; sessions
-  are server-side and rotated on privilege changes.
+  Password hashes use Argon2id; email action tokens are stored only as
+  HMAC digests, are purpose-bound and atomically single-use; sessions are
+  server-side and rotated on privilege changes.
 - The **frontend** parses durations and computes every total, percentage,
   goal, efficiency figure, and simulated score in one domain engine
   (`frontend/src/domain`). In production it defaults to cloud mode and never
@@ -73,7 +75,8 @@ Tests: Vitest, Supertest, Testing Library, fake-indexeddb.
   `npm --version`). `backend/.node-version` pins the patched version.
 - A **MongoDB** deployment (Atlas or self-hosted) for accounts and cloud data.
 - A **Google OAuth 2.0 / OIDC** web client for Google-only registration.
-- A **Brevo** account, API key, and verified sender for OTP email.
+- A **Brevo** account, API key, and verified sender for password-reset and
+  email-verification links.
 - A **YouTube Data API v3 key** for live playlist imports (JSON snapshot
   import works without it).
 
@@ -136,16 +139,19 @@ Backend (`backend/.env` — create from `backend/.env.example`, never commit):
 | `BREVO_SENDER_EMAIL` | Brevo-verified sender address | _(required)_ |
 | `BREVO_SENDER_NAME` | Sender display name | `LearnQuest` |
 | `SESSION_SECRET` | **Secret.** 32+ chars; generate, never reuse | _(required)_ |
-| `OTP_HMAC_SECRET` | **Secret.** 32+ chars; generate, never reuse | _(required)_ |
+| `EMAIL_ACTION_HMAC_SECRET` | **Secret.** 32+ chars; signs single-use email action tokens | _(required)_ |
 | `SESSION_IDLE_HOURS` | Idle session lifetime | `168` |
 | `SESSION_ABSOLUTE_DAYS` | Absolute session lifetime | `30` |
 | `REAUTH_WINDOW_MIN` | Recent reauthentication window | `10` |
-| `OTP_TTL_MIN` | OTP lifetime | `10` |
-| `OTP_RESEND_SEC` | OTP resend cooldown | `60` |
-| `OTP_MAX_ATTEMPTS` | OTP verification attempts | `5` |
+| `EMAIL_ACTION_TTL_MIN` | Password-reset/email-verification link lifetime | `30` |
+| `EMAIL_ACTION_RESEND_SEC` | Cooldown before another link is issued | `60` |
 | `AUTH_RATE_LIMIT_PER_MIN` | Auth endpoint limit per IP | `20` |
-| `OTP_RATE_LIMIT_PER_15MIN` | OTP request limit per IP | `8` |
+| `EMAIL_ACTION_RATE_LIMIT_PER_15MIN` | Email-action request limit per IP | `8` |
 | `ACCOUNT_MAX_STATE_BYTES` | Import/export envelope cap | `8388608` |
+
+`OTP_HMAC_SECRET`, `OTP_TTL_MIN`, `OTP_RESEND_SEC`, and
+`OTP_RATE_LIMIT_PER_15MIN` are accepted only as legacy fallbacks when the new
+variables are empty. New deployments should set the `EMAIL_ACTION_*` names.
 
 Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`):
 
@@ -170,8 +176,9 @@ outage or cold start.
 
 Order of operations: copy `backend/.env.example` → `backend/.env`, fill in
 MongoDB/Google/Brevo credentials, generate unique `SESSION_SECRET` and
-`OTP_HMAC_SECRET`, restart the backend, then confirm the login screen shows
-no setup warning (or `GET /api/health` reports the missing variable names).
+`EMAIL_ACTION_HMAC_SECRET`, restart the backend, then confirm the login screen
+shows no setup warning (or `GET /api/health` reports the missing variable
+names).
 
 ## Development commands
 
@@ -199,17 +206,26 @@ Run each from its own directory (`frontend/` or `backend/`):
   setting.
 - Set the secret variables (`MONGODB_URI`, `GOOGLE_CLIENT_SECRET`,
   `BREVO_API_KEY`, `YOUTUBE_API_KEY`) in Render, never in Git. The Blueprint
-  generates `SESSION_SECRET` and `OTP_HMAC_SECRET`; changing either later
-  invalidates existing sessions and pending OTP challenges.
+  generates `SESSION_SECRET` and `EMAIL_ACTION_HMAC_SECRET`; changing
+  `SESSION_SECRET` signs out sessions, and changing
+  `EMAIL_ACTION_HMAC_SECRET` invalidates pending email action links.
 - Use a cookie-safe topology. Set `APP_ORIGIN` and `CORS_ORIGIN` to the public
-  app origin. Use either a same-origin Vercel `/api` proxy (keep
-  `VITE_API_BASE_URL` empty, point `GOOGLE_REDIRECT_URI` at the app origin) or
-  same-site custom domains (`app.example.com` + `api.example.com`, with
-  `GOOGLE_REDIRECT_URI` on the API origin). Register the exact redirect URI in
-  Google Cloud.
+  app origin. The current production layout is:
+  - Frontend: `https://learn-quest-one.vercel.app`
+  - Backend: `https://learnquest-hhiv.onrender.com`
+  - Callback: `https://learn-quest-one.vercel.app/api/auth/google/callback`
+  - `frontend/vercel.json` rewrites `/api/*` to the Render service, and
+    `VITE_API_BASE_URL` stays empty so the session cookie is first-party.
+  - Render sets `TRUST_PROXY_HOPS=2` for the exact browser → Vercel → Render →
+    Express chain. Never raise it beyond the number of proxies actually
+    present.
+  Register the exact callback in Google Cloud. Same-site custom domains remain
+  the only supported alternative; a direct `*.vercel.app` → `*.onrender.com`
+  API origin is not supported with the `SameSite=Lax` cookie.
 - **Frontend → Vercel** (or any static host): project root `frontend/`,
-  build `npm run build`, output `dist`. Do not configure a `*.vercel.app` →
-  `*.onrender.com` direct API origin with the current `SameSite=Lax` cookie.
+  build `npm run build`, output `dist`. Keep `frontend/vercel.json` at the
+  project root so the rewrite is applied. Do not configure a direct
+  `*.vercel.app` → `*.onrender.com` API origin with the current cookie policy.
 
 ## Data persistence and privacy
 
@@ -218,8 +234,9 @@ Run each from its own directory (`frontend/` or `backend/`):
   and scoped by the authenticated `userId`. The browser is not treated as the
   source of truth for an authenticated account, and a failed cloud read never
   falls back to an apparently empty local database.
-- Passwords are hashed with Argon2id. Raw passwords, password hashes, OTPs,
-  reset grants, and session tokens are never included in account exports.
+- Passwords are hashed with Argon2id. Raw passwords, password hashes, raw
+  email action tokens, and session tokens are never included in account
+  exports.
 - Sessions use `HttpOnly` cookies; production uses `Secure`,
   `SameSite=Lax`, and `__Host-` cookie names. Mutations require a CSRF token
   and an exact trusted origin.
@@ -235,8 +252,11 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Limitations
 
 - Live MongoDB, Google, and Brevo integrations require real credentials and
-  network access; the automated suites use in-memory fakes. See the current
-  multi-user report in `docs/audits/` for the exact verification boundary.
+  network access; the automated suites use in-memory fakes. The production
+  proxy/session chain, Render Node `24.22.1` runtime, and live email delivery
+  were not observable from this environment. See
+  [`docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md`](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
+  for the exact verification boundary and owner-side checks.
 - Timed in-browser playback events, overnight soak runs, live quota metering,
   2000+-video stress, and live storage-quota exhaustion are verified by
   unit/integration tests and inspection — not by live runs here. See
@@ -253,7 +273,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 |---|---|
 | Setup/configuration screen | Fill the listed names in `backend/.env`, restart, retry |
 | Google sign-in fails | Check the OAuth client, exact redirect URI, `GOOGLE_CLIENT_ID`/secret, and consent-screen test users |
-| OTP email not received | Verify the Brevo sender/domain and API key; check spam; respect the resend cooldown |
+| Recovery email not received | Verify the Brevo sender/domain and API key; check spam; wait for the resend cooldown; request a new link (older links are invalidated) |
 | MongoDB auth/data errors | Check `MONGODB_URI`, Atlas network access, and database user permissions; no local fallback is used |
 | API key missing | Follow Configuration; restart backend; Recheck in Settings |
 | Invalid/restricted key | Allow YouTube Data API v3 + backend host in Google Cloud; restart |
@@ -270,7 +290,8 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
 - [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup.
-- [docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — current multi-user implementation and verification report.
+- [docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/audits/LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — current auth, email-link, proxy, and verification report.
+- [docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — prior multi-user platform report (historical; superseded by the auth/security repair above).
 - [docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/audits/LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — prior remediation report and verification matrix.
 - [docs/audits/V7_FINAL_ACCEPTANCE.md](./docs/audits/V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.
 - [docs/audits/V6_FINAL_AUDIT.md](./docs/audits/V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.

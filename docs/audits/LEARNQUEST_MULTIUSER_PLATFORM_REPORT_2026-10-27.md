@@ -7,6 +7,11 @@
 **Working tree:** Intentionally uncommitted. No commit, push, branch change, reset, clean, stash, or destructive checkout was performed.  
 **Scope:** Authenticated multi-user platform, MongoDB persistence, Google-only registration, password sign-in, Brevo OTP recovery/email change, checkpoint form redesign, two-choice playlist removal, regression/security tests, configuration, deployment docs, and final verification.
 
+> **Superseded 2026-10-27:** The numeric OTP recovery and email-verification
+> flow described in this historical report was removed. Current password
+> reset and email verification use single-use email action links. See
+> [`LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md`](./LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md).
+
 ---
 
 ## 1. Executive summary

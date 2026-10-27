@@ -59,9 +59,12 @@ import {
   logoutAll as logoutAllApi, migrateLocalData, passwordLogin, putAccountCollection,
   requestEmailChange as requestEmailChangeApi,
   restorePlaylistApi, revokeAccountSession, startGoogleAuth, updateAccountPreferences as updateAccountPreferencesApi,
-  updateProfile as updateProfileApi, verifyEmailChange as verifyEmailChangeApi,
+  updateProfile as updateProfileApi,
 } from '../services/api/authApi.js';
-import { AuthScreens, OnboardingScreen, SetupRequiredScreen, AccountErrorScreen } from '../features/auth/AuthScreens.js';
+import {
+  AuthScreens, OnboardingScreen, SetupRequiredScreen, AccountErrorScreen,
+  PasswordResetScreen, EmailVerificationScreen,
+} from '../features/auth/AuthScreens.js';
 
 export type Prefs = AppPreferences;
 export type { Module, RankSnapshot };
@@ -151,7 +154,7 @@ interface Store {
   migrationSummary: string | null;
   migrationError: string | null;
   signInWithPassword: (identifier: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: (intent: 'login' | 'register') => Promise<void>;
   completeAccountSetup: (input: {
     username: string; displayName: string; password: string; timezone?: string;
     sessionLenMin?: number; breakMin?: number; minViableMin?: number;
@@ -161,8 +164,9 @@ interface Store {
   updateProfile: (input: { username?: string; displayName?: string }) => Promise<void>;
   updateAccountPreferences: (input: { timezone?: string; sessionLenMin?: number; breakMin?: number; minViableMin?: number }) => Promise<void>;
   changeAccountPassword: (currentPassword: string | null, newPassword: string) => Promise<void>;
-  requestEmailChange: (newEmail: string, password?: string) => Promise<{ challengeId: string; expiresInMin: number; targetEmail: string }>;
-  verifyEmailChange: (challengeId: string, code: string) => Promise<void>;
+  requestEmailChange: (newEmail: string, password?: string) => Promise<{
+    ok: boolean; email: string; expiresInMin: number; message: string;
+  }>;
   listAccountSessions: () => Promise<AccountSession[]>;
   revokeAccountSession: (sessionId: string) => Promise<void>;
   deleteAccount: (confirmUsername: string, password?: string) => Promise<void>;
@@ -439,6 +443,31 @@ function rekeyModules(
 
 const DEFAULT_MODE: 'local' | 'cloud' = import.meta.env.MODE === 'test' ? 'local' : 'cloud';
 
+interface EmailActionRoute {
+  kind: 'reset' | 'verify';
+  token: string | null;
+}
+
+/**
+ * Email links carry the opaque token in the URL fragment, so it is never sent
+ * to Vercel, Render, logs, or analytics. Capture it once and replace the URL
+ * immediately to remove it from browser history.
+ */
+function readEmailActionRoute(): EmailActionRoute | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  const [path, query = ''] = raw.split('?');
+  if (path !== 'reset-password' && path !== 'verify-email') return null;
+  const token = new URLSearchParams(query).get('token');
+  return { kind: path === 'reset-password' ? 'reset' : 'verify', token: token || null };
+}
+
+function stripEmailActionToken(kind: EmailActionRoute['kind']): void {
+  if (typeof window === 'undefined') return;
+  const path = kind === 'reset' ? 'reset-password' : 'verify-email';
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/${path}`);
+}
+
 const CLOUD_COLLECTIONS = [
   'playlists', 'meta', 'activeId', 'progress', 'ranges', 'checkpoints', 'modules',
   'sessions', 'goals', 'xp', 'achievements', 'segments', 'playSessions', 'queue',
@@ -541,6 +570,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const [lastDiff, setLastDiff] = useState<string | null>(null);
   const [celebration, setCelebration] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(mode === 'local');
+  const [actionRoute] = useState<EmailActionRoute | null>(() => readEmailActionRoute());
   const [setup, setSetup] = useState<AuthConfig | null>(null);
   const [authUser, setAuthUserState] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -561,6 +591,10 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // Client-generated session ids are a second idempotency barrier in memory:
   // two finish clicks in one tick cannot both pass the stale `sessions` closure.
   const sessionKeys = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (actionRoute) stripEmailActionToken(actionRoute.kind);
+  }, [actionRoute]);
 
   const applyState = useCallback((state: LoadedState) => {
     sessionKeys.current = new Set(
@@ -992,16 +1026,17 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     migrationAvailable, migrationSummary, migrationError,
 
     signInWithPassword: async (identifier, password) => {
-      resetAccountState();
+      // The server is the only authentication authority. Do not set an
+      // authenticated user or write account data until it confirms both the
+      // account and the password. The login response is not a configuration
+      // payload and must never overwrite `setup`.
       const res = await passwordLogin(identifier, password);
-      setSetup(res);
-      if (!res.user) throw new Error('The server did not return an account profile.');
-      setAuthUserState(res.user);
       setAuthError(null);
+      setAuthUserState(res.user);
       await loadCloud(res.user);
     },
-    signInWithGoogle: async () => {
-      await startGoogleAuth();
+    signInWithGoogle: async (intent) => {
+      await startGoogleAuth(intent);
     },
     completeAccountSetup: async (input) => {
       const res = await completeOnboardingApi(input);
@@ -1063,11 +1098,6 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setLastDiff('Password changed. Other sessions were signed out.');
     },
     requestEmailChange: async (newEmail, password) => requestEmailChangeApi(newEmail, password),
-    verifyEmailChange: async (challengeId, code) => {
-      const res = await verifyEmailChangeApi(challengeId, code);
-      setAuthUserState(res.user);
-      setLastDiff('Email address verified and updated. Your Google sign-in remains linked.');
-    },
     listAccountSessions: async () => (await listAccountSessions()).sessions,
     revokeAccountSession: async (sessionId) => {
       await revokeAccountSession(sessionId);
@@ -1640,6 +1670,15 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setLastDiff: (s) => setLastDiff(s),
   }), [ready, loadError, load, mode, authReady, setup, authUser, authError, syncStatus, syncError, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState]);
 
+  if (mode === 'cloud' && actionRoute) {
+    const exit = () => {
+      window.location.assign('/#/auth');
+    };
+    return actionRoute.kind === 'reset'
+      ? <PasswordResetScreen token={actionRoute.token} onExit={exit} />
+      : <EmailVerificationScreen token={actionRoute.token} onExit={exit} />;
+  }
+
   if (mode === 'cloud') {
     if (!authReady) {
       return (
@@ -1649,12 +1688,13 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         </div>
       );
     }
-    const coreMissing = !setup?.configured.mongodb || !setup?.configured.session || !setup?.configured.otp;
-    if (coreMissing) {
-      return <SetupRequiredScreen setup={setup} onRetry={() => { void bootstrap(); }} />;
-    }
+    const configured = setup?.configured;
+    const coreMissing = !configured?.mongodb || !configured?.session || !configured?.emailLinks;
     if (authError) {
       return <AccountErrorScreen message={authError} onRetry={() => { void bootstrap(); }} onSignOut={() => { void logoutApi().finally(() => setAuthError(null)); }} />;
+    }
+    if (coreMissing) {
+      return <SetupRequiredScreen setup={setup} onRetry={() => { void bootstrap(); }} />;
     }
     if (!authUser) {
       return (
