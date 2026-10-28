@@ -51,6 +51,7 @@ import type {
 import { kvGet, kvSet, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
 import { notify } from '../services/notifications/notify.js';
+import { setCsrfToken } from '../services/api/http.js';
 import { broadcastAuthSignOut, subscribeAuthSignOut, type AuthSyncReason } from './authSync.js';
 import {
   type AuthConfig, type AuthUser, type AccountSession,
@@ -580,7 +581,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const [lastDiff, setLastDiff] = useState<string | null>(null);
   const [celebration, setCelebration] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(mode === 'local');
-  const [actionRoute] = useState<EmailActionRoute | null>(() => readEmailActionRoute());
+  const [actionRoute, setActionRoute] = useState<EmailActionRoute | null>(() => readEmailActionRoute());
   const [setup, setSetup] = useState<AuthConfig | null>(null);
   const [authUser, setAuthUserState] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -737,29 +738,71 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setCelebration(null);
   }, [applyState]);
 
-  const applyRemoteSignOut = useCallback((reason: AuthSyncReason) => {
-    // Invalidate every in-flight authentication/data request first. The
-    // broadcast is only a UI signal, but no late response may repopulate it.
-    // A tab that had an authenticated account has a session to lose. A public
-    // recovery screen has no account and must never receive this notice.
-    const hadAuthenticatedSession = authUserRef.current !== null || cloudUserRef.current !== null;
+  /**
+   * Leave a standalone reset/verification link. This must be an in-app state
+   * transition, not `location.assign('/#/auth')`: that is only a same-document
+   * hash change, so the action route stayed mounted and the button appeared
+   * dead. Every pending authentication/data response is invalidated, the old
+   * session is not restored, and the reset entry is replaced so Back cannot
+   * reopen a dead recovery screen.
+   */
+  const leaveEmailAction = useCallback((destination: 'signin' | 'forgot') => {
     authEpoch.current += 1;
     if (saveT.current) clearTimeout(saveT.current);
-    cloudLoadGeneration.current += 1;
     cloudUserRef.current = null;
+    cloudLoadGeneration.current += 1;
+    setCsrfToken(null);
     resetAccountState();
     setAuthUserState(null);
     setReady(false);
     setAuthReady(true);
-    // A tab that was already signed out (for example, while completing
-    // password recovery) has no session to lose. Do not attach a workspace
-    // sign-out warning to a public authentication screen.
-    setSessionNotice(hadAuthenticatedSession ? REMOTE_SIGN_OUT_COPY[reason] : null);
+    setAuthError(null);
+    setSessionNotice(null);
+    sessionKeys.current.clear();
+    try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* unavailable */ }
+    const hash = destination === 'forgot' ? '#/auth?mode=forgot' : '#/auth';
+    if (typeof window !== 'undefined') {
+      const target = `${window.location.pathname}${window.location.search}${hash}`;
+      try {
+        window.history.replaceState(null, '', target);
+      } catch {
+        // The UI state change below still removes the recovery screen.
+        window.location.hash = hash;
+      }
+    }
+    setActionRoute(null);
+  }, [resetAccountState]);
+
+  /**
+   * Drop every client-side trace of an authenticated account after the server
+   * has rejected or revoked the session. In-flight responses are invalidated
+   * before state is cleared so a late account load, save, or login cannot
+   * resurrect authenticated UI.
+   */
+  const clearLocalSession = useCallback((notice: string | null) => {
+    authEpoch.current += 1;
+    if (saveT.current) clearTimeout(saveT.current);
+    cloudLoadGeneration.current += 1;
+    cloudUserRef.current = null;
+    setCsrfToken(null);
+    resetAccountState();
+    setAuthUserState(null);
+    setReady(false);
+    setAuthReady(true);
+    setSessionNotice(notice);
     setAuthError(null);
     sessionKeys.current.clear();
     try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* unavailable */ }
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
   }, [resetAccountState]);
+
+  const applyRemoteSignOut = useCallback((reason: AuthSyncReason) => {
+    // The broadcast is only a UI signal, but no late response may repopulate it.
+    // A tab that had an authenticated account has a session to lose. A public
+    // recovery screen has no account and must never receive this notice.
+    const hadAuthenticatedSession = authUserRef.current !== null || cloudUserRef.current !== null;
+    clearLocalSession(hadAuthenticatedSession ? REMOTE_SIGN_OUT_COPY[reason] : null);
+  }, [clearLocalSession]);
 
   const clearAuthNotice = useCallback(() => setSessionNotice(null), []);
 
@@ -828,14 +871,13 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
 
   useEffect(() => {
     if (mode !== 'cloud') return;
-    const expired = () => {
-      setAuthUserState(null);
-      setReady(false);
-      setAuthError('Your session ended or was signed out elsewhere. Sign in again to continue.');
-    };
+    // A server-rejected session is an authentication state, not an account
+    // data outage. Clear all account state and show the sign-in form with a
+    // scoped notice instead of the misleading "account data unavailable" card.
+    const expired = () => clearLocalSession('Your session ended or was signed out elsewhere. Sign in again to continue.');
     window.addEventListener('lq:auth-expired', expired);
     return () => window.removeEventListener('lq:auth-expired', expired);
-  }, [mode]);
+  }, [mode, clearLocalSession]);
 
   // Same-origin tabs clear their authenticated UI immediately after an
   // ordinary sign-out, password reset, verified email change, or deletion.
@@ -1173,8 +1215,11 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         } catch { /* unavailable */ }
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
       }
-      if (serverError) notify(`Signed out on this device. ${serverError}`);
-      else broadcastAuthSignOut('sign-out');
+      if (serverError) {
+        notify(`This device view was cleared, but the server could not confirm sign-out. Your session may still be active; reload and sign out again. ${serverError}`);
+      } else {
+        broadcastAuthSignOut('sign-out');
+      }
     },
     refreshSession: async () => {
       const epoch = authEpoch.current;
@@ -1797,12 +1842,8 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState]);
 
   if (mode === 'cloud' && actionRoute) {
-    const exit = () => {
-      window.location.assign('/#/auth');
-    };
-    const requestNew = () => {
-      window.location.assign('/#/auth?mode=forgot');
-    };
+    const exit = () => leaveEmailAction('signin');
+    const requestNew = () => leaveEmailAction('forgot');
     return actionRoute.kind === 'reset'
       ? <PasswordResetScreen token={actionRoute.token} onExit={exit} onRequestNew={requestNew} expiresInMin={setup?.emailActionTtlMin} />
       : <EmailVerificationScreen token={actionRoute.token} onExit={exit} />;

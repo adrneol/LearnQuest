@@ -1,0 +1,435 @@
+# LEARNQUEST — AUTHENTICATION, RESET NAVIGATION, SESSION/COOKIE SECURITY, EMAIL PIPELINE, AND NODE.JS SECURITY AUDIT
+
+Repository: `E:\progressGameTracker`
+
+Branch: `main`
+
+Latest implementation report:
+`docs/user-doc/audit2/16_LEARNQUEST_RESET_LINK_EXPIRY_AND_ORIGIN_FIX_2026-10-28.md`
+
+Archive index:
+`docs/user-doc/audit2/README.md`
+
+Production frontend:
+`https://learn-quest-one.vercel.app`
+
+Production backend:
+`https://learnquest-hhiv.onrender.com`
+
+## EXECUTION POLICY — MAXIMUM EFFORT
+
+Use the strongest available DeepSeek model and `#max` reasoning variant wherever supported. Retain maximum effort for subsequent agent invocations when supported. Do not claim that `#max` was active if the CLI does not confirm it.
+
+Read the current repository state, the existing implementation, Reports 15 and 16, and the archive index before making changes.
+
+This is a continuation of existing work. Do not start over, discard fixes, or create a parallel authentication system.
+
+Preserve all uncommitted changes, existing database records, configuration files, secrets, and audit history.
+
+Never print or expose passwords, session tokens, reset tokens, database connection strings, API keys, HMAC secrets, cookies, authorization headers, or sensitive provider responses.
+
+Do not commit, push, reset, clean, stash, switch branches, or discard changes.
+
+Do not delete live accounts, reset real users' passwords, migrate live data, or execute destructive database operations.
+
+Do not weaken TLS verification, CSRF controls, session protections, password policy, rate limits, or account isolation to make tests pass.
+
+Do not automatically deploy production changes. Verify production readiness and report the precise deployment actions still required.
+
+Implement safe, demonstrable fixes. Do not stop after planning, auditing, or writing reports.
+
+## PHASE 1 — INSPECT THE CURRENT IMPLEMENTATION
+
+Inspect the Git working tree, staged and unstaged diffs, untracked files, and existing report history.
+
+Read Report 16 in full and inspect the actual code for:
+
+- `frontend/src/features/auth/AuthScreens.tsx`
+- `frontend/src/services/api/authApi.ts`
+- `frontend/src/services/api/http.ts`
+- `frontend/src/app/App.tsx`
+- `frontend/src/app/store.tsx`
+- `backend/src/routes/auth.ts`
+- `backend/src/auth/actionTokens.ts`
+- `backend/src/email/brevo.ts`
+- `backend/src/config/env.ts`
+- `backend/src/db/mongo.ts`
+- Session creation, validation, rotation, and revocation modules.
+- `backend/package.json`, frontend package configuration, Node version declarations, `render.yaml`, and Vercel deployment configuration.
+
+Discover the actual session, cookie, email, and route implementations rather than assuming file names or previous audit claims fully describe the current code.
+
+Identify completed, incomplete, and defective requirements before making edits. Preserve changes that already work.
+
+## PHASE 2 — FIX THE POST-RESET "BACK TO SIGN IN" BUTTON
+
+### Reproduced user-facing defect
+
+The password-reset flow displays this successful state:
+
+**Password reset complete**
+
+"All earlier sessions were signed out. Sign in with your new password."
+
+It then displays a prominent **Back to sign in** button.
+
+Clicking the button does not take the user to the sign-in page.
+
+This is the first mandatory repair. Do not let it get lost in the wider audit.
+
+### Requirements
+
+1. Reproduce the problem from the existing reset-success state using the actual application router.
+2. Trace the button's click handler, shared navigation utility, hash routing, and route initialization.
+3. Identify why the click fails or lands on the wrong state.
+4. Repair the actual navigation path rather than just changing button text or CSS.
+5. Use the application's canonical sign-in route or existing navigation abstraction. Do not guess a route string before inspecting the router.
+6. On activation, navigate immediately to the sign-in screen.
+7. Clear stale reset-success, reset-form, reset-token, and unrelated authentication-notification state where appropriate.
+8. Remove residual reset tokens from the visible URL and browser history when safe and consistent with the existing token handling.
+9. Do not restore the old authenticated session after password reset.
+10. The user must sign in using the new password; the button is navigation, not automatic authentication.
+11. Browser back/forward and direct access to the sign-in route must work.
+12. The reset-success button must work with mouse, keyboard, and assistive technology.
+13. Prevent a stale reset route or asynchronously restored UI state from immediately overriding navigation.
+14. Preserve the success screen until the user actually activates the button.
+
+### Mandatory regression tests
+
+Add or repair tests that:
+
+- Complete a successful password-reset flow.
+- Confirm the password-reset success state appears only after the backend confirms the password change.
+- Click **Back to sign in** and confirm the actual sign-in screen is visible.
+- Confirm the reset form and success screen are no longer visible.
+- Confirm the reset token is not left in the visible URL.
+- Confirm the user is not automatically authenticated again.
+- Confirm the user can submit the new password on the sign-in screen through the normal sign-in flow.
+- Confirm stale reset state or unrelated cross-tab notifications do not redirect the user away from sign-in.
+- Verify browser navigation and route refresh behavior.
+
+A passing build or a test that only invokes a navigation callback is insufficient. Test the user-visible result.
+
+## PHASE 3 — DEEP SESSION AND COOKIE SECURITY AUDIT
+
+Audit the real authentication lifecycle end to end. Fix any demonstrated defects found within this scope.
+
+### A. Cookie properties and topology
+
+Inspect how session cookies are issued, renewed, cleared, and validated in local development and production.
+
+Verify:
+- `HttpOnly` is enabled.
+- `Secure` is enabled in production.
+- `SameSite` is correct for the actual Vercel/Render request topology.
+- The cookie's path, domain, expiry, and other attributes are consistent when setting and clearing it.
+- Credentialed CORS uses explicit trusted origins, never an unrestricted origin with credentials.
+- CSRF protection is enforced for state-changing operations.
+- Proxy and forwarded-header handling is consistent with the actual trusted deployment topology.
+- Session expiry is enforced server-side, including idle timeout and absolute lifetime.
+- Password, OAuth, and session secrets are never stored in browser storage.
+- Learning records, notes, playlists, progress, and analytics are never placed in the session cookie.
+- Authentication state is not trusted solely from client-side flags.
+- A stale cookie cannot revive a revoked session.
+
+The earlier audit identified a deployment topology in which the Vercel frontend and Render backend use different site domains. Verify whether the application uses a same-origin `/api` proxy or direct cross-origin requests.
+
+Do not blindly change cookies to `SameSite=None`, disable `Secure`, broaden CORS, or add a permissive domain. Choose a secure configuration appropriate to the actual request architecture. If the current topology makes the intended session behavior impossible, fix the architecture or provide a precise owner-side deployment requirement.
+
+### B. Login and session lifecycle
+
+Verify and fix as needed:
+
+- Session rotation after successful authentication.
+- Protection against session fixation.
+- Correct cookie issuance on password and Google sign-in.
+- Safe behavior for failed login attempts.
+- Proper session revocation at logout.
+- Reliable session lookup and revocation in MongoDB.
+- Prevention of expired sessions being treated as active.
+- Revocation of old sessions after password reset.
+- Correct invalidation of all previously issued sessions after account deletion.
+- No persistence of old browser state after the server rejects a session.
+- No user-data writes after sign-out or account deletion.
+- No race that lets a stale asynchronous response restore authentication.
+- Correct account isolation on every protected endpoint.
+- No client-supplied `userId` being trusted as the authenticated identity.
+
+### C. Cross-tab behavior
+
+The required behavior is:
+
+- Opening a second tab in the same browser profile should reuse a still-valid server-side session.
+- Signing out in one tab should immediately synchronize the UI of other same-origin tabs.
+- The synchronization event must not include tokens, passwords, personal data, or session identifiers.
+- The server must remain authoritative; a broadcast is never proof of valid authentication.
+- Old or pending API responses must not restore authenticated UI after logout.
+- A password reset must invalidate sessions on every device, not merely close the current tab.
+- The browser cookie must be cleared with the correct attributes.
+- Recovery and public authentication pages must not inherit irrelevant expired-session warnings.
+
+Add regression tests using independent tabs or the existing cross-tab test harness where available.
+
+Do not claim full browser-level verification if only mocked unit tests were run. Clearly report which scenarios were tested in a real browser.
+
+## PHASE 4 — PASSWORD RESET, TOKEN SAFETY, AND ACCOUNT RECOVERY
+
+Report 16 describes a strong server-side reset-token design. Verify that it remains correct.
+
+Required behavior:
+
+- High-entropy cryptographically random action tokens.
+- Digest/HMAC storage rather than raw reset tokens.
+- Purpose and account binding.
+- Server-enforced expiration.
+- Atomic single-use token consumption.
+- Rejection of expired, malformed, consumed, and replayed tokens.
+- No token consumption on GET.
+- No false success if MongoDB is unavailable.
+- Password hash updates only after a successful validated request.
+- Session revocation after successful reset.
+- Invalidation of outstanding reset grants/actions as required.
+- No sensitive tokens in logs, analytics, browser storage, or exception messages.
+
+Ensure the reset-success screen appears only after the actual password-change operation succeeds and the backend confirms its required state transition.
+
+Do not claim every external session was revoked just because the frontend navigated to the success screen; verify server-side revocation and tests.
+
+Search all active security-sensitive code paths for `Math.random`. Any use for an OTP, reset token, verification code, session token, or security challenge must be replaced with appropriate Node.js cryptographic randomness. Preserve ordinary non-security random uses when harmless.
+
+For any remaining numeric OTP flow that is deliberately part of the product:
+- Use `crypto.randomInt` or an equivalent cryptographically secure generator.
+- Use server-enforced expiry, attempt limits, cooldown, and atomic single-use consumption.
+- Bind the code to the account and intended purpose.
+- Store a secure digest/HMAC rather than the raw code where appropriate.
+- Invalidate old codes on successful verification and resend.
+- Never log or expose codes.
+
+Password reset should continue using the existing single-use email-link flow rather than adding an unnecessary numeric OTP field.
+
+## PHASE 5 — AUDIT THE COMPLETE BREVO EMAIL PIPELINE
+
+The user has received password-reset email in some tests but has also experienced missing emails and incorrect localhost links. Earlier audits recorded a Brevo source-IP authorization failure. The user's current allowlist changes still need real verification.
+
+Trace the entire real path:
+
+Frontend request
+→ API client
+→ correct API route/proxy
+→ server-side account eligibility and lookup
+→ secure token creation
+→ configured URL construction
+→ HTML and plain-text email rendering
+→ Brevo API authentication/request
+→ provider response classification
+→ delivery status
+→ reset-link navigation
+→ server-side token validation
+→ password update and session revocation.
+
+Inspect every relevant caller, not just the email helper.
+
+Verify configuration presence without printing secrets:
+- `BREVO_API_KEY`
+- `BREVO_SENDER_EMAIL`
+- `BREVO_SENDER_NAME`
+- `APP_ORIGIN`
+- `API_ORIGIN`
+- `EMAIL_ACTION_HMAC_SECRET` or the active configured equivalent
+- `MONGODB_URI`
+- `MONGODB_DB_NAME`
+
+### Correct email behavior
+
+1. Password-reset requests for existing eligible accounts must produce a valid, expiring action link.
+2. Unknown or ineligible accounts must not receive email or a usable reset token.
+3. Public recovery responses must remain enumeration-safe.
+4. The production link must use the validated public frontend origin, never localhost.
+5. Local-development links may use the explicitly configured local origin only in development.
+6. HTML and plain-text email versions must use the same action link and expiry.
+7. Failed provider requests must be diagnosed without logging credentials or action tokens.
+8. Provider acceptance must not be described as confirmed delivery.
+9. The frontend must not claim that an email was sent or a password was changed unless that claim matches the intended generic-response and backend state.
+10. Rate limits and resend cooldowns must be enforced server-side.
+11. Password reset and email-change actions must use the correct purpose and expiry policy.
+12. The sender name and design should look professional and contain concise instructions, expiry, and ignore-if-unrequested wording.
+
+### Delivery diagnosis
+
+Investigate whether Brevo is still rejecting API requests based on the calling IP, whether the correct sender is configured and verified, and whether the production backend uses the proper authorized Render outbound addresses.
+
+Check the actual configured service and deployed revision where possible.
+
+If a safe owner-controlled test-recipient setting already exists, a single controlled delivery test is permitted. Otherwise, do not invent a recipient or send email to unrelated accounts. Use automated tests and provide the exact manual verification steps.
+
+If a real request is made, distinguish:
+- Request not attempted due to missing configuration.
+- Brevo API authentication/authorization rejection.
+- Provider validation rejection.
+- Timeout/network failure.
+- Provider accepted or queued the message.
+- Delivery confirmed by provider.
+- Message failed, bounced, or was blocked.
+
+Never fabricate a provider message ID, acceptance response, or inbox delivery.
+
+Verify the actual logs through the configured application diagnostics and provider where accessible. If access to live provider logs is not available from the CLI, identify the owner-side check required.
+
+## PHASE 6 — CURRENT NODE.JS SECURITY BASELINE
+
+The user explicitly wants a deep review of the recent Node.js security update associated with the October 2026 vulnerability announcements.
+
+Use official sources at execution time, not stale memory or assumptions:
+
+- Node.js release notes: `https://nodejs.org/en/blog/release`
+- Specific Node.js 24.22.1 release: `https://nodejs.org/en/blog/release/v24.22.1`
+- PHP official 2026 security archive: `https://www.php.net/archive/2026.php`
+
+The official Node.js release notes identify Node.js 24.22.1 LTS, released October 21, 2026, as a security release. Its notes include fixes involving TLS/IP validation, DNS input validation, and Brotli, including CVE-2026-111497.
+
+The recent PHP releases separately addressed critical PHP-runtime vulnerabilities CVE-2026-109618 and CVE-2026-109619. Do not describe those PHP vulnerabilities as Node.js vulnerabilities. Verify whether any PHP runtime exists in the actual LearnQuest deployment; do not add PHP to this Node.js app without evidence.
+
+### Required runtime checks
+
+Inspect:
+- `backend/package.json` and frontend `package.json`.
+- `.node-version`, `.nvmrc`, `engines`, lockfiles, and build scripts.
+- `render.yaml`.
+- The actual Render runtime version if safely observable.
+- The Node versions used for local tests/builds.
+- The dependency graph and installed versions of security-relevant transitive packages, including Brotli-related dependencies.
+- The current `npm audit` output.
+
+Requirements:
+
+1. Keep the backend on the supported Node.js 24 LTS line required by the project, currently expected to be at least `24.22.1` and below Node 25.
+2. Verify the official latest supported patch version before deciding whether an update is needed. Do not assume the latest Current major release is the right production runtime.
+3. Do not downgrade the declared runtime to accommodate an old local installation.
+4. Align local, CI, and Render runtime configuration where possible.
+5. Do not claim Render runs the required patch version merely because local tests did.
+6. Fix dependency vulnerabilities where safely applicable; do not blindly run `npm audit fix --force` or introduce breaking major upgrades.
+7. Use reproducible builds and the existing package lockfiles.
+8. Run all relevant tests and production builds under the required runtime.
+9. Review whether a deployment redeploy is required for the security fixes to take effect in production.
+10. If the deployed runtime cannot be inspected, explicitly state that limitation and give exact owner-side verification steps.
+
+Do not assume the PHP CVEs affect the LearnQuest Node.js process. Check actual repository and deployment evidence.
+
+## PHASE 7 — PRODUCTION CONFIGURATION AND ROUTING
+
+The latest report recorded a stale production deployment and missing authentication/readiness endpoints.
+
+Safely check the current public deployment, where network access permits:
+- Render health and readiness endpoints.
+- Public authentication configuration endpoint.
+- Vercel's `/api` rewrite and corresponding endpoints.
+- Whether the public frontend and backend are using compatible versions.
+- Whether the deployed build includes the current password-reset validation route.
+- Whether the deployed configuration has the intended public origin and expiry setting.
+- Whether session cookies are actually compatible with the request topology.
+
+Do not issue password resets for arbitrary users or mutate production accounts as a diagnostic.
+
+Keep local source status and deployed status separate. A local test passing does not mean the public site uses that version.
+
+Do not deploy automatically. If a production deployment or dashboard change is needed, list exact steps and the acceptance checks to run after the owner deploys.
+
+## PHASE 8 — AUDIT FOR OTHER FAULTY AUTHENTICATION OR PERSISTENCE LOGIC
+
+Perform a focused but comprehensive inspection for related defects:
+
+- Broken reset-success navigation.
+- Stale recovery or cross-tab notices on the wrong page.
+- Sign-in, sign-out, Google OAuth, and first-time onboarding inconsistencies.
+- Session fixation, weak rotation, or incorrect revocation.
+- Cookie attributes inconsistent between production and development.
+- CSRF, CORS, origin, proxy, and forwarded-header mistakes.
+- Race conditions between login, logout, password reset, and late requests.
+- Password-reset replay and expiry defects.
+- Incorrect API origin or route rewrites.
+- Token-generation mistakes.
+- Unsafe handling of missing MongoDB responses.
+- Incorrect success indicators for cloud writes.
+- Browser-only fallbacks that may overwrite account data.
+- Account isolation and authorization defects.
+- Logs that expose secrets or sensitive account data.
+- Missing rate limits or duplicate email submission protections.
+
+Fix every demonstrated defect within this scope. Keep changes targeted; do not rewrite working modules merely to create activity.
+
+For any issue that requires live provider access or production settings, document it instead of fabricating a code-only solution.
+
+## PHASE 9 — VERIFICATION AND REGRESSION TESTS
+
+Run relevant tests in a sensible order:
+
+1. Reset-success navigation.
+2. Token expiry and atomic single-use tests.
+3. Session and cookie tests.
+4. Cross-tab logout tests.
+5. Password-reset all-device revocation tests.
+6. Email API and template tests.
+7. MongoDB availability/fail-closed tests.
+8. Authentication, Google OAuth, and onboarding tests.
+9. Full backend test suite.
+10. Full frontend test suite.
+11. Backend and frontend typechecks.
+12. Lint.
+13. Production builds.
+14. Dependency audits.
+15. Safe, read-only public deployment checks where available.
+
+Use the supported Node.js runtime for the affected tests.
+
+Do not weaken assertions, suppress failures, skip tests, or substitute mocked success for live-provider evidence.
+
+If real-browser tests are available, exercise the reset-success navigation and cookie flows in a real browser. Otherwise, state clearly that only unit/integration tests were run.
+
+The core UI acceptance check is:
+
+After a confirmed reset, clicking **Back to sign in** reliably renders the canonical sign-in page, clears reset state, and does not restore an authenticated session.
+
+The email acceptance check is:
+
+A controlled owner-authorized reset request has observable provider evidence; the email uses the configured public origin and consistent expiry; a valid token works once before expiry; and an expired token is rejected by the server.
+
+## PHASE 10 — ONE FINAL NUMBERED AUDIT REPORT
+
+Create exactly ONE new audit report:
+
+`docs/user-doc/audit2/17_LEARNQUEST_AUTH_SESSION_EMAIL_RUNTIME_FINAL_AUDIT_2026-10-28.md`
+
+If Report 17 already exists from a partial run, inspect and continue that report instead of creating a duplicate.
+
+Update the existing `docs/user-doc/audit2/README.md` in place. Do not create additional progress, summary, implementation, or secondary index Markdown files.
+
+The report must include:
+
+- Root cause of the broken Back to sign in button.
+- Exact UI/routing fix and its regression evidence.
+- Session/cookie topology and security assessment.
+- Cross-tab and cross-device revocation behavior.
+- Password-reset token and OTP security findings.
+- Full email-pipeline findings and actual provider response/delivery evidence.
+- Node.js official release consulted, required baseline, local runtime, and actual production runtime if observable.
+- Relevant dependency audit results.
+- Files changed and reasons.
+- Fresh tests, typechecks, lint, build, and browser-test results.
+- Current MongoDB connectivity/readiness evidence.
+- Live Render/Vercel status.
+- Remaining owner-side steps.
+- Final Git status.
+
+Explicitly separate:
+1. Code defects that have been fixed and tested locally.
+2. Fixes that still need deployment.
+3. Live provider behavior that has actually been verified.
+4. External configuration issues that remain unverified.
+
+Preserve all previous audits. Do not commit, push, reset, clean, stash, switch branches, expose secrets, or perform destructive database operations.
+
+## FINAL ACCEPTANCE
+
+The work is complete only when the reset-success navigation is fixed with a user-visible regression test; session/cookie behavior is audited and defensibly tested; the email pipeline's real failure point is identified or precisely bounded; the Node.js patch baseline is checked against official releases; and the final report distinguishes local verification from production reality.
+
+Start by inspecting the current repository and Report 16, then implement the navigation fix first before continuing the security and email audit. Do not stop after planning.

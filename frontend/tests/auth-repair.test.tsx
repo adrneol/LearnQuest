@@ -208,14 +208,39 @@ describe('auth response boundary (MongoDB render regression)', () => {
     },
   );
 
-  it('still reports an expired session for a 401 from an authenticated endpoint', async () => {
-    globalThis.fetch = (async () => json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' }, 401)) as any;
+  it.each(['UNAUTHENTICATED', 'SESSION_EXPIRED', 'SESSION_REVOKED', 'ACCOUNT_UNAVAILABLE'])(
+    'reports an expired session for a 401 carrying the real server code %s',
+    async (code) => {
+      globalThis.fetch = (async () => json({ error: 'Authentication required.', code }, 401)) as any;
+      setCsrfToken('live-csrf-token');
+      const expired = vi.fn();
+      window.addEventListener('lq:auth-expired', expired);
+      try {
+        await expect(apiRequest('/account/data')).rejects.toMatchObject({ status: 401, code });
+        expect(expired).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('lq:auth-expired', expired);
+        setCsrfToken(null);
+      }
+    },
+  );
+
+  it.each([
+    '/auth/password/change',
+    '/auth/reauth',
+    '/account/email/change',
+    '/account/delete',
+  ])('does not sign the whole session out for a wrong-password 401 from %s', async (path) => {
+    globalThis.fetch = (async () => json({ error: 'The current password is incorrect.', code: 'INVALID_CREDENTIALS' }, 401)) as any;
     setCsrfToken('live-csrf-token');
     const expired = vi.fn();
     window.addEventListener('lq:auth-expired', expired);
     try {
-      await expect(apiRequest('/account/data')).rejects.toMatchObject({ status: 401 });
-      expect(expired).toHaveBeenCalledTimes(1);
+      await expect(apiRequest(path, { method: 'POST', body: {} })).rejects.toMatchObject({
+        status: 401,
+        code: 'INVALID_CREDENTIALS',
+      });
+      expect(expired).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('lq:auth-expired', expired);
       setCsrfToken(null);
@@ -359,6 +384,32 @@ describe('email action links in the browser', () => {
     expect(calls.some((u) => u.endsWith('/api/auth/password/reset'))).toBe(false);
   });
 
+  it('opens the recovery form from an expired link without leaving the dead reset route active', async () => {
+    const token = 'opaque-expired-navigation-token-abcdefghijklmnopqrstuvwxyz';
+    window.location.hash = `#/reset-password?token=${token}`;
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (u.endsWith('/api/auth/password/reset/validate')) {
+        return json({ error: 'This password reset link has expired. Request a new link.', code: 'EXPIRED_RESET_TOKEN' }, 400);
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'This reset link has expired' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Request a new reset link' }));
+
+    expect(await screen.findByRole('heading', { name: 'Reset your password' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'This reset link has expired' })).toBeNull();
+    expect(window.location.hash).toBe('#/auth?mode=forgot');
+    expect(window.location.href).not.toContain(token);
+  });
+
   it('does not show the password form when the validation service is unavailable', async () => {
     const token = 'opaque-unavailable-token-abcdefghijklmnopqrstuvwxyz';
     window.location.hash = `#/reset-password?token=${token}`;
@@ -380,6 +431,79 @@ describe('email action links in the browser', () => {
     expect(screen.getByText(/Nothing was changed/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Choose a new password' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Try checking again' })).toBeInTheDocument();
+  });
+
+  it('moves from the confirmed reset success screen to the real sign-in screen and can sign in with the new password', async () => {
+    const token = 'opaque-reset-navigation-token-abcdefghijklmnopqrstuvwxyz';
+    window.location.hash = `#/reset-password?token=${token}`;
+    const loginBodies: any[] = [];
+    globalThis.fetch = (async (url: any, init?: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      if (u.endsWith('/api/auth/password/reset/validate')) return json({ ok: true, valid: true });
+      if (u.endsWith('/api/auth/password/reset')) return json(null, 204);
+      if (u.endsWith('/api/auth/login')) {
+        loginBodies.push(JSON.parse(init.body));
+        return json({ authenticated: true, user: USER, csrfToken: 'csrf-after-reset' });
+      }
+      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Choose a new password' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new correct horse battery staple' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new correct horse battery staple' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set new password' }));
+
+    expect(await screen.findByText('Password reset complete')).toBeInTheDocument();
+    expect(screen.queryByLabelText('New password')).toBeNull();
+    // The success screen is preserved until the user explicitly leaves it.
+    expect(screen.queryByRole('heading', { name: 'Sign in' })).toBeNull();
+    expect(loginBodies).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByText('Password reset complete')).toBeNull();
+    expect(screen.queryByLabelText('New password')).toBeNull();
+    expect(window.location.hash).toBe('#/auth');
+    expect(window.location.href).not.toContain(token);
+    expect(document.body.textContent).not.toContain(token);
+    // Navigation alone never authenticates the browser again.
+    expect(screen.queryByText('APP CONTENT')).toBeNull();
+    expect(loginBodies).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: 'learner' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'new correct horse battery staple' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByText('APP CONTENT')).toBeInTheDocument();
+    expect(loginBodies).toEqual([{ identifier: 'learner', password: 'new correct horse battery staple' }]);
+  });
+
+  it('renders the canonical sign-in screen on a fresh #/auth page load', async () => {
+    // A refresh or direct navigation to the canonical route must not depend on
+    // reset-screen state that only exists in a previous document lifecycle.
+    window.location.hash = '#/auth';
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).endsWith('/api/auth/session')) return json({ authenticated: false, ...CONFIG });
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Checking this reset link' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'This reset link has expired' })).toBeNull();
   });
 
   it('does not verify an email on page load; it requires the explicit button POST', async () => {

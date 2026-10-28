@@ -198,6 +198,33 @@ describe('store integration with cross-tab sign-out', () => {
     expect(localStorage.getItem('lq-focus-timer-v1')).toBeNull();
   });
 
+  it('shows the sign-in form and clears account state when the server rejects the session', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) {
+        return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
+      }
+      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      return json({ error: 'not found' }, 404);
+    }) as any;
+    localStorage.setItem('lq-focus-timer-v1', '{"startedAt":1}');
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(await screen.findByText('APP CONTENT')).toBeInTheDocument();
+
+    window.dispatchEvent(new CustomEvent('lq:auth-expired'));
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByText(/Your session ended or was signed out elsewhere/i)).toBeInTheDocument();
+    expect(screen.queryByText('APP CONTENT')).toBeNull();
+    expect(screen.queryByText(/account data is unavailable/i)).toBeNull();
+    expect(localStorage.getItem('lq-focus-timer-v1')).toBeNull();
+  });
+
   it('does not let a late login response repopulate a session after another tab signs out', async () => {
     let resolveLogin!: (response: Response) => void;
     const loginResponse = new Promise<Response>((resolve) => { resolveLogin = resolve; });

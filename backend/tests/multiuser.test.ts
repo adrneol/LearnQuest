@@ -6,7 +6,7 @@ import { createMemoryDb } from '../src/db/memoryAdapter.js';
 import { createDataStore, type DataStore } from '../src/store.js';
 import { createAccountFromGoogle, completeOnboarding } from '../src/auth/accounts.js';
 import { assertProductionConfig } from '../src/config/env.js';
-import { hashCode } from '../src/auth/crypto.js';
+import { hashCode, sessionTokenHash } from '../src/auth/crypto.js';
 import { actionTokenDigest } from '../src/auth/actionTokens.js';
 import { validateGoogleClaims, createGoogleOAuthService } from '../src/auth/google.js';
 import type { ActionEmailInput, EmailService, SecurityNoticeInput } from '../src/email/brevo.js';
@@ -355,6 +355,94 @@ describe('account registration and sessions', () => {
     const logout = await authed(request(app).post('/api/auth/logout'), s);
     expect(logout.status).toBe(204);
     expect((await request(app).get('/api/auth/session').set('Cookie', s.cookie)).body.authenticated).toBe(false);
+  });
+
+  it('revokes every device on logout-all without affecting another account', async () => {
+    await seedUser('all_one', 'allone@example.test', 'correct horse battery staple', 'google-sub-all-one');
+    await seedUser('all_two', 'alltwo@example.test', 'correct horse battery staple', 'google-sub-all-two');
+    const first = await login('all_one', 'correct horse battery staple');
+    const second = await login('all_one', 'correct horse battery staple');
+    const other = await login('all_two', 'correct horse battery staple');
+
+    const logoutAll = await authed(request(app).post('/api/auth/logout-all'), first);
+    expect(logoutAll.status).toBe(204);
+    const cleared = String(logoutAll.headers['set-cookie'][0]);
+    expect(cleared).toContain('lq_session=');
+    expect(cleared).toContain('Max-Age=0');
+    expect(cleared).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
+    expect(cleared).toContain('HttpOnly');
+    expect(cleared).toContain('SameSite=Lax');
+    expect(cleared).toContain('Path=/');
+    expect(cleared).not.toMatch(/;\s*Domain=/i);
+
+    for (const session of [first, second]) {
+      expect((await request(app).get('/api/account/data').set('Cookie', session.cookie)).status).toBe(401);
+      expect((await request(app).get('/api/auth/session').set('Cookie', session.cookie)).body.authenticated).toBe(false);
+    }
+    expect((await request(app).get('/api/account/data').set('Cookie', other.cookie)).status).toBe(200);
+  });
+
+  it('does not treat a stale-password-version session as authenticated', async () => {
+    const account = await seedUser('versioned', 'versioned@example.test', 'correct horse battery staple', 'google-sub-versioned');
+    const session = await login('versioned', 'correct horse battery staple');
+    await store.accounts.updateOne(
+      { userId: account.userId },
+      { $set: { passwordVersion: Number(account.passwordVersion ?? 0) + 1 } },
+    );
+
+    const status = await request(app).get('/api/auth/session').set('Cookie', session.cookie);
+    expect(status.status).toBe(200);
+    expect(status.body.authenticated).toBe(false);
+    expect(status.body.csrfToken).toBeUndefined();
+    expect(String(status.headers['set-cookie'][0])).toContain('Max-Age=0');
+    expect((await request(app).get('/api/account/data').set('Cookie', session.cookie)).status).toBe(401);
+  });
+
+  it('does not treat an expired pending-registration session as authenticated', async () => {
+    const state = await startGoogle('register');
+    const callbackRes = await callback(state);
+    expect(callbackRes.status).toBe(303);
+    const cookie = String(callbackRes.headers['set-cookie'][0]).split(';')[0];
+    const session = await request(app).get('/api/auth/session').set('Cookie', cookie);
+    expect(session.body.authenticated).toBe(true);
+    expect(session.body.onboardingRequired).toBe(true);
+
+    const sessionDoc = await store.sessions.findOne({ userId: session.body.user.userId });
+    expect(sessionDoc).toBeTruthy();
+    await store.sessions.updateOne(
+      { sessionId: sessionDoc!.sessionId },
+      { $set: { onboardingExpiresAt: new Date(Date.now() - 60_000).toISOString() } },
+    );
+
+    const expired = await request(app).get('/api/auth/session').set('Cookie', cookie);
+    expect(expired.status).toBe(200);
+    expect(expired.body.authenticated).toBe(false);
+    expect(String(expired.headers['set-cookie'][0])).toContain('Max-Age=0');
+    expect((await request(app).get('/api/account/data').set('Cookie', cookie)).status).toBe(401);
+  });
+
+  it('rejects idle-expired and absolute-expired sessions at the status endpoint', async () => {
+    await seedUser('expiry_session', 'expiry-session@example.test', 'correct horse battery staple', 'google-sub-expiry-session');
+    const idle = await login('expiry_session', 'correct horse battery staple');
+    const absolute = await login('expiry_session', 'correct horse battery staple');
+    const idleToken = idle.cookie.slice(idle.cookie.indexOf('=') + 1);
+    const idleDoc = await store.sessions.findOne({ tokenHash: sessionTokenHash(idleToken) });
+    expect(idleDoc).toBeTruthy();
+    await store.sessions.updateOne(
+      { sessionId: idleDoc!.sessionId },
+      { $set: { idleExpiresAt: new Date(Date.now() - 60_000).toISOString() } },
+    );
+    const idleStatus = await request(app).get('/api/auth/session').set('Cookie', idle.cookie);
+    expect(idleStatus.body.authenticated).toBe(false);
+    expect(String(idleStatus.headers['set-cookie'][0])).toContain('Max-Age=0');
+
+    await store.sessions.updateOne(
+      { userId: absolute.user.userId, revokedAt: null },
+      { $set: { expiresAt: new Date(Date.now() - 60_000).toISOString() } },
+    );
+    const absoluteStatus = await request(app).get('/api/auth/session').set('Cookie', absolute.cookie);
+    expect(absoluteStatus.body.authenticated).toBe(false);
+    expect(String(absoluteStatus.headers['set-cookie'][0])).toContain('Max-Age=0');
   });
 
   it('uses Secure __Host- cookies in production', async () => {

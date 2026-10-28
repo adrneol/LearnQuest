@@ -52,6 +52,18 @@ const SESSIONLESS_AUTH_PATHS = new Set([
   '/account/email/confirm',
 ]);
 
+/**
+ * Only these server codes prove that the session itself was rejected. A 401
+ * for a wrong current password (password change, re-auth, email change,
+ * account deletion) is a normal domain error and must not sign the user out.
+ */
+const SESSION_EXPIRY_CODES = new Set([
+  'UNAUTHENTICATED',
+  'SESSION_EXPIRED',
+  'SESSION_REVOKED',
+  'ACCOUNT_UNAVAILABLE',
+]);
+
 function isSessionlessAuthPath(path: string): boolean {
   const withoutQuery = path.split('?')[0].replace(/\/+$/, '');
   return SESSIONLESS_AUTH_PATHS.has(withoutQuery);
@@ -94,21 +106,27 @@ export async function apiRequest<T = any>(path: string, opts: ApiRequestOptions 
     let parsed: any = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     if (!res.ok) {
+      const code = typeof parsed?.code === 'string' ? parsed.code : undefined;
       // Only a request made with an established session context can prove that
-      // the session expired. A 401 from a sign-in/recovery endpoint, or from a
-      // tab that never had a session, is a normal domain error.
+      // the session itself expired. A 401 from a sign-in/recovery endpoint, a
+      // tab that never had a session, or a wrong-password check is a normal
+      // domain error and must leave the authenticated session intact.
+      const sessionRejected = code
+        ? SESSION_EXPIRY_CODES.has(code)
+        : !isSessionlessAuthPath(path);
       if (
         res.status === 401
         && typeof window !== 'undefined'
         && csrfToken
         && !isSessionlessAuthPath(path)
+        && sessionRejected
       ) {
         window.dispatchEvent(new CustomEvent('lq:auth-expired'));
       }
       throw new ApiError(
         parsed?.error ?? `Request failed (HTTP ${res.status}).`,
         res.status,
-        typeof parsed?.code === 'string' ? parsed.code : undefined,
+        code,
       );
     }
     return parsed as T;

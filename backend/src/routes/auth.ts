@@ -163,6 +163,21 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         res.json({ authenticated: false, ...config });
         return;
       }
+      // The session-status endpoint must apply the same revocation rules as
+      // protected routes. Otherwise a session whose password version is stale,
+      // or an expired pending-registration session, could still render an
+      // authenticated account shell until the next account request failed.
+      const passwordVersionStale = session.passwordVersion !== undefined
+        && session.passwordVersion !== null
+        && Number(session.passwordVersion) !== Number(account.passwordVersion ?? 0);
+      const onboardingExpired = !account.onboardingComplete
+        && !isGoogleOnboardingSession(session, account.googleSub);
+      if (passwordVersionStale || onboardingExpired) {
+        await revokeSession(store, token);
+        clearSessionCookie(res);
+        res.json({ authenticated: false, ...config });
+        return;
+      }
       res.json({
         authenticated: true,
         user: safeAccount(account),
