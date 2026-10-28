@@ -1,0 +1,768 @@
+# LEARNQUEST — FINAL RELEASE REMEDIATION, COMPLETE ENVIRONMENT RECONCILIATION, SECURITY HARDENING, AND RELEASE QA
+
+Date: 2026-10-28
+
+Repository: `E:\progressGameTracker`
+
+Branch: `main`
+
+Latest audit: `docs/user-doc/audit2/18_LEARNQUEST_COMPLETE_PROJECT_SECURITY_ENV_AUDIT_2026-10-28.md`
+
+Previous audit: `docs/user-doc/audit2/17_LEARNQUEST_AUTH_SESSION_EMAIL_RUNTIME_FINAL_AUDIT_2026-10-28.md`
+
+Audit archive index: `docs/user-doc/audit2/README.md`
+
+Production frontend: `https://learn-quest-one.vercel.app`
+
+Production backend: `https://learnquest-hhiv.onrender.com`
+
+## 0. NON-NEGOTIABLE EXECUTION POLICY
+
+Use the strongest available DeepSeek model and `#max` reasoning variant wherever supported. Retain maximum effort for follow-up invocations. Do not claim that maximum mode was active unless the CLI/model metadata confirms it.
+
+This is the final pre-release remediation pass. The user intends to review and then commit/push the resulting changes to production. The quality bar is substantially higher than a normal feature change.
+
+Read Reports 15, 16, 17, and 18, the archive index, the current Git state, and the actual source code before making changes.
+
+Do not restart the project from scratch. Preserve all existing work, working features, learning data, environment settings, and audit history.
+
+### Git and deployment restrictions
+
+- Do not commit, push, reset, clean, stash, or switch branches.
+- Do not discard changes or overwrite the working tree.
+- Do not deploy automatically.
+- Do not alter production Render/Vercel dashboard settings.
+- Do not rotate production credentials automatically.
+- Do not change production database credentials or destructive storage settings.
+- Do not perform live account deletion, database migration, collection cleanup, or other destructive operation.
+- Do not execute destructive integration tests against the production database.
+- Do not make a failing test pass by weakening assertions, skipping tests, suppressing errors, or substituting fake success responses.
+
+### Secret-handling restrictions
+
+The local `.env` contains real credentials. Treat all its values as confidential.
+
+Never:
+- Print the complete environment file.
+- Print any secret's actual value.
+- Include secret values in an audit report, Git diff summary, terminal status, test failure message, screenshot, or generated documentation.
+- Copy local development secrets into production.
+- Copy production credentials into the local environment or a development database.
+- Invent an API key, MongoDB URI, OAuth secret, verified sender, or external credential.
+- Add credentials to frontend variables or browser bundles.
+
+Inspect keys and value status using a safe, redacted parser. Report only names, presence, validation status, source, and recommended action.
+
+If a credential may have been exposed, record the key name and severity without reproducing its value. Do not purge Git history or rotate a live credential automatically.
+
+## 1. FIRST: ESTABLISH THE REAL BASELINE
+
+Inspect:
+- Current branch, current HEAD, commit history, ahead/behind count, and Git status.
+- All staged and unstaged diffs and untracked files.
+- Existing audit Reports 15–18 and `docs/user-doc/audit2/README.md`.
+- The entire relevant frontend, backend, core/shared code, tests, and scripts.
+- All package manifests and lockfiles.
+- `render.yaml`, `frontend/vercel.json`, `.gitignore`, runtime-version declarations, environment examples, and deployment documentation.
+- The actual code that loads `.env` files.
+- The environment-variable schema and every environment-variable reference.
+- Authentication, Google OAuth, session, cookie, CSRF, account data, account deletion, rate limiting, MongoDB, email, reset, import/export, and learning-data flows.
+
+Before any edits, form a concise internal checklist of the fixes in Report 18 and identify which source defects are still reproducible.
+
+Preserve user changes. Do not assume prior report conclusions are correct without checking the current implementation.
+
+## 2. MANDATORY: RECONCILE THE ACTUAL LOCAL ENVIRONMENT
+
+The user explicitly requires the real environment file to contain the complete set of active keys, with correct local values—not just a better `.env.example`.
+
+This work is mandatory.
+
+### 2.1 Discover the actual environment files
+
+Find every relevant:
+- Root `.env`.
+- `backend/.env`.
+- Frontend environment file.
+- `.env.example`, `.env.sample`, or equivalent template.
+- Runtime configuration schema.
+- Test-specific environment file.
+- Render/Vercel environment template or blueprint.
+- Environment variable referenced by code, scripts, CI, build configuration, or deployment documentation.
+
+Determine which file the backend actually loads and whether there are duplicate definitions or precedence rules.
+
+Do not assume that `backend/.env` is the active file without following the actual startup and dotenv-loading code.
+
+### 2.2 Construct a complete variable inventory
+
+Build the canonical list from all three sources:
+
+1. Variables currently used by active code.
+2. Variables documented in the current environment template.
+3. Variables required by the deployment configuration.
+
+Include all other keys discovered in the repository, not only the following known examples:
+
+- `YOUTUBE_API_KEY`
+- `PORT`
+- `NODE_ENV`
+- `NODE_VERSION`
+- `CORS_ORIGIN`
+- `APP_ORIGIN`
+- `API_ORIGIN`
+- `CACHE_TTL_SEC`
+- `CACHE_MAX_ENTRIES`
+- `RATE_LIMIT_PER_MIN`
+- `AUTH_RATE_LIMIT_PER_MIN`
+- `OTP_RATE_LIMIT_PER_15MIN`
+- `TRUST_PROXY_HOPS`
+- `MONGODB_URI`
+- `MONGODB_DB_NAME`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+- `BREVO_API_KEY`
+- `BREVO_SENDER_EMAIL`
+- `BREVO_SENDER_NAME`
+- `SESSION_SECRET`
+- `OTP_HMAC_SECRET`
+- `EMAIL_ACTION_HMAC_SECRET`
+- `SESSION_IDLE_HOURS`
+- `SESSION_ABSOLUTE_DAYS`
+- `REAUTH_WINDOW_MIN`
+- `EMAIL_ACTION_TTL_MIN`
+- `EMAIL_ACTION_RESEND_SEC`
+- `OTP_TTL_MIN`
+- `OTP_RESEND_SEC`
+- `OTP_MAX_ATTEMPTS`
+- `ACCOUNT_MAX_STATE_BYTES`
+
+This is an inventory starting point, not an assertion that every variable is active or required. Derive the true canonical set from the current code and configuration schema.
+
+### 2.3 Update the real local `.env` carefully
+
+Reconcile the currently loaded local environment file with the canonical variable inventory.
+
+For every canonical key:
+
+- Preserve an existing valid, non-empty value exactly unless an independently demonstrated defect requires a change.
+- Add missing keys without deleting existing unrelated keys.
+- Use verified local-development values for ordinary configuration.
+- Use defaults only when supported by the actual source schema and local execution model.
+- Remove duplicate definitions only after determining the effective-value semantics and preserving the intended value.
+- Correct invalid values where source validation proves they are wrong.
+- Never copy production-only configuration blindly.
+- Never fabricate provider-issued credentials.
+- Do not print any secret value to the terminal while performing this work.
+
+The resulting local file must have a single unambiguous effective value for every active key.
+
+### 2.4 Handle unavailable external credentials honestly
+
+Some values can only come from their actual external provider, such as Google OAuth, YouTube, Brevo, and MongoDB Atlas.
+
+For every absent external credential:
+- Add the required key to the real local file in the form supported by the application's configuration loader.
+- Do not pretend an empty key is usable.
+- Classify it as an owner action when a real credential is required.
+- Explain the exact provider page or procedure from which it must be obtained.
+- Use fail-fast validation for a missing required production credential where the existing application architecture permits it.
+- Do not fabricate a connection string or substitute a dummy key that makes startup appear healthy.
+
+For every required value that can safely be inferred from the real source or established local configuration, populate it correctly.
+
+At the end, report the number of canonical keys, keys already present, keys added, keys corrected, local secrets generated, and outstanding externally supplied values. Never print the corresponding values.
+
+### 2.5 Update `.env.example` as a separate, safe template
+
+Keep the example/template synchronized with the actual active canonical key set.
+
+- Include all required and optional active keys.
+- Use only safe non-secret defaults and documented placeholders.
+- Keep all secret values blank or use explicit placeholder text that cannot be mistaken for valid credentials.
+- Do not copy secrets from `.env`.
+- Explain local versus production values.
+- Remove obsolete examples only after proving that they are no longer used or required for a compatibility migration.
+
+Verify that `.env`, provider credentials, and private environment exports are correctly ignored by Git.
+
+If a real `.env` is already tracked, report it as a serious repository hygiene problem and stop before any change that would expose its contents. Do not rewrite Git history automatically.
+
+## 3. CRYPTOGRAPHIC SECRETS: DIFFERENT VALUES FOR LOCAL AND PRODUCTION
+
+Local secrets and production secrets must be independent. Reusing the same random secret across environments is not acceptable.
+
+### 3.1 Local development secrets
+
+Inspect the active session/action-token implementation and environment aliases.
+
+If the local `SESSION_SECRET` is missing or empty, generate a strong local-only value using Node.js `crypto.randomBytes`, for example 32 or more random bytes encoded using `base64url`.
+
+If the local `EMAIL_ACTION_HMAC_SECRET` is missing or empty, generate a separate, independent local-only value using a fresh cryptographically random draw.
+
+Generate `OTP_HMAC_SECRET` only if the current code still requires an active or legacy fallback. Do not invent new secrets for obsolete settings.
+
+Implementation requirements:
+- Generate secrets through Node.js cryptographic APIs, never `Math.random`.
+- Write generated local values directly into the real environment file using a safe script.
+- Do not echo secret values or include them in audit logs.
+- Preserve existing valid local secrets instead of rotating them unnecessarily.
+- Use separate values for session signing, email-action HMAC, and any independent OTP security purpose.
+- Verify no duplicate variables or malformed `.env` lines were produced.
+- Check that secrets meet the current environment validator's required length and encoding.
+
+If changing a local action-token key invalidates pending development reset links, document that harmless local-development consequence.
+
+### 3.2 Production secrets
+
+Never copy local generated secrets to Render.
+
+The report must give exact owner-side instructions to generate independent production values privately and set them manually in the Render dashboard.
+
+Use commands that generate high-entropy secrets through Node.js, for example:
+
+`node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url') + '\n')"`
+
+The owner should run a separate invocation for each missing production secret and paste the output privately into the corresponding Render secret field. Do not put the generated values into the audit report.
+
+Do not generate new production secrets just because they differ from local values; different values are already the desired state.
+
+Preserve a valid existing production secret. If a production value is missing, weak, exposed, or relying on an unsafe legacy alias, report the exact correction and safe rollout plan.
+
+### 3.3 Legacy action-token secret migration
+
+The current configuration history includes `OTP_HMAC_SECRET` as a possible legacy fallback for `EMAIL_ACTION_HMAC_SECRET`.
+
+Determine the actual migration semantics:
+- Which key signs newly issued action tokens?
+- Which key verifies already-issued tokens?
+- Will setting a new dedicated key invalidate outstanding reset or email-change links?
+- Can a safe temporary dual-key verification window be supported without weakening purpose/account binding or single-use semantics?
+
+Do not add broad fallback behavior or silently weaken token checks.
+
+Where legacy tokens need to remain valid, implement a narrowly scoped and time-bounded migration only if it is safe and compatible with the existing token model. Otherwise document the one-time invalidation and reissue behavior.
+
+Report exactly which production environment fields the owner must preserve, add, or change. Do not rotate production keys or dashboard settings automatically.
+
+## 4. EXACT RENDER PRODUCTION ENVIRONMENT CHECKLIST
+
+The user will configure Render manually after reviewing your results.
+
+The report must include a dedicated section:
+
+**"Exactly what to configure in Render — final release checklist"**
+
+Produce a complete table with:
+
+- Exact environment-variable name.
+- Whether the current source requires it.
+- Exact non-secret value where verified.
+- Secret-generation or provider-retrieval procedure for secret values.
+- Whether a valid existing value should be preserved.
+- Which local setting must deliberately differ.
+- What feature breaks if the key is missing or wrong.
+- Which test confirms it works.
+- Whether Render's actual dashboard setting has been verified or is still an owner action.
+
+Investigate every active key, including all source-discovered variables. Do not produce only a partial list.
+
+### 4.1 Values to verify against the actual source
+
+The following are candidates, not instructions to blindly override the deployed configuration:
+
+- `NODE_ENV=production`
+- `NODE_VERSION` set to the latest appropriate supported Node.js LTS patch after checking official release information.
+- `APP_ORIGIN=https://learn-quest-one.vercel.app`
+- `CORS_ORIGIN=https://learn-quest-one.vercel.app` if the actual trusted browser origin is exactly this origin.
+- `API_ORIGIN=https://learnquest-hhiv.onrender.com` if required by the source.
+- `MONGODB_DB_NAME=learnquest` for production.
+- `BREVO_SENDER_NAME=LearnQuest`
+- Production values for `EMAIL_ACTION_TTL_MIN` and `EMAIL_ACTION_RESEND_SEC`, consistent with the tested server-enforced policy.
+- A verified production Google OAuth callback URL.
+- `TRUST_PROXY_HOPS` based on the actual deployed proxy chain.
+
+Verify each against the real implementation and deployment configuration.
+
+### 4.2 Carefully explain origin and port settings
+
+Explain:
+- Why `APP_ORIGIN` and `CORS_ORIGIN` have different purposes even when their values are the same.
+- Why `API_ORIGIN` points to the backend if that is how the current code uses it.
+- Whether browser requests use Vercel's same-origin `/api` proxy.
+- The correct `GOOGLE_REDIRECT_URI` based on the actual callback route and proxy rewrite.
+- Which redirect URI must also be registered in Google Cloud Console.
+- Why `localhost` URLs are valid only in deliberate local-development configuration.
+- Whether `VITE_API_BASE_URL` should be absent or set based on the actual frontend API client.
+- Whether `PORT` is supplied automatically by Render. Do not blindly set the production port to the local value `3001`.
+- Whether `TRUST_PROXY_HOPS` matches the real request topology. Do not invent a hop count.
+- Which configuration belongs on Render, which belongs in Vercel, and which comes from Google Cloud, Atlas, or Brevo.
+
+A copy-ready production environment block may include only verified, safe, non-secret values. Keep secrets in a separate checklist.
+
+Never include actual secret values in that block.
+
+### 4.3 Local and production separation
+
+Produce an exact side-by-side local-versus-production table.
+
+Examples of intentionally different values include:
+- `NODE_ENV=development` locally versus `production` in Render.
+- Local `APP_ORIGIN` and `CORS_ORIGIN` using the configured localhost frontend versus the public production origin.
+- Local `API_ORIGIN` using the local backend versus the deployed backend where the source requires it.
+- Local database name/user and production database name/user, when the development database credentials are actually configured.
+- Separate random session and email-action secrets per environment.
+
+Preserve the user's existing external API credentials in their current environment when valid, but do not silently reuse production database credentials for local development.
+
+### 4.4 MongoDB development/production boundary
+
+The user previously created an Atlas database user `learnquest_dev_user` with `readWrite` limited to `learnquest_dev`, but the existence and current connection configuration must be verified rather than assumed.
+
+Inspect the local MongoDB URI without printing it:
+- Check whether its username corresponds to the restricted development user.
+- Check whether the database path and `MONGODB_DB_NAME` agree.
+- Check which database a local data mutation would target.
+- Check whether the configured development database can be reached through a read-only diagnostic.
+
+If the local URI does not use the restricted development identity, do not switch the database name alone or silently construct a URI using unknown credentials.
+
+Do not execute destructive or mutating tests against `learnquest` production data.
+
+If development configuration cannot be fully verified, record the precise remaining owner action instead of pretending the environment is ready.
+
+## 5. FIX ALL CONFIRMED RELEASE-BLOCKING AND MATERIAL DEFECTS FROM REPORTS 15–18
+
+Reports 15–18 already identify problems that must not be ignored. Reproduce each against current code and classify it as fixed, still present, or external-only.
+
+Do not blindly reimplement problems that are already correctly fixed.
+
+### 5.1 Account deletion concurrency and zero-residue guarantee
+
+Report 18 identified a potential race between account deletion and an in-flight write.
+
+The user explicitly expects account deletion to remove the account and all associated learning records, sessions, metadata, action tokens, OAuth state, jobs, and auxiliary records.
+
+Audit all account-owned data collections and asynchronous paths.
+
+Implement a concurrency-safe deletion lifecycle:
+- Atomically prevent new authenticated writes once deletion begins.
+- Ensure in-flight writes cannot recreate data or write after final deletion.
+- Prevent workers/retries/upserts from resurrecting an account or its learning data.
+- Ensure authorization checks and state/version checks remain authoritative during mutation.
+- Make cleanup idempotent and safely resumable.
+- Verify every discovered account-owned collection and auxiliary record is covered.
+- Make final completion mean all required data is gone, not merely that the account document disappeared.
+- Avoid leaving identifiers, email addresses, notes, tokens, or other personal data in logs/tombstones after deletion.
+- If any minimum non-PII anti-resurrection marker must remain temporarily, justify it and remove it under a tested lifecycle.
+- Test races between deletion, data writes, sessions, and cleanup retries using isolated test databases/fixtures.
+
+Do not delete a real user or production data as a test.
+
+### 5.2 Import rollback and data integrity
+
+Report 18 identified best-effort rollback behavior that can leave partial state.
+
+Audit imports, restore, batch mutations, XP/progress updates, and all related writes.
+
+Implement the safest approach supported by the actual schema and Atlas deployment:
+- A MongoDB transaction where the real topology and operations support it; or
+- A staged import with explicit validation, commit phase, idempotent journal/compensation, and visible incomplete-state handling.
+
+Never claim atomicity if the implementation cannot guarantee it.
+
+Ensure failed imports do not leave partial learning data, duplicate XP, or falsely report success.
+
+Test mid-operation failures and recovery with isolated fixtures. Do not migrate or overwrite live production data.
+
+### 5.3 OAuth state must be bound to the initiating browser
+
+Report 18 noted that OAuth state was not bound to the initiating browser, despite state hashing, PKCE, nonce, and single-use checks.
+
+Verify whether the defect remains.
+
+If confirmed:
+- Bind the authorization flow to a secure browser-held nonce/state cookie or an equivalently secure server-side mechanism.
+- Use unpredictable cryptographic state and correct state/account/flow binding.
+- Enforce expiration and atomic single-use consumption.
+- Handle the Vercel `/api` proxy and OAuth callback correctly.
+- Do not trust arbitrary host or forwarded-host headers to construct redirect URLs.
+- Do not break normal Google sign-in or onboarding.
+- Ensure callback cookies work with the chosen same-origin/cross-origin architecture.
+- Test login-CSRF, missing/mismatched state, replay, expiration, and normal successful callback paths.
+
+Do not weaken OAuth validation for compatibility.
+
+### 5.4 Rate limiting across backend instances
+
+Report 18 noted that some rate limits use process-local counters, so multiple backend instances may bypass aggregate limits.
+
+Determine the deployed scale, active limiters, and available storage mechanisms.
+
+Implement a shared, atomic limiter for security-sensitive endpoints if required by the target scale and existing architecture. If MongoDB is the chosen shared store:
+- Use appropriate atomic counter/window operations and indexes.
+- Apply TTL cleanup safely.
+- Avoid unbounded key growth and unnecessary PII storage.
+- Define fail-closed behavior for security-sensitive operations when the limiter store is unavailable.
+- Prevent rate-limit storage from becoming a denial-of-service vector.
+- Keep account enumeration resistance.
+- Test requests against multiple logical limiter instances and window boundaries.
+
+Do not add a heavy new service or dependency without a demonstrated need.
+
+If a safe shared limiter cannot be implemented without infrastructure changes, state the scale limitation and precise owner action rather than claiming distributed protection.
+
+### 5.5 Password-reset timing and account enumeration
+
+Recheck the report's finding that valid and invalid account requests may have different response timing.
+
+Keep public response text and status enumeration-safe.
+
+Ensure:
+- Unknown accounts never receive valid action tokens or recovery email.
+- Ineligible accounts do not receive email.
+- The public response does not reveal account existence through distinct wording/status.
+- Rate limiting and cooldown apply uniformly.
+- Error messages do not reveal database or provider internals.
+- Timing hardening is proportional and does not introduce expensive attacker-controlled work or unreliable artificial sleep behavior.
+
+Test the observable behavior without printing PII.
+
+### 5.6 CSP and other relevant browser security headers
+
+Report 18 identified missing Content Security Policy defense in depth.
+
+Inspect existing frontend hosting headers, backend headers, Google OAuth navigation, YouTube embeds, CSS, and build asset usage.
+
+Add a restrictive but compatible policy at the correct layer (Vercel frontend hosting and/or backend as appropriate). Do not blindly introduce a policy that breaks the site.
+
+Consider:
+- `default-src`
+- `script-src`
+- `style-src`
+- `connect-src`
+- `img-src`
+- `font-src`
+- `frame-src`
+- `object-src`
+- `base-uri`
+- `form-action`
+- `frame-ancestors`
+- `upgrade-insecure-requests`
+
+Choose concrete directives from actual resource needs. Avoid unnecessary `unsafe-eval`, overly broad wildcards, and disabling existing security headers.
+
+Test sign-in, Google OAuth, API requests, YouTube video embed/player, assets, and the relevant pages.
+
+If production headers require a deployment change, document exactly where and how it must be verified.
+
+### 5.7 All additional residual risks
+
+Recheck all findings in Reports 15–18, including:
+- Wrong or stale reset-success routing.
+- Session/cookie/CSRF/proxy behavior.
+- Session invalidation and stale asynchronous responses.
+- Focus/recovery snapshots in browser storage.
+- Local-browser storage versus cloud persistence guarantees.
+- Email provider acceptance and delivery diagnostics.
+- Error handling when MongoDB is unreachable.
+- API route rewrites and stale deployment.
+- Secret hygiene and the complete environment matrix.
+- Every other open P1/P2 finding documented in the previous reports.
+
+Fix demonstrated defects in the current scope. Do not omit an issue because it seems small or because a prior report gave it a low severity.
+
+For anything that cannot safely be fixed or verified in this repository, record the evidence and exact owner action.
+
+## 6. FULL SECURITY AUDIT OF FRONTEND AND BACKEND
+
+Audit the complete current source tree, not just authentication files.
+
+### Backend
+Inspect routes, middleware, authorization, sessions, OAuth, password hashing, account deletion, token management, MongoDB models, queries, input schemas, imports, cache, YouTube integration, email delivery, rate limits, logs, health/readiness, and shutdown/retry behavior.
+
+Check:
+- Cross-account access/IDOR.
+- Authentication bypass.
+- Session fixation and replay.
+- CSRF/CORS/origin/proxy issues.
+- Unsafe redirects.
+- Injection and query filter handling.
+- XSS and unsafe markup.
+- Server-side request forgery risk where URLs are accepted.
+- Broken password/reset/email-change logic.
+- Inadequate validation.
+- Request-body/resource limits.
+- Unbounded cache/key growth.
+- Race conditions and partial writes.
+- Data leakage through logs/errors.
+- Incomplete deletion and cleanup.
+- In-memory-only protections that break on multiple instances.
+- Secrets that are exposed to frontend code.
+- Fail-open behavior caused by missing configuration or DB outages.
+
+### Frontend
+Inspect routing, state, authentication restoration, API client behavior, reset/sign-in/onboarding, profile/security pages, learning data, playlists, goals, checkpoints, focus, analytics, efficiency, imports/exports, account deletion, local storage/IndexedDB, offline/retry behavior, and all user-visible save/error states.
+
+Check:
+- Session tokens, reset tokens, passwords, API secrets, or OAuth secrets in browser storage or URLs.
+- Stale authenticated state after logout or password reset.
+- Late requests restoring logged-out state.
+- Failed writes shown as successful.
+- Account data overwritten by defaults following failed reads.
+- Learning data that is wrongly browser-only.
+- Incomplete loading/error/retry states.
+- Cross-tab synchronization flaws.
+- Broken navigation and route refresh.
+- Accessibility and keyboard traps.
+- Missing security headers or unsafe HTML.
+- Build environment variables exposed in the browser bundle.
+
+Do not claim the application is completely invulnerable. Explain evidence, residual risk, and mitigations.
+
+## 7. GOOGLE, BREVO, AND MONGODB INTEGRATION VERIFICATION
+
+The user reports that MongoDB and Brevo IP authorization has been configured. Treat this as a new owner-provided state, but verify it with safe diagnostics. Do not assume the update succeeded without results.
+
+### MongoDB
+- Check local `MONGODB_URI` connectivity using the existing read-only diagnostic.
+- Check the correct database and identity without exposing the URI.
+- Check the actual TLS/DNS error classification if connectivity fails.
+- Do not disable TLS or weaken certificate/hostname validation.
+- Do not alter database credentials or production data.
+- Verify the backend reports readiness only when its required database dependency is ready.
+- Clearly distinguish local connectivity from production Render connectivity.
+
+### Brevo
+- Check configuration presence without outputting the API key.
+- Check sender address format and verified-sender configuration if observable.
+- Inspect the API client's authentication, timeout, error parsing, and retry behavior.
+- Ensure retries do not send duplicate messages.
+- Verify IP authorization changes using one controlled live test only if an explicitly configured, owner-controlled test recipient is already available and the operation is safe.
+- Otherwise, use automated adapter/template tests and tell the owner the exact manual action to verify.
+- Never claim provider acceptance or inbox delivery without actual evidence.
+- Explain the difference between API acceptance, queued status, delivery, bounce, rejection, and blocked status.
+- Ensure the HTML and text email use the configured public origin, correct expiry, and the same action URL.
+
+Keep the production API key private, and do not disable IP restrictions as a default solution.
+
+## 8. NODE.JS SECURITY BASELINE AND DEPENDENCY SAFETY
+
+Verify current official Node.js security release information at execution time:
+- `https://nodejs.org/en/blog/release`
+- Relevant Node.js 24.x release notes and security advisories.
+
+The previous audit expected a secure Node.js 24 LTS patch at least `24.22.1` based on the official release available at that time. Recheck the currently recommended patch before finalizing the baseline.
+
+Inspect:
+- Local Node/npm version.
+- Root and backend `package.json` engine declarations.
+- Lockfiles, `.node-version`, `.nvmrc`, Render blueprint, and effective deployment configuration.
+- Vercel build environment.
+- All dependencies and security-relevant transitive dependencies.
+- `npm audit` for root/backend/frontend packages as appropriate.
+
+Requirements:
+- Use the current appropriate supported Node.js 24 LTS security patch unless official information justifies another patch within the supported production line.
+- Do not lower engine requirements to accommodate an older local runtime.
+- Do not apply `npm audit fix --force` blindly.
+- Make safe, justified dependency updates and keep lockfiles reproducible.
+- Test under the required runtime.
+- Do not claim production uses the patched runtime without live evidence.
+- Distinguish Node vulnerabilities from PHP-specific advisories; do not claim PHP CVEs affect a Node-only app without evidence of a PHP runtime.
+- State what runtime, deployment, or dependency upgrade the owner still needs to apply.
+
+## 9. PRODUCTION ROUTING AND DEPLOYMENT READINESS
+
+Previous reports documented the production site being stale:
+
+- Render version `0.2.0` while local code targets `0.3.0`.
+- Render `/api/ready` and `/api/auth/config` returning 404.
+- Vercel API endpoints returning 404.
+- Live assets not matching the latest frontend build.
+
+Recheck current production safely using read-only public requests.
+
+Inspect:
+- Render service root directory, branch, build command, start command, and runtime settings.
+- Vercel project root, build command, output directory, branch, and `/api` rewrite.
+- Correct external frontend/backend URL topology.
+- OAuth callback path and origin.
+- Current public version/build identity.
+- Production readiness and configuration endpoints.
+- Whether the newest source has reached Git remote/deployment.
+- Whether the live frontend bundle is the expected one.
+
+Do not mutate production accounts, make live reset changes on unknown users, or perform destructive tests.
+
+Do not automatically deploy. Explain exactly which code must be committed/pushed and which dashboard settings the owner must verify.
+
+Make sure that a future deployment includes the correct root directory and matching backend/frontend revision, rather than merely building a stale remote commit.
+
+## 10. REQUIRED LOCAL ENVIRONMENT UPDATE AND VALIDATION
+
+After inventorying every variable and checking active source references:
+
+1. Safely update the actual local environment file, adding all active missing keys.
+2. Preserve valid existing external credentials.
+3. Fill all safely derivable local non-secret configuration.
+4. Generate any missing local-only cryptographic secrets directly into the file through Node.js crypto without printing them.
+5. Keep local secrets independent from production secrets.
+6. Avoid silently switching local database targets or constructing a URI from unknown credentials.
+7. Make `.env.example` complete, safe, and secret-free.
+8. Verify there are no duplicate keys, malformed values, accidentally copied production URLs, or ambiguous defaults.
+9. Run the existing environment validation/startup checks.
+10. Verify `.env` is not tracked and remains gitignored.
+11. Do not leak environment values in test snapshots, build logs, reports, or error messages.
+
+Do not claim the environment is fully ready when an external credential is missing. Create a clear list of outstanding provider-issued values and their precise source.
+
+## 11. STAGED RELEASE QA — STRICT TESTING
+
+Run tests in sensible stages.
+
+### Stage A — Configuration and startup
+- Environment inventory consistency checks.
+- Environment schema parsing.
+- Required-secret validation.
+- Production/development mode validation.
+- Correct origin and CORS validation.
+- Startup/readiness behavior.
+- Missing MongoDB/provider failure behavior.
+- Secret-leak checks.
+
+### Stage B — Core backend
+- Auth and authorization.
+- OAuth state binding/replay.
+- Session creation, expiry, rotation, revocation, and cookies.
+- Password and email-action expiry/replay.
+- CSRF and CORS.
+- Rate limiting.
+- Account ownership/isolation.
+- Account deletion and cleanup.
+- Data-version concurrency.
+- Import atomicity/recovery.
+- Cloud data read/write.
+- Email adapter/error handling.
+- MongoDB readiness/retry.
+
+### Stage C — Core frontend
+- Sign-in/sign-up/Google onboarding.
+- Password reset and Back to sign in navigation.
+- Cross-tab logout.
+- Stale requests after logout.
+- Cloud persistence/recovery and multi-device consistency.
+- Learning data, playlists, progress, goals, checkpoints, focus, XP, analytics, and imports.
+- Failure states, retry, accessible controls, and routes.
+
+### Stage D — Whole application
+- Full backend suite.
+- Full frontend suite.
+- All relevant package suites.
+- Typechecks.
+- Lint.
+- Production builds.
+- `npm audit`.
+- Supported Node version verification.
+- Source secret scan or safe alternative if no scanner is installed.
+- `git diff --check`.
+- Safe, read-only API smoke tests.
+- Real-browser E2E tests if the existing harness supports them.
+
+Do not claim real-browser verification unless a browser test actually ran.
+
+Where a real provider or production database cannot safely be tested, use deterministic mocks and report the live verification as pending.
+
+### Stage E — Final regression and data-safety review
+- Re-run all affected suites after fixes.
+- Confirm no tests were weakened or skipped.
+- Confirm no production data was altered.
+- Confirm no `.env` values were printed or added to generated reports.
+- Confirm all changes are present in the working tree.
+- Review all diffs and generated files.
+- Ensure the application fails closed when required production configuration is missing.
+
+## 12. FINAL RENDER ENVIRONMENT TABLE
+
+The report must include the complete Render environment table, based on all active variables from the actual code.
+
+For every key give:
+- Exact name.
+- Purpose.
+- Whether required.
+- Verified non-secret production value, if determinable.
+- Secret-generation method or provider source if sensitive.
+- Whether to preserve an existing valid value.
+- Local development counterpart and why it differs.
+- Required dashboard destination.
+- Validation or live test proving correctness.
+- Owner action where dashboard access is not available.
+
+Include, where active:
+`NODE_ENV`, `NODE_VERSION`, `PORT`, `APP_ORIGIN`, `CORS_ORIGIN`, `API_ORIGIN`, `VITE_API_BASE_URL`, `MONGODB_URI`, `MONGODB_DB_NAME`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `YOUTUBE_API_KEY`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `SESSION_SECRET`, `EMAIL_ACTION_HMAC_SECRET`, `OTP_HMAC_SECRET`, action-token TTL/resend settings, rate limits, session policies, cache policies, body-size limits, proxy settings, and every other variable found.
+
+Do not print actual secrets in the table.
+
+Provide a copy-ready block containing the verified, non-secret production settings only. List all secrets separately with exact generation/retrieval steps.
+
+Explicitly explain what to set in Render, what belongs in Vercel, what is controlled by Google Cloud/Atlas/Brevo, and what must not be set.
+
+## 13. FINAL SINGLE AUDIT REPORT
+
+Create exactly one new report:
+
+`docs/user-doc/audit2/19_LEARNQUEST_FINAL_RELEASE_REMEDIATION_ENV_AUDIT_2026-10-28.md`
+
+If Report 19 already exists from an interrupted run, inspect and continue it rather than creating a duplicate.
+
+Update the existing `docs/user-doc/audit2/README.md` in place.
+
+Do not create separate environment reports, extra progress reports, extra summary Markdown files, duplicate indexes, or other audit documents.
+
+The report must contain:
+
+1. Executive release-readiness verdict.
+2. Baseline and all repository/environment files inspected.
+3. Every confirmed defect from Reports 15–18 and whether it remains.
+4. Root cause, targeted code fix, and regression evidence for each fixed defect.
+5. Complete environment-variable inventory.
+6. Before/after key-presence comparison without printing values.
+7. Exact changes made to the local `.env` and `.env.example`, without exposing secrets.
+8. Local-only secrets generated and confirmation that their values were not logged.
+9. Which production secrets should be preserved or separately generated.
+10. Complete Render/Vercel configuration matrix with exact safe settings.
+11. Google OAuth, MongoDB, YouTube API, and Brevo configuration verification.
+12. Session/cookie/CSRF/CORS and OAuth threat analysis.
+13. Account deletion and data-import integrity results.
+14. Node.js official source/version and dependency audit evidence.
+15. Actual full and targeted test counts and results.
+16. Typecheck, lint, production build, and diff-check results.
+17. MongoDB connectivity and provider evidence, with limitations.
+18. Current public Render/Vercel version and route status.
+19. Precise owner-side blockers before push/deploy.
+20. Prioritized final-release checklist.
+21. Final Git status and proof no commit, push, deployment, or destructive live operation occurred.
+
+Report only supported facts. Label any remaining unverified production claim as unverified.
+
+## 14. FINAL ACCEPTANCE GATES
+
+Do not declare a clean final release until:
+
+- The actual environment file contains all active required keys with valid local values or clearly identified external-credential blockers.
+- `.env.example` matches the active schema and contains no real secrets.
+- Local cryptographic secrets are unique and safely written without output.
+- Production secrets remain independent and are not overwritten.
+- Report 18's unresolved defects are individually checked and addressed or explicitly bounded.
+- Account deletion cannot falsely report full completion while account-owned data remains or can be resurrected by a race.
+- Import/restore failures do not falsely report success or silently leave partial data.
+- Session/cookie, OAuth state, rate limiting, and account isolation have tests that exercise the actual contracts.
+- Brevo and MongoDB status is backed by real evidence where available.
+- Current official Node.js security baseline is verified.
+- All relevant tests/builds/typechecks/lint/security checks pass or have explicit, investigated exceptions.
+- Local and production environment configurations are fully documented and separated.
+- No secret appears in generated reports or terminal output.
+- The working tree is reviewed and ready for the owner's manual commit/deploy process.
+
+Begin by reading Report 18 and the entire current working-tree diff. Establish the true baseline before edits. Then reconcile the environment, implement fixes, run staged and full QA, and finish Report 19 with a precise owner checklist. Do not stop after planning or report writing.

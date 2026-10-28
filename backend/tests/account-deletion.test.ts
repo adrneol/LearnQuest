@@ -8,6 +8,7 @@ import { completeOnboarding, createAccountFromGoogle } from '../src/auth/account
 import { findSessionByToken } from '../src/auth/sessions.js';
 import { hashCode } from '../src/auth/crypto.js';
 import { deleteAccountPermanently, resumePendingAccountDeletions } from '../src/services/accountDeletion.js';
+import { acquireAccountWriteLease, resumeDeletionFences } from '../src/auth/writeLease.js';
 import type { EmailService } from '../src/email/brevo.js';
 import type { GoogleOAuthService } from '../src/auth/google.js';
 
@@ -379,5 +380,64 @@ describe('complete account deletion', () => {
     await expect(resumePendingAccountDeletions(store)).resolves.toEqual(expect.objectContaining({ failed: 0 }));
     expect(await store.accounts.count({ userId: a.userId })).toBe(0);
     expect(await store.accountDeletions.count({ userId: a.userId })).toBe(0);
+  });
+
+  it('drains an admitted writer before sweeping and rejects every new writer', async () => {
+    const a = await account('del_write_race');
+    await seedOwnedRecords(a.userId);
+
+    const lease = await acquireAccountWriteLease(store, a.userId);
+    const deletion = deleteAccountPermanently(store, a.userId);
+    // Give deletion time to mark the account and block at the writer barrier.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await store.accounts.findOne({ userId: a.userId }))?.status).toBe('deleting');
+    await expect(acquireAccountWriteLease(store, a.userId)).rejects.toMatchObject({
+      code: 'ACCOUNT_UNAVAILABLE',
+    });
+
+    // This is the write that already passed admission. It must complete before
+    // the sweep, then be removed by the sweep.
+    await store.data('progress').insertOne({
+      userId: a.userId,
+      key: 'late-admitted-write',
+      value: { playlistId: 'PLdelete000000000001', position: 99, videoId: 'late', status: 'done', completedAt: null },
+      updatedAt: new Date().toISOString(),
+      order: 0,
+    });
+    await lease.release();
+
+    const result = await deletion;
+    expect(result.deleted).toBe(true);
+    expect(await store.data('progress').count({ userId: a.userId })).toBe(0);
+    expect(await store.accounts.count({ userId: a.userId })).toBe(0);
+    // The fence is the only retained record and contains no profile data.
+    expect(await store.accountFences.count({ userId: a.userId })).toBe(1);
+  });
+
+  it('recovers a stale writer lease and purges residue left behind a fence', async () => {
+    const a = await account('del_stale_lease');
+    await seedOwnedRecords(a.userId);
+    await store.accounts.updateOne(
+      { userId: a.userId },
+      { $set: { writeLease: 1, writeLeaseAt: new Date(Date.now() - 10 * 60_000).toISOString() } },
+    );
+
+    const result = await deleteAccountPermanently(store, a.userId);
+    expect(result.deleted).toBe(true);
+    expect(await store.accounts.count({ userId: a.userId })).toBe(0);
+
+    // Simulate a late write after a crash and prove the startup fence sweep
+    // removes it while retaining only the non-PII fence.
+    await store.data('progress').insertOne({
+      userId: a.userId,
+      key: 'crash-residue',
+      value: { playlistId: 'PLdelete000000000001', position: 1, videoId: 'v1', status: 'done', completedAt: null },
+      updatedAt: new Date().toISOString(),
+      order: 0,
+    });
+    const swept = await resumeDeletionFences(store);
+    expect(swept.cleaned).toBeGreaterThanOrEqual(1);
+    expect(await store.data('progress').count({ userId: a.userId })).toBe(0);
+    expect(await store.accountFences.count({ userId: a.userId })).toBe(1);
   });
 });

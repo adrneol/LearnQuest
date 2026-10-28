@@ -24,6 +24,8 @@ function makeStore() {
     updateProfile: vi.fn(async (input: any) => ({ ...USER, ...input })),
     updateAccountPreferences: vi.fn(async () => ({ ...USER })),
     exportAccountData: vi.fn(async () => undefined),
+    refreshSession: vi.fn(async () => undefined),
+    reloadCloudData: vi.fn(async () => undefined),
     deleteAccount: vi.fn(async () => undefined),
     listAccountSessions: vi.fn(async () => [
       {
@@ -130,6 +132,14 @@ describe('account screen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
     await waitFor(() => expect(storeRef.current.updateAccountPreferences).toHaveBeenCalled());
     expect(storeRef.current.updateAccountPreferences.mock.calls[0][0]).toMatchObject({ timezone: 'UTC' });
+  });
+
+  it('refreshes the authenticated profile and server-side account data', async () => {
+    render(<Account section="settings" onSection={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: /Refresh account state/ }));
+    await waitFor(() => expect(storeRef.current.refreshSession).toHaveBeenCalledTimes(1));
+    expect(storeRef.current.reloadCloudData).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('status')).toHaveTextContent(/reloaded from the server/i);
   });
 
   it('lists sessions and only offers sign-out for other devices', async () => {

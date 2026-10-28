@@ -400,12 +400,24 @@ export function validateStatePayload(raw: unknown): UserState {
 export async function getStateVersion(store: DataStore, userId: string): Promise<number> {
   const doc = await store.stateVersions.findOne({ userId });
   if (doc) return Number(doc.version) || 0;
-  await store.stateVersions.updateOne(
-    { userId },
-    { $set: { userId, version: 0, updatedAt: new Date().toISOString() } },
-    { upsert: true },
-  );
-  return 0;
+  // Create the first version document without ever overwriting an existing
+  // version. A concurrent writer may create it between findOne() and
+  // insertOne(); the unique (userId) index makes that a duplicate-key error,
+  // which we resolve by re-reading the winner instead of resetting its version
+  // to zero. Resetting would make stale optimistic-concurrency writes valid.
+  try {
+    await store.stateVersions.insertOne({
+      userId,
+      version: 0,
+      updatedAt: new Date().toISOString(),
+    });
+    return 0;
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code !== 11000) throw error;
+    const raced = await store.stateVersions.findOne({ userId });
+    if (raced) return Number(raced.version) || 0;
+    throw error;
+  }
 }
 
 /** Reserve the next version with a compare-and-set; returns the new version. */
@@ -416,17 +428,43 @@ async function reserveVersion(store: DataStore, userId: string, expected: number
     { $inc: { version: 1 }, $set: { updatedAt: now } },
   );
   if (updated) return Number(updated.version);
+  // A first write for this user has no version document yet. Create/read the
+  // zero-version baseline, then retry the same compare-and-set. An unconditional
+  // upsert here would let two concurrent first writers both report version 1.
   const current = await getStateVersion(store, userId);
   if (current === expected) {
-    // First write for this user (no version document yet).
-    const created = await store.stateVersions.findOneAndUpdate(
-      { userId },
-      { $set: { userId, version: expected + 1, updatedAt: now } },
-      { upsert: true },
+    const retried = await store.stateVersions.findOneAndUpdate(
+      { userId, version: expected },
+      { $inc: { version: 1 }, $set: { updatedAt: now } },
     );
-    if (created && Number(created.version) === expected + 1) return expected + 1;
+    if (retried) return Number(retried.version);
   }
   throw httpError(`Your data changed in another session (expected version ${expected}, current ${current}). Reload before saving.`, 409, 'VERSION_CONFLICT');
+}
+
+/**
+ * Reserve inside an existing transaction. The baseline document is created
+ * before the transaction starts, so a duplicate-key insertion cannot abort an
+ * otherwise valid transaction.
+ */
+async function reserveVersionInTransaction(store: DataStore, userId: string, expected: number): Promise<number> {
+  const now = new Date().toISOString();
+  const updated = await store.stateVersions.findOneAndUpdate(
+    { userId, version: expected },
+    { $inc: { version: 1 }, $set: { updatedAt: now } },
+  );
+  if (updated) return Number(updated.version);
+  const currentDoc = await store.stateVersions.findOne({ userId });
+  const current = Number(currentDoc?.version) || 0;
+  throw httpError(`Your data changed in another session (expected version ${expected}, current ${current}). Reload before saving.`, 409, 'VERSION_CONFLICT');
+}
+
+function atomicityError(): Error & { status: number; code?: string } {
+  return httpError(
+    'This deployment cannot apply the operation atomically. Nothing was changed; ask the administrator to enable MongoDB transactions.',
+    503,
+    'ATOMICITY_UNAVAILABLE',
+  );
 }
 
 function playlistIdOf(value: unknown): string | undefined {
@@ -508,22 +546,6 @@ async function writeCollection(store: DataStore, userId: string, name: UserColle
       }
     }
     throw error;
-  }
-}
-
-async function restoreCollection(store: DataStore, userId: string, name: UserCollectionName, docs: any[]): Promise<void> {
-  const col = store.domainData(name);
-  await col.deleteMany({ userId });
-  for (const doc of docs) await col.insertOne(doc);
-}
-
-async function releaseVersion(store: DataStore, userId: string, version: number): Promise<void> {
-  if (version <= 0) return;
-  try {
-    await store.stateVersions.updateOne({ userId, version }, { $inc: { version: -1 } });
-  } catch {
-    // The failed write still returns a conflict-free error; reloading data is
-    // always safe because the authoritative rows were restored above.
   }
 }
 
@@ -637,14 +659,24 @@ export async function replaceUserCollection(
   expectedVersion: number,
 ): Promise<{ version: number; collection: UserCollectionName }> {
   const value = validateCollectionPayload(name, payload);
-  const version = await reserveVersion(store, userId, expectedVersion);
-  try {
-    await writeCollection(store, userId, name, value ?? null);
-  } catch (error) {
-    await releaseVersion(store, userId, version);
-    throw error;
-  }
-  return { version, collection: name };
+  // Create the version baseline outside the transaction; a duplicate-key
+  // insertion inside a transaction aborts the whole transaction and cannot be
+  // recovered by a read in the same session.
+  await getStateVersion(store, userId);
+  if (!store.transaction) throw atomicityError();
+  return store.transaction(async (tx) => {
+    const version = await reserveVersionInTransaction(tx, userId, expectedVersion);
+    await writeCollection(tx, userId, name, value ?? null);
+    return { version, collection: name };
+  });
+}
+
+export interface ReplaceAllUserStateOptions {
+  /**
+   * Additional account-owned write that must commit atomically with the data
+   * replacement (for example the idempotency record for a migration).
+   */
+  afterWrite?: (tx: DataStore, result: { version: number; state: UserState }) => Promise<void>;
 }
 
 export async function replaceAllUserState(
@@ -652,33 +684,21 @@ export async function replaceAllUserState(
   userId: string,
   raw: unknown,
   expectedVersion: number,
+  options: ReplaceAllUserStateOptions = {},
 ): Promise<{ version: number; state: UserState }> {
   const state = validateStatePayload(raw);
-  const previous = new Map<UserCollectionName, any[]>();
-  for (const name of USER_COLLECTIONS) {
-    previous.set(name, await store.domainData(name).find({ userId }));
-  }
-  const version = await reserveVersion(store, userId, expectedVersion);
-  try {
+  // The baseline must exist before the transaction; see reserveVersionInTransaction.
+  await getStateVersion(store, userId);
+  if (!store.transaction) throw atomicityError();
+  return store.transaction(async (tx) => {
+    const version = await reserveVersionInTransaction(tx, userId, expectedVersion);
     for (const name of USER_COLLECTIONS) {
-      await writeCollection(store, userId, name, (state as any)[name]);
+      await writeCollection(tx, userId, name, (state as any)[name]);
     }
-  } catch (error) {
-    // Import/migration is an all-or-nothing account operation from the UI's
-    // perspective. Restore every collection if a later collection fails so a
-    // partial restore can never be mistaken for a completed one.
-    for (const name of USER_COLLECTIONS) {
-      try {
-        await restoreCollection(store, userId, name, previous.get(name) ?? []);
-      } catch {
-        // Keep attempting the remaining restores, then surface the original
-        // write failure. The client reloads authoritative data before retry.
-      }
-    }
-    await releaseVersion(store, userId, version);
-    throw error;
-  }
-  return { version, state };
+    const result = { version, state };
+    await options.afterWrite?.(tx, result);
+    return result;
+  });
 }
 
 export async function getUserStateExport(store: DataStore, userId: string, defaults: UserStateDefaults = {}) {
@@ -706,9 +726,21 @@ export async function archivePlaylist(
   archived: boolean,
   expectedVersion: number,
 ) {
+  await getStateVersion(store, userId);
+  if (!store.transaction) throw atomicityError();
+  return store.transaction((tx) => archivePlaylistInStore(tx, userId, playlistId, archived, expectedVersion));
+}
+
+async function archivePlaylistInStore(
+  store: DataStore,
+  userId: string,
+  playlistId: string,
+  archived: boolean,
+  expectedVersion: number,
+) {
   const snap = await getPlaylistDoc(store, userId, playlistId);
   if (!snap) throw httpError('Playlist not found for this account.', 404, 'NOT_FOUND');
-  const version = await reserveVersion(store, userId, expectedVersion);
+  const version = await reserveVersionInTransaction(store, userId, expectedVersion);
   const now = new Date().toISOString();
   const existingMeta = await store.domainData('meta').findOne({ userId, key: playlistId });
   await store.domainData('meta').updateOne(

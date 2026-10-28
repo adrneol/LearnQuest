@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { cookieHeader } from '../src/auth/crypto.js';
+import { cookieHeader, oauthCookieHeader } from '../src/auth/crypto.js';
 
 const root = resolve(process.cwd(), '..');
 
@@ -60,5 +60,13 @@ describe('production proxy and runtime configuration', () => {
     expect(cleared).toContain('__Host-lq_session=');
     expect(cleared).toContain('Max-Age=0');
     expect(cleared).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
+
+    const oauth = oauthCookieHeader('browser-binding', 600);
+    expect(oauth).toContain('__Host-lq_oauth=browser-binding');
+    expect(oauth).toContain('Path=/');
+    expect(oauth).toContain('HttpOnly');
+    expect(oauth).toContain('SameSite=Lax');
+    expect(oauth).toContain('Secure');
+    expect(oauth).not.toMatch(/;\s*Domain=/i);
   });
 });

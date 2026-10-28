@@ -68,17 +68,23 @@ beforeEach(() => {
   store = createDataStore(db);
   email = new FakeEmail();
   googleIdentity = { sub: 'google-sub-1', email: 'one@example.test', emailVerified: true, name: 'One' };
-  const started = new Map<string, GoogleAuthIntent>();
+  const started = new Map<string, { intent: GoogleAuthIntent; binding: string }>();
   google = {
     configured: true,
-    async start(intent: GoogleAuthIntent) {
-      const state = `fake-state-${intent}`;
-      started.set(state, intent);
+    async start(intent: GoogleAuthIntent, _userId: string | null, browserBinding: string) {
+      // Include the binding in the state key only for this fake; the real
+      // service stores a digest of the binding alongside the state.
+      const state = `fake-state-${intent}-${browserBinding.slice(0, 8)}`;
+      started.set(state, { intent, binding: browserBinding });
       return { url: `https://accounts.google.test/auth?state=${encodeURIComponent(state)}`, state };
     },
-    async complete(code: string, state: string) {
-      if (code !== 'code-ok' || !started.has(state)) throw Object.assign(new Error('bad oauth'), { status: 400, code: 'INVALID_OAUTH_STATE' });
-      return { identity: { ...googleIdentity }, intent: started.get(state)! };
+    async complete(code: string, state: string, browserBinding: string) {
+      const record = started.get(state);
+      if (code !== 'code-ok' || !record || record.binding !== browserBinding) {
+        throw Object.assign(new Error('bad oauth'), { status: 400, code: 'INVALID_OAUTH_STATE' });
+      }
+      started.delete(state);
+      return { identity: { ...googleIdentity }, intent: record.intent };
     },
   };
   app = createApp({ store, email, google });
@@ -97,11 +103,22 @@ async function startGoogle(intent: GoogleAuthIntent) {
   expect(res.status).toBe(200);
   const state = new URL(res.body.url).searchParams.get('state');
   expect(state).toBeTruthy();
-  return state!;
+  const cookies = (res.headers['set-cookie'] ?? []) as unknown as string[];
+  const binding = cookies.find((cookie) => cookie.startsWith('lq_oauth='))?.split(';')[0];
+  expect(binding, 'OAuth start must set a browser-binding cookie').toBeTruthy();
+  return { state: state!, cookie: binding! };
 }
 
-async function callback(state: string, code = 'code-ok') {
-  return request(app).get('/api/auth/google/callback').query({ code, state });
+async function callback(start: { state: string; cookie: string }, code = 'code-ok') {
+  return request(app)
+    .get('/api/auth/google/callback')
+    .set('Cookie', start.cookie)
+    .query({ code, state: start.state });
+}
+
+function sessionCookie(res: request.Response): string | undefined {
+  const cookies = (res.headers['set-cookie'] ?? []) as unknown as string[];
+  return cookies.find((cookie) => cookie.startsWith('lq_session='));
 }
 
 function actionToken(actionUrl: string): string {
@@ -304,7 +321,7 @@ describe('account registration and sessions', () => {
     const callbackRes = await callback(state);
     expect(callbackRes.status).toBe(303);
     expect(callbackRes.headers.location).toContain('error=google_account_not_found');
-    expect(callbackRes.headers['set-cookie']).toBeUndefined();
+    expect(sessionCookie(callbackRes)).toBeUndefined();
     expect(await store.accounts.count({})).toBe(0);
   });
 
@@ -319,7 +336,7 @@ describe('account registration and sessions', () => {
 
     const duplicate = await callback(await startGoogle('register'));
     expect(duplicate.headers.location).toContain('error=google_account_exists');
-    expect(duplicate.headers['set-cookie']).toBeUndefined();
+    expect(sessionCookie(duplicate)).toBeUndefined();
     expect(await store.accounts.count({ googleSub: 'google-sub-glogin' })).toBe(1);
   });
 
@@ -328,7 +345,7 @@ describe('account registration and sessions', () => {
     const state = await startGoogle('register');
     const res = await callback(state);
     expect(res.headers.location).toContain('error=EMAIL_NOT_VERIFIED');
-    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(sessionCookie(res)).toBeUndefined();
     expect(await store.accounts.count({ googleSub: 'unverified-sub' })).toBe(0);
   });
 
@@ -514,13 +531,45 @@ describe('OAuth, email links, and password recovery security', () => {
         exp: Math.floor(Date.now() / 1000) + 60,
       }, expected),
     });
-    const { url, state } = await svc.start('register');
+    const browserBinding = 'test-browser-binding-0123456789-abcdefghijklmnopqrstuvwxyz';
+    const { url, state } = await svc.start('register', null, browserBinding);
     expect(url).toContain('code_challenge=');
     expect(url).toContain('nonce=');
-    const result = await svc.complete('auth-code', state);
+    const result = await svc.complete('auth-code', state, browserBinding);
     expect(result.intent).toBe('register');
     expect(result.identity.sub).toBe('google-state');
-    await expect(svc.complete('auth-code', state)).rejects.toMatchObject({ code: 'INVALID_OAUTH_STATE' });
+    await expect(svc.complete('auth-code', state, browserBinding)).rejects.toMatchObject({ code: 'INVALID_OAUTH_STATE' });
+  });
+
+  it('binds OAuth state to the initiating browser and rejects missing, mismatched, and replayed bindings', async () => {
+    await seedUser('oauth_bind', 'oauth-bind@example.test', 'correct horse battery staple', 'google-sub-oauth-bind');
+    googleIdentity = { sub: 'google-sub-oauth-bind', email: 'oauth-bind@example.test', emailVerified: true };
+    const start = await startGoogle('login');
+
+    const missing = await request(app)
+      .get('/api/auth/google/callback')
+      .query({ code: 'code-ok', state: start.state });
+    expect(missing.headers.location).toContain('error=invalid_oauth_state');
+    expect(sessionCookie(missing)).toBeUndefined();
+
+    const mismatched = await request(app)
+      .get('/api/auth/google/callback')
+      .set('Cookie', 'lq_oauth=not-the-initiating-browser-0123456789')
+      .query({ code: 'code-ok', state: start.state });
+    expect(mismatched.headers.location).toContain('error=INVALID_OAUTH_STATE');
+    expect(sessionCookie(mismatched)).toBeUndefined();
+
+    // The failed attempts did not consume the state; the initiating browser
+    // can still complete the flow.
+    const success = await callback(start);
+    expect(success.headers.location).toContain('/#/dash');
+    expect(sessionCookie(success)).toBeTruthy();
+
+    // Replaying the same state from the same browser is rejected because the
+    // atomic consumption already marked it used.
+    const replay = await callback(start);
+    expect(replay.headers.location).toContain('error=INVALID_OAUTH_STATE');
+    expect(sessionCookie(replay)).toBeUndefined();
   });
 
   it('rejects an invalid OAuth intent without starting a flow', async () => {

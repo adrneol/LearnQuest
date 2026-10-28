@@ -191,6 +191,28 @@ function SettingsSection() {
     }
   };
 
+  /**
+   * Refresh both halves of "account state": the authenticated profile from
+   * /auth/session and the learning data from /account/data. The previous
+   * control only called listAccountSessions() (discarding the result) and then
+   * refreshed the session, so another device's data changes were never loaded
+   * and a failure produced no visible message.
+   */
+  const refreshAccount = async () => {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await s.refreshSession();
+      await s.reloadCloudData();
+      setMessage('Account profile and learning data were reloaded from the server.');
+    } catch (e: any) {
+      setError(e?.message ?? 'Account state could not be refreshed. Nothing was overwritten.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card>
@@ -214,7 +236,7 @@ function SettingsSection() {
         <p className="mt-1 text-sm text-slate-400">Download a JSON export with your account profile and learning data. It never includes passwords or sign-in tokens.</p>
         <div className="mt-2 flex flex-wrap gap-2">
           <Btn onClick={exportData}><Download size={14} /> Export account data</Btn>
-          <Btn disabled={busy} onClick={() => { void s.listAccountSessions().then(() => s.refreshSession()); }}><RefreshCw size={14} /> Refresh account state</Btn>
+          <Btn disabled={busy} onClick={() => { void refreshAccount(); }}><RefreshCw size={14} /> Refresh account state</Btn>
         </div>
       </Card>
 

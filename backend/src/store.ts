@@ -43,6 +43,38 @@ export const ACCOUNT_LEARNING_COLLECTIONS = [
   UNIFIED_USER_DATA_COLLECTION,
 ] as const;
 
+/** Resumable account-deletion saga job. Removed after verified success. */
+export const ACCOUNT_DELETION_JOB_COLLECTION = 'lq_account_deletions';
+/**
+ * Short-lived, non-PII anti-resurrection fence. It contains only the opaque
+ * account id while deletion waits for in-flight writers to drain; it expires
+ * automatically and carries no email, name, notes, or tokens.
+ */
+export const ACCOUNT_FENCE_COLLECTION = 'lq_account_fences';
+
+/**
+ * Every collection that can contain account-owned records. Account deletion,
+ * residue cleanup, and verification all use this one list so a new data domain
+ * cannot be forgotten by only one of those paths.
+ */
+export const ACCOUNT_SCOPED_COLLECTIONS = [
+  ...ACCOUNT_LEARNING_COLLECTIONS,
+  'lq_sessions',
+  'lq_action_tokens',
+  'lq_challenges',
+  'lq_reset_grants',
+  'lq_oauth_states',
+  'lq_migrations',
+  'lq_state_versions',
+  'lq_deletions',
+  ACCOUNT_DELETION_JOB_COLLECTION,
+] as const;
+
+/** Everything except the resumable job, which final verification removes last. */
+export const ACCOUNT_RESIDUE_COLLECTIONS = ACCOUNT_SCOPED_COLLECTIONS.filter(
+  (name) => name !== ACCOUNT_DELETION_JOB_COLLECTION,
+);
+
 export interface DataStore {
   adapter: DbAdapter;
   accounts: CollectionAdapter;
@@ -51,6 +83,8 @@ export interface DataStore {
   oauthStates: CollectionAdapter;
   deletions: CollectionAdapter;
   accountDeletions: CollectionAdapter;
+  accountFences: CollectionAdapter;
+  rateLimits: CollectionAdapter;
   migrations: CollectionAdapter;
   stateVersions: CollectionAdapter;
   userData: CollectionAdapter;
@@ -58,6 +92,12 @@ export interface DataStore {
   data(name: UserCollectionName): CollectionAdapter;
   /** Active application learning-data backend selected by LQ_USER_DATA_STORE. */
   domainData(name: UserCollectionName): CollectionAdapter;
+  /**
+   * Run a repository operation atomically. Both production MongoDB (replica
+   * set) and the in-memory test adapter implement this; callers that cannot
+   * prove atomicity must fail closed rather than report partial success.
+   */
+  transaction?<T>(fn: (store: DataStore) => Promise<T>): Promise<T>;
 }
 
 function assertKnownDomain(name: string): UserCollectionName {
@@ -132,7 +172,7 @@ export function createUnifiedDomainCollection(
 
 export function createDataStore(adapter: DbAdapter): DataStore {
   const userData = adapter.collection(UNIFIED_USER_DATA_COLLECTION);
-  return {
+  const store: DataStore = {
     adapter,
     accounts: adapter.collection('lq_accounts'),
     sessions: adapter.collection('lq_sessions'),
@@ -140,7 +180,9 @@ export function createDataStore(adapter: DbAdapter): DataStore {
     oauthStates: adapter.collection('lq_oauth_states'),
     deletions: adapter.collection('lq_deletions'),
     // Temporary account-deletion saga job. Removed after verified success.
-    accountDeletions: adapter.collection('lq_account_deletions'),
+    accountDeletions: adapter.collection(ACCOUNT_DELETION_JOB_COLLECTION),
+    accountFences: adapter.collection(ACCOUNT_FENCE_COLLECTION),
+    rateLimits: adapter.collection('lq_rate_limits'),
     migrations: adapter.collection('lq_migrations'),
     stateVersions: adapter.collection('lq_state_versions'),
     userData,
@@ -155,4 +197,8 @@ export function createDataStore(adapter: DbAdapter): DataStore {
         : adapter.collection(`lq_data_${domain}`);
     },
   };
+  if (adapter.transaction) {
+    store.transaction = (fn) => adapter.transaction!((txAdapter) => fn(createDataStore(txAdapter)));
+  }
+  return store;
 }

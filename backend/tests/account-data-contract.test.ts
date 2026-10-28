@@ -8,7 +8,8 @@ import { completeOnboarding, createAccountFromGoogle, type Account } from '../sr
 import { createSession } from '../src/auth/sessions.js';
 import { hashCode } from '../src/auth/crypto.js';
 import {
-  DEFAULT_CHALLENGE, DEFAULT_PREFS, DEFAULT_SETTINGS, readUserState,
+  DEFAULT_CHALLENGE, DEFAULT_PREFS, DEFAULT_SETTINGS, getStateVersion,
+  readUserState, replaceUserCollection,
 } from '../src/services/userData.js';
 import type { EmailService } from '../src/email/brevo.js';
 import type { GoogleOAuthService } from '../src/auth/google.js';
@@ -280,5 +281,72 @@ describe('canonical account-data contract', () => {
     expect(res.body.code).toBe('DATA_INTEGRITY_ERROR');
     expect(res.body.state).toBeUndefined();
     expect(await store.data('progress').count({ userId: account.userId })).toBe(1);
+  });
+
+  it('never resets an existing state version when the first read raced document creation', async () => {
+    const userId = 'version-read-race';
+    const updatedAt = '2026-10-02T00:00:00.000Z';
+    const original = store.stateVersions;
+    await original.insertOne({ userId, version: 7, updatedAt });
+
+    let firstRead = true;
+    // Simulate the exact race: findOne() misses a document that another
+    // instance creates immediately afterwards. The unique (userId) index makes
+    // our insert a duplicate; the implementation must re-read version 7 rather
+    // than issuing an unconditional $set that resets it to zero.
+    const racingVersions = {
+      async findOne() {
+        if (firstRead) {
+          firstRead = false;
+          return null;
+        }
+        return original.findOne({ userId });
+      },
+      async insertOne() {
+        throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+      },
+      async updateOne(query: any, update: any, opts?: any) {
+        return original.updateOne(query, update, opts);
+      },
+    };
+    store.stateVersions = racingVersions as any;
+
+    await expect(getStateVersion(store, userId)).resolves.toBe(7);
+    expect((await original.findOne({ userId }))?.version).toBe(7);
+  });
+
+  it('does not let two concurrent first writers both reserve version 1', async () => {
+    const userId = 'version-first-write-race';
+    const updatedAt = '2026-10-02T00:00:00.000Z';
+    const original = store.stateVersions;
+    // Another writer already won the first reservation.
+    await original.insertOne({ userId, version: 1, updatedAt });
+
+    let firstCompareAndSet = true;
+    // The stale read reports the pre-write version 0. After the initial CAS
+    // loses, the retry must re-check the database version instead of using an
+    // unconditional upsert that would also report version 1 as success.
+    const racingVersions = {
+      async findOne() {
+        return { userId, version: 0, updatedAt };
+      },
+      async findOneAndUpdate(query: any, update: any, opts?: any) {
+        if (firstCompareAndSet) {
+          firstCompareAndSet = false;
+          return null;
+        }
+        return original.findOneAndUpdate(query, update, opts);
+      },
+    };
+    store.stateVersions = racingVersions as any;
+
+    await expect(replaceUserCollection(
+      store,
+      userId,
+      'settings',
+      { verifiedThreshold: 0.9 },
+      0,
+    )).rejects.toMatchObject({ code: 'VERSION_CONFLICT' });
+    expect((await original.findOne({ userId }))?.version).toBe(1);
   });
 });

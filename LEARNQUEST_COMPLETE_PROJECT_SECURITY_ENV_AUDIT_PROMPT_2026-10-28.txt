@@ -1,0 +1,564 @@
+# LEARNQUEST — COMPLETE PROJECT SECURITY, QUALITY ASSURANCE, ENVIRONMENT CONFIGURATION, AND PRODUCTION READINESS AUDIT
+
+Date: 2026-10-28
+
+Repository: `E:\progressGameTracker`
+
+Branch: `main`
+
+Latest audit: `docs/user-doc/audit2/17_LEARNQUEST_AUTH_SESSION_EMAIL_RUNTIME_FINAL_AUDIT_2026-10-28.md`
+
+Existing audit index: `docs/user-doc/audit2/README.md`
+
+Production frontend: `https://learn-quest-one.vercel.app`
+
+Production backend: `https://learnquest-hhiv.onrender.com`
+
+## 0. EXECUTION POLICY — MAXIMUM EFFORT
+
+Use the strongest available DeepSeek model and `#max` reasoning variant wherever supported. Keep maximum effort for additional model runs where supported. Do not claim that `#max` was active unless the CLI or model metadata confirms it.
+
+Read the repository, current Git status, existing audit history, deployment configuration, and current source code before changing anything.
+
+This is a continuation, not a rebuild. Preserve the existing LearnQuest implementation, working features, learning data, source changes, environment files, and credentials.
+
+Do not commit, push, reset, clean, stash, switch branches, or discard changes.
+
+Do not deploy, modify live Render/Vercel settings, change Atlas access lists, or rotate live credentials automatically.
+
+Never print or include passwords, database URIs, API keys, OAuth secrets, session tokens, cookies, password-reset tokens, HMAC secrets, or sensitive provider responses.
+
+Never report actual secret values in console output, generated reports, test names, logs, screenshots, or terminal summaries.
+
+Inspect the existence and status of environment variables without revealing their values. When comparing settings, use safe classifications such as present, absent, empty, invalid, or mismatched.
+
+Do not copy local `.env` wholesale into Render. Do not overwrite production configuration with development values.
+
+Do not weaken security controls to make tests pass.
+
+Implement safe, reproducible fixes for confirmed source defects within the scope. Do not stop at planning or report writing. If the root cause is external or requires owner action, complete the code-side audit and state the exact unresolved action.
+
+## 1. INSPECT THE COMPLETE PROJECT
+
+Start with:
+
+- `git status --short --branch`
+- Current staged and unstaged diffs.
+- All tracked and untracked project files relevant to implementation.
+- `.gitignore`, package manifests and lockfiles.
+- `render.yaml`, Vercel configuration, `.node-version` files, and build configuration.
+- Root, backend, and frontend environment schemas.
+- Reports 13–17 and `docs/user-doc/audit2/README.md`.
+
+Inspect the project architecture and identify:
+- Frontend framework, routing, state-management approach, API layer, and persistence.
+- Backend framework, routes, middleware, authentication, storage adapters, and database lifecycle.
+- Shared schemas and validation.
+- External integrations: Google OAuth, YouTube Data API, MongoDB Atlas, Brevo, Render, and Vercel.
+- CI/test scripts, lint, typecheck, builds, dependency audit, browser tests, and existing diagnostics.
+- How local development differs from staging and production.
+
+Search the complete repository, not only the files mentioned in previous reports.
+
+Create an inventory of important modules and their trust boundaries before changing code.
+
+## 2. FULL ENVIRONMENT-VARIABLE AUDIT — MANDATORY DELIVERABLE
+
+This is a major requirement. Read the actual environment schema and code references; do not rely exclusively on the example values in the user's local `.env`.
+
+Inspect:
+- `backend/.env` and other discovered `.env` files without printing values.
+- Every `.env.example` or equivalent template.
+- All `process.env` references.
+- Environment parsing and validation code.
+- `backend/package.json` and frontend package configuration.
+- `render.yaml`.
+- `frontend/vercel.json`.
+- Vercel and Render deployment instructions.
+- OAuth callback configuration in code and Google Cloud settings documented by the repository.
+- Current reports and docs describing required settings.
+
+Search for:
+- Missing required settings.
+- Variables that are optional, obsolete, unused, aliased, or still supported as legacy fallbacks.
+- Environment variables that exist in `.env` but are never used.
+- Variables read by code but absent from the documented configuration.
+- Inconsistent defaults, names, or units.
+- Development URLs accidentally configured as production URLs.
+- Secrets embedded in frontend bundles or `VITE_*` variables.
+- Production variables that rely on undocumented implicit defaults.
+- Configuration whose absence permits insecure fallback behavior.
+- Configuration that could silently put the application into the wrong storage or security mode.
+
+Do not assume two variables are equivalent simply because they currently contain the same value.
+
+### Required environment-variable matrix
+
+Produce an exact, practical matrix for every discovered environment variable, at minimum:
+
+| Field | Required information |
+|---|---|
+| Name | Exact environment-variable name |
+| Purpose | What the application uses it for |
+| Secret classification | Secret, public identifier, URL, ordinary setting, or sensitive metadata |
+| Active source references | Files/modules that consume it |
+| Local development | Appropriate local value or source |
+| Render production | Exact safe value, provider source, or secure-generation procedure |
+| Vercel frontend | Whether required at build/runtime, and whether public |
+| Required status | Required, optional, conditional, or obsolete |
+| Recommended action | Keep, set, generate, rename, migrate, or remove after verification |
+| Security impact | What happens if missing, leaked, weak, or misconfigured |
+
+The matrix must explain the keys from the user's current configuration, where applicable, including:
+
+`YOUTUBE_API_KEY`, `PORT`, `NODE_ENV`, `NODE_VERSION`, `CORS_ORIGIN`, `APP_ORIGIN`, `API_ORIGIN`, `CACHE_TTL_SEC`, `CACHE_MAX_ENTRIES`, `RATE_LIMIT_PER_MIN`, `AUTH_RATE_LIMIT_PER_MIN`, `OTP_RATE_LIMIT_PER_15MIN`, `TRUST_PROXY_HOPS`, `MONGODB_URI`, `MONGODB_DB_NAME`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `SESSION_SECRET`, `OTP_HMAC_SECRET`, `EMAIL_ACTION_HMAC_SECRET`, `EMAIL_ACTION_TTL_MIN`, `EMAIL_ACTION_RESEND_SEC`, `OTP_TTL_MIN`, `OTP_RESEND_SEC`, `OTP_MAX_ATTEMPTS`, `SESSION_IDLE_HOURS`, `SESSION_ABSOLUTE_DAYS`, `REAUTH_WINDOW_MIN`, `ACCOUNT_MAX_STATE_BYTES`, and any other discovered variables.
+
+This is not an instruction to invent all these variables or assume all are currently active. Verify each against the actual source and environment loader.
+
+### Required exact production-configuration guidance
+
+The report must provide a dedicated section titled **"Exactly what to configure in Render"**.
+
+For each setting, state the exact value where that value is safe and supported by the source code.
+
+Investigate these expected values against the actual application and deployment topology:
+
+- `NODE_ENV=production`
+- `NODE_VERSION=24.22.1`, provided the official release check still supports this as the appropriate Node.js LTS baseline.
+- `APP_ORIGIN=https://learn-quest-one.vercel.app`
+- `CORS_ORIGIN=https://learn-quest-one.vercel.app`
+- `API_ORIGIN=https://learnquest-hhiv.onrender.com`
+- `MONGODB_DB_NAME=learnquest`
+- `BREVO_SENDER_NAME=LearnQuest`
+- `TRUST_PROXY_HOPS=2`, only if the deployed Vercel-to-Render proxy chain still matches the existing source and configuration.
+- The appropriate production `GOOGLE_REDIRECT_URI`, verified against the actual Google callback route and deployed proxy architecture.
+- `EMAIL_ACTION_TTL_MIN=30` and `EMAIL_ACTION_RESEND_SEC=60` if these remain the intended and validated production policies in the current code.
+
+If the source has changed, identify the correct settings rather than blindly applying historical values.
+
+Explicitly explain:
+
+1. Whether `APP_ORIGIN` and `CORS_ORIGIN` should be identical for this architecture, and the distinct purposes of those variables.
+2. Why `API_ORIGIN` points to the backend while `APP_ORIGIN` points to the public frontend.
+3. Why `localhost` values must not appear in production email links, Google callback URLs, or production CORS allowlists.
+4. Why `PORT` should normally be supplied by Render's runtime rather than copied from local development as `3001`.
+5. How the Vercel `/api` rewrite affects the correct API origin and OAuth callback configuration.
+6. Whether `VITE_API_BASE_URL` should remain unset/empty to use the same-origin `/api` proxy, or needs another value based on the actual client implementation.
+7. Which settings belong on the backend only and which are genuinely required by the frontend build.
+8. Which settings must be configured through the Render dashboard versus a checked-in non-secret blueprint.
+9. Whether Render environment values can override blueprint settings and how to verify the effective configuration.
+10. Which variables must never be copied into Vercel's public frontend environment or browser bundle.
+
+Use a copy-ready block containing only appropriate non-secret production configuration, with comments outside the actual environment lines. List secrets separately with safe generation or retrieval instructions. Never insert fake secrets or values from the local `.env`.
+
+### MongoDB configuration
+
+Explain how the production and development database settings differ.
+
+Production must use the existing production Atlas URI, credentials, and database `learnquest`.
+
+If a separate development database/user has been created, local development may use `learnquest_dev` with the dedicated development database user, but do not assume that it exists unless the configuration or current evidence confirms it.
+
+The report must not include the real MongoDB URI or password. State which database name each environment is intended to use.
+
+Verify the Atlas URI, database path, TLS behavior, network access assumptions, and error handling. Do not change the URI speculatively.
+
+### Google OAuth configuration
+
+Explain:
+- What the OAuth client ID does.
+- Why the client secret must remain backend-only.
+- The exact production redirect URI derived from the actual callback implementation.
+- Which authorized redirect URI must also be registered in Google Cloud Console.
+- Which local redirect URI remains appropriate for local development.
+- How to test that the public callback route reaches the correct backend.
+- How to prevent untrusted `Host` and `X-Forwarded-Host` headers from constructing callback URLs.
+
+Do not assume the production redirect URI until the code and `/api` proxy are inspected.
+
+### Brevo configuration
+
+Explain:
+- `BREVO_API_KEY` as a backend-only secret.
+- `BREVO_SENDER_EMAIL` as the actual verified sender.
+- `BREVO_SENDER_NAME` as the visible sender name.
+- Sender/domain verification and SPF/DKIM/DMARC requirements.
+- How IP authorization interacts with Render's outbound ranges.
+- How to verify acceptance separately from real delivery.
+
+Do not recommend unrestricted API-key IP access as the default production solution.
+
+### Session and token secrets
+
+Audit all active secrets and the code that consumes them.
+
+Generate a recommended production configuration plan for:
+- `SESSION_SECRET`
+- `EMAIL_ACTION_HMAC_SECRET`
+- `OTP_HMAC_SECRET`, only if a genuinely active OTP flow still uses it.
+
+Use independent cryptographically random values for different purposes. Do not reuse one secret for sessions, action tokens, API keys, and OAuth.
+
+Provide the exact safe local generation command when needed, using Node's built-in cryptographic APIs, but do not run a command that prints the resulting secret into a report or shared log.
+
+For example, a suitable local generator uses `crypto.randomBytes(32).toString('base64url')`. The user must capture the result privately and paste it directly into the appropriate Render secret field.
+
+Before recommending secret rotation:
+- Determine whether the currently deployed value is already valid.
+- Explain whether changing it invalidates existing sessions, pending reset links, or other tokens.
+- Do not rotate production secrets automatically.
+- If a value is missing, weak, shared, or exposed, give an ordered rotation plan with the expected side effects.
+
+Do not make `OTP_HMAC_SECRET` the production fallback if `EMAIL_ACTION_HMAC_SECRET` is intended to be configured independently. Verify the active fallback policy and recommend a clean, explicit production configuration.
+
+### Environment safety
+
+The report must never print actual secrets.
+
+Check `.gitignore`, tracked environment files, current Git diffs, and repository history for possible accidental secret exposure. Use installed scanners if available; if a scanner is unavailable, perform safe targeted checks.
+
+Report secret findings as file/path, category, and severity only. Never reproduce detected values. Do not rewrite Git history or purge the repository automatically.
+
+If a complete credential was committed or exposed, tell the owner which provider key to rotate and why. Distinguish a genuine exposure from a masked screenshot or a false-positive test fixture.
+
+Do not use Render's "Add from .env" to import the local development file wholesale. The current local file contains localhost URLs and development settings.
+
+## 3. COMPLETE BACKEND SECURITY AUDIT
+
+Audit every relevant backend layer:
+
+- HTTP server startup, shutdown, readiness, database lifecycle, and retry loops.
+- Authentication and Google OAuth.
+- Signup, onboarding, username/display name validation, login, logout, and logout-all.
+- Password hashing and password-reset/email-change actions.
+- Cookie construction, clearing, rotation, and expiration.
+- Sessions, CSRF, CORS, origin checks, proxy trust, and rate limiting.
+- Database access and authenticated user ownership enforcement.
+- Input schemas and request-size validation.
+- MongoDB query safety, indexing, account isolation, and transaction/concurrency behavior.
+- Learning-data reads/writes, import/export, playlist archive/deletion, checkpoints, goals, focus sessions, analytics, efficiency, history, and XP.
+- Account deletion and cleanup/resumption semantics.
+- YouTube API integration, cache and retries.
+- Brevo request handling, timeouts, templates, and sanitized diagnostics.
+- Health, readiness, and authentication-config endpoints.
+- Error handling, logging, metrics, and information disclosure.
+- Dependency security, resource exhaustion, server-side request forgery, injection, and prototype-pollution risks where relevant.
+
+Examine every protected route for missing or inconsistent authorization. Verify that the authenticated identity is always derived from the validated server-side session and never trusted from a client-supplied user ID.
+
+Check for:
+- IDOR and cross-account data access.
+- Authentication bypass.
+- Session fixation or replay.
+- CSRF vulnerabilities.
+- XSS and unsafe HTML handling.
+- Injection risks in database filters or external API requests.
+- Broken rate limits and account-enumeration leaks.
+- Unbounded request bodies, memory allocations, pagination, or cache growth.
+- Race conditions and partial writes.
+- Insecure fallback storage and fake success states.
+- Secret and PII leakage through logs and error messages.
+- Insecure redirects and origin trust.
+- Unsafe file or URL handling where present.
+- Timing and retry bugs that can duplicate writes, XP awards, or email actions.
+- Missing cleanup and lifecycle issues.
+
+Do not claim an application is unhackable. Express findings in terms of tested threats, residual risks, and evidence.
+
+## 4. COMPLETE FRONTEND SECURITY AND QUALITY AUDIT
+
+Audit the full frontend, including:
+
+- Account, sign-in, sign-up, Google onboarding, reset, and email-action flows.
+- Protected-route transitions and session restoration.
+- Cookie/session use and CSRF header flow.
+- API client configuration, 401/403/429/5xx handling, retry and timeout logic.
+- Race conditions, stale responses, duplicate requests, loading and error states.
+- Local storage, session storage, IndexedDB, caches, URLs, and browser history for unintended personal data or tokens.
+- Account/profile/settings/security pages.
+- Playlist/library/dashboard/player workflows.
+- Learning progress, notes, goals, checkpoints, focus sessions, analytics, efficiency, history, and XP.
+- Import/export/backup/restore.
+- Error boundaries, data-unavailable states, cloud-save acknowledgements, and offline behavior.
+- Accessibility, keyboard navigation, semantic forms, focus handling, contrast, and responsive layouts.
+- Route isolation and shell/header leakage.
+- Build/runtime environment variable exposure.
+
+Verify that:
+- No session token, password, OAuth secret, Brevo key, database URI, or reset token is stored in local/session storage.
+- A missing or expired server session cannot silently restore authenticated UI.
+- A late response cannot repopulate the account after logout or reset.
+- Account data is scoped to the authenticated server identity.
+- A failed read is not treated as a valid empty account.
+- A failed cloud save is never reported as successful.
+- Public pages do not inherit irrelevant session-expiry warnings.
+- Reset success -> Back to sign in actually renders sign-in and removes reset state.
+- Profile/account pages are genuinely separated from playlist-specific headers and content.
+- The UI does not expose secrets in debug output, URLs, or browser-visible source.
+- Error messages remain informative without exposing sensitive internal details.
+
+Do not redesign working screens without a demonstrated usability defect. Prioritize real logic/security defects and reproducible UI problems.
+
+## 5. SESSION, COOKIE, AND AUTHORIZATION THREAT REVIEW
+
+Continue and independently verify Report 17's findings.
+
+Audit:
+- Production `__Host-` cookie behavior.
+- `HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Max-Age`, `Expires`, and cookie-clearing consistency.
+- Same-origin Vercel `/api` proxy versus direct cross-origin requests.
+- The configured trusted proxy hop count.
+- CSRF token issuance, session binding, timing-safe comparisons, and protected mutations.
+- Exact allowed origins and credentialed CORS.
+- Session creation, rotation, idle and absolute expiration, revocation, and password-version checks.
+- Cross-tab logout synchronization.
+- Cross-device revocation after password reset, password change, email change, and account deletion.
+- Pending in-flight writes and stale state after logout.
+- Wrong-password responses incorrectly triggering full session expiry.
+- Server-side account isolation for every account-data route.
+
+Test the boundaries instead of assuming Report 17's prior conclusions are sufficient.
+
+Clearly separate source-level and mocked test results from live-browser verification. Do not claim a cookie is correct in production until inspected after deployment through the real proxy.
+
+## 6. CURRENT NODE.JS SECURITY BASELINE AND DEPENDENCIES
+
+Verify the security baseline using official sources at execution time:
+
+- `https://nodejs.org/en/blog/release`
+- `https://nodejs.org/en/blog/release/v24.22.1`
+- Relevant current official Node.js security advisories.
+
+As of the last verified official release information available for this task, Node.js `24.22.1` LTS was released on October 21, 2026 as a security release. Confirm that this is still the appropriate current LTS patch for the project when the audit runs.
+
+Inspect:
+- Local Node and npm versions.
+- `backend/package.json` and frontend `package.json` engines.
+- `.node-version`, `.nvmrc`, and lockfiles.
+- Render `NODE_VERSION`, blueprint, and dashboard override requirements.
+- Vercel project build runtime.
+- All direct and transitive dependencies.
+- `npm audit` in both packages and relevant transitive package updates.
+- Build reproducibility and any runtime-version-dependent behavior.
+
+Requirements:
+- Use the appropriate currently supported Node.js 24 LTS patch for production, unless official information establishes that another patch in the same supported line should be used.
+- Keep local, CI, and production runtime expectations aligned.
+- Do not lower the engine requirement to hide an old local installation.
+- Do not run `npm audit fix --force` blindly.
+- Assess vulnerabilities for reachability and impact without dismissing applicable issues.
+- Do not claim the deployed runtime has been upgraded simply because local tests ran on a secure version.
+- Check whether the Node executable version and package engine requirement are consistent with Render's supported deployment setup.
+- Clearly distinguish Node.js vulnerabilities from PHP-specific vulnerabilities; check whether any PHP runtime is actually part of this project before claiming it is affected.
+
+If web access is unavailable to the agent, state that limitation and identify the official version check that the owner must perform.
+
+## 7. SECURITY AND QUALITY OF THE DATA LAYER
+
+Inspect the MongoDB model and data lifecycle for:
+- Account and learning-data ownership.
+- Unique indexes and data integrity.
+- Query/update filters and collection naming.
+- Cache isolation between users.
+- Missing/null/invalid data handling.
+- Concurrent edits and duplicate writes.
+- Import envelopes and schema validation.
+- Archive versus permanent deletion.
+- Account deletion and cleanup of every account-owned collection, session, action token, OAuth state, and related metadata.
+- Pending deletion retry and partial-failure semantics.
+- Fail-closed operation when the database is unreachable.
+- No local fallback that becomes an alternate production source of truth.
+- No false claim of cloud persistence before server confirmation.
+- Proper backup/restore and migration safety.
+
+Use test databases, fixtures, and mocks for destructive scenarios. Do not run real account deletion, live migrations, or cleanup jobs against production as part of this audit.
+
+Check that the `learnquest` production database and any existing `learnquest_dev` database are not confused by environment defaults.
+
+Verify the existing MongoDB read-only diagnostic and current readiness behavior. Do not replace database credentials or TLS security settings speculatively.
+
+## 8. PRODUCTION READINESS AND LIVE SERVICE CHECKS
+
+Perform safe, read-only checks if network access is available.
+
+Inspect:
+- Render `/api/health`
+- Render `/api/ready`
+- Render `/api/auth/config`
+- Vercel `/api/health`
+- Vercel `/api/ready`
+- Vercel `/api/auth/config`
+- Current Vercel asset/hash versus the latest local frontend build.
+- Current backend build/version versus the source package version.
+- Vercel `/api` rewrite, root directory, and deployment branch.
+- Render root directory, build command, start command, and runtime.
+- Production cookie/proxy topology.
+- Correct production app origin and Google callback route.
+- Brevo API key IP authorization and sender configuration.
+- MongoDB reachability from the local environment versus the production backend.
+
+Do not use unknown live user accounts for diagnostics. Do not send unapproved email. Do not mutate production state.
+
+Treat an endpoint returning HTTP 200 as proof only of that endpoint's actual response—not proof that all dependencies work.
+
+Do not deploy automatically or modify provider settings. If production is stale, document the exact owner-side changes and acceptance tests.
+
+## 9. COMPREHENSIVE QA PLAN AND EXECUTION
+
+Run all relevant available tests in a sensible order.
+
+### Backend
+- Unit tests.
+- Auth/session/multi-user tests.
+- Route and API contract tests.
+- Input validation and authorization tests.
+- Data persistence, account isolation, and deletion tests using safe fixtures.
+- Token expiry, replay, and atomic-consumption tests.
+- Email rendering/provider adapter tests.
+- MongoDB readiness and failure/recovery tests.
+- Rate-limit and retry tests.
+- Build, typecheck, lint, and dependency audit.
+
+### Frontend
+- Unit/component tests.
+- Router and authentication-flow integration tests.
+- Reset-success navigation tests.
+- Cross-tab/logout and stale-response tests.
+- API error handling.
+- Learning-data persistence and cloud-save state tests.
+- Responsive and accessibility tests where the current setup supports them.
+- Build, typecheck, lint, and dependency audit.
+
+### Integration/security
+- Local MongoDB diagnostic, read-only.
+- Safe API smoke tests.
+- Security configuration validation.
+- Secret-leak and repository hygiene scan.
+- No-tracked-secret and no-public-secret checks.
+- Production route checks that are safe and read-only.
+- Playwright/Cypress/real-browser tests if already available; do not claim to have run them if unavailable.
+
+Run tests under the supported Node runtime. Fix real regressions rather than weakening assertions or skipping tests.
+
+Record actual test names, pass/fail counts, typechecks, build results, lint results, and dependency audit results. Distinguish a test failure from an environment/network interruption.
+
+## 10. ONE PRACTICAL RENDER CONFIGURATION DELIVERABLE
+
+The final report must contain a ready-to-use production configuration section with:
+
+### A. Safe, non-secret Render environment block
+
+Provide only verified, appropriate non-secret values. Do not include placeholder values in a block that could accidentally be copied into production without explanation.
+
+Likely values to verify include:
+
+- `NODE_ENV=production`
+- `NODE_VERSION=24.22.1` if the official runtime check confirms it
+- `APP_ORIGIN=https://learn-quest-one.vercel.app`
+- `CORS_ORIGIN=https://learn-quest-one.vercel.app`
+- `API_ORIGIN=https://learnquest-hhiv.onrender.com`
+- `MONGODB_DB_NAME=learnquest`
+- `BREVO_SENDER_NAME=LearnQuest`
+- `TRUST_PROXY_HOPS=2` only if the current live proxy chain warrants it
+- Production action-token TTL and resend-cooldown values from the validated source policy
+- The correct `GOOGLE_REDIRECT_URI`, derived from the real callback route
+
+Verify every value against the actual implementation and deployment config before recommending it.
+
+### B. Secret checklist
+
+For every secret, state whether the user should:
+- Copy the currently valid secret from the relevant provider.
+- Preserve an existing valid production value.
+- Generate a new value because none exists or a leak has been confirmed.
+- Rotate a value only under a deliberate plan.
+
+Never include generated secret values in the report. Never automatically replace live secrets.
+
+### C. Local versus production table
+
+Clearly identify:
+- Local-only values such as `http://localhost:5173`, `http://localhost:3001`, and `NODE_ENV=development`.
+- Production public origins and callbacks.
+- Backend-only secrets.
+- Frontend-public identifiers, if any.
+- Optional legacy settings.
+- Variables supplied by the Render platform automatically.
+- Variables that must be set in Vercel rather than Render.
+- Values that should not be manually added in either dashboard.
+
+### D. Operational checklist
+
+Explain how to add values to the Render Environment page safely, when to choose Save, Save and Deploy, or Save, Rebuild, and Deploy, and how to verify the effective runtime after deployment.
+
+Do not advise bulk-importing the local `.env` file. Do not publish secrets in a Markdown block, GitHub, browser variables, or chat.
+
+## 11. IMPLEMENTATION RULES
+
+Fix demonstrated bugs in the current scope.
+
+For each code change:
+- Explain the root cause.
+- Add or update a regression test.
+- Preserve backwards compatibility where appropriate.
+- Avoid unrelated refactoring.
+- Do not introduce new dependencies without a clear need.
+- Do not change the production database schema without a documented and necessary migration plan.
+- Do not change the production storage mode.
+- Do not disable security controls.
+- Do not modify real production user data.
+- Do not automatically deploy or change production secrets.
+
+If an issue is already correctly fixed, verify it and retain it rather than repeatedly rewriting it.
+
+If a fix depends on provider settings or a live deployment, implement the safe code-side portion and record the external prerequisite precisely.
+
+## 12. SINGLE FINAL AUDIT REPORT
+
+Create exactly one new report:
+
+`docs/user-doc/audit2/18_LEARNQUEST_COMPLETE_PROJECT_SECURITY_ENV_AUDIT_2026-10-28.md`
+
+If Report 18 already exists from a partial run, inspect and continue that report rather than making a duplicate.
+
+Update the existing `docs/user-doc/audit2/README.md` in place.
+
+Do not create separate progress reports, a second environment report, extra environment files, another archive index, or duplicate Markdown summaries. The environment matrix and Render checklist must be inside Report 18.
+
+The report must include:
+- Executive summary and severity-ranked findings.
+- Full frontend/backend architecture and security review.
+- Cookies, sessions, CSRF, CORS, OAuth, account isolation, and token findings.
+- Password recovery and complete email-pipeline assessment.
+- Node.js runtime and dependency-baseline findings.
+- All environment variables and their code references.
+- Exact recommended Render settings, each key's purpose, and its source.
+- Which secrets to preserve, generate, or consider rotating.
+- Which settings belong in Vercel versus Render.
+- Secret exposure review without reproducing secret values.
+- MongoDB connectivity/readiness results.
+- Confirmed defects fixed and the tests proving each fix.
+- Actual test/build/typecheck/lint/audit results.
+- Live Render/Vercel/provider checks and their exact limitations.
+- A prioritized owner-action checklist.
+- Final Git status.
+- Explicit statement that no commit, push, destructive operation, or production deployment was performed.
+
+Keep the report accurate, practical, and sufficiently detailed for the owner to configure production without guessing.
+
+## 13. FINAL ACCEPTANCE CRITERIA
+
+The task is complete only when:
+
+1. The whole relevant codebase has been inspected, not merely the authentication folder.
+2. Confirmed security and correctness defects have been fixed and tested.
+3. The secret and environment-variable inventory is complete and safe.
+4. Render's production environment configuration has an exact, source-verified plan.
+5. The local development settings are clearly separated from production.
+6. The current Node.js baseline has been checked against official release information.
+7. Backend and frontend QA results are fresh and accurately reported.
+8. The live production blockers are stated explicitly.
+9. No secret, production credential, user data, or history was exposed or destroyed.
+10. Only Report 18 and the existing archive index are added/updated as audit documentation.
+
+Begin by inspecting Report 17 and the current code, then complete the project-wide inventory and environment-variable matrix. Fix confirmed defects, run the QA suite, and finish Report 18. Do not stop after producing a plan.

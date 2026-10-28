@@ -1,5 +1,13 @@
 import type { DataStore } from '../store.js';
-import { ACCOUNT_LEARNING_COLLECTIONS } from '../store.js';
+import {
+  ACCOUNT_DELETION_JOB_COLLECTION,
+  ACCOUNT_SCOPED_COLLECTIONS,
+} from '../store.js';
+import {
+  isAccountDeletionFenced,
+  setAccountDeletionFence,
+  waitForAccountWriters,
+} from '../auth/writeLease.js';
 import { http, type Account } from '../auth/accounts.js';
 
 /**
@@ -19,24 +27,9 @@ import { http, type Account } from '../auth/accounts.js';
  * failure marker and the account remains unavailable; a later startup sweep can
  * finish the same operation. Success is never returned before verification.
  */
-export const ACCOUNT_DELETION_JOB_COLLECTION = 'lq_account_deletions';
-
-/**
- * Collections that store an account-owned `userId`. Legacy collections are
- * included deliberately: a partially migrated deployment can contain data in
- * both the per-domain and consolidated layouts.
- */
-export const ACCOUNT_SCOPED_COLLECTIONS = [
-  ...ACCOUNT_LEARNING_COLLECTIONS,
-  'lq_sessions',
-  'lq_action_tokens',
-  'lq_challenges',
-  'lq_reset_grants',
-  'lq_oauth_states',
-  'lq_migrations',
-  'lq_state_versions',
-  'lq_deletions',
-] as const;
+// Re-exported for existing callers/tests. The single authoritative list lives
+// in store.ts so deletion and residue cleanup cannot drift apart.
+export { ACCOUNT_DELETION_JOB_COLLECTION, ACCOUNT_SCOPED_COLLECTIONS };
 
 export interface AccountDeletionJob {
   userId: string;
@@ -113,6 +106,15 @@ async function finalizeDeletion(store: DataStore, userId: string): Promise<Accou
     failedCollection: null,
     deletedCounts: {},
   };
+
+  // The account is already marked `deleting` by the caller (or by a resumed
+  // job). Publish the non-PII fence first, then drain every writer that was
+  // admitted while the account was still active. No collection is touched
+  // before this barrier, so an in-flight request either finishes and is swept
+  // or is rejected by the fence.
+  await setAccountDeletionFence(store, userId);
+  await waitForAccountWriters(store, userId);
+
   await setJob(store, userId, {
     status: 'running',
     startedAt: job.startedAt,
@@ -224,7 +226,12 @@ export async function deleteAccountPermanently(store: DataStore, userId: string)
       try {
         const stillThere = await store.accounts.findOne({ userId });
         const job = await store.accountDeletions.findOne({ userId });
-        if (stillThere && !job) {
+        const fenced = await isAccountDeletionFenced(store, userId);
+        // Once the deletion fence/barrier was published, never restore access:
+        // a writer may already have been rejected or a late-write cleanup may
+        // still need to run. Only a failure before any deletion step may undo
+        // the `deleting` mark.
+        if (stillThere && !job && !fenced) {
           await store.accounts.updateOne({ userId, status: 'deleting' }, { $set: { status: 'active', updatedAt: new Date().toISOString() } });
         }
       } catch {

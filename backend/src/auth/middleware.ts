@@ -10,7 +10,7 @@ import {
   verifyCsrf,
   type SessionRecord,
 } from '../auth/sessions.js';
-import { cookieHeader, parseCookies } from '../auth/crypto.js';
+import { cookieHeader, oauthCookieHeader, parseCookies } from '../auth/crypto.js';
 import { env } from '../config/env.js';
 import { httpError } from '../services/userData.js';
 
@@ -30,17 +30,33 @@ export function noStore(_req: Request, res: Response, next: NextFunction): void 
   next();
 }
 
+export const OAUTH_BINDING_MAX_AGE_SEC = 10 * 60;
+
 export function setSessionCookie(res: Response, token: string, maxAgeSec: number): void {
-  res.setHeader('Set-Cookie', cookieHeader(token, maxAgeSec));
+  // append, not setHeader: an OAuth callback may also clear its flow cookie.
+  res.append('Set-Cookie', cookieHeader(token, maxAgeSec));
 }
 
 export function clearSessionCookie(res: Response): void {
-  res.setHeader('Set-Cookie', cookieHeader(null, 0));
+  res.append('Set-Cookie', cookieHeader(null, 0));
 }
 
 export function readSessionToken(req: Request): string | null {
   const cookies = parseCookies(req.headers.cookie);
   return cookies[env.sessionCookieName] ?? null;
+}
+
+export function setOAuthBindingCookie(res: Response, binding: string): void {
+  res.append('Set-Cookie', oauthCookieHeader(binding, OAUTH_BINDING_MAX_AGE_SEC));
+}
+
+export function clearOAuthBindingCookie(res: Response): void {
+  res.append('Set-Cookie', oauthCookieHeader(null, 0));
+}
+
+export function readOAuthBindingCookie(req: Request): string | null {
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies[env.oauthCookieName] ?? null;
 }
 
 export function requireAuth(store: DataStore): RequestHandler {

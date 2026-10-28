@@ -26,6 +26,8 @@ export interface EmailActionTokenRecord {
   targetEmail: string;
   createdAt: string;
   expiresAt: string;
+  /** BSON Date used by the MongoDB TTL index. */
+  expireAt?: Date;
   consumedAt: string | null;
   lastSentAt: string;
 }
@@ -163,6 +165,7 @@ export async function issueEmailActionToken(
       targetEmail: input.targetEmail,
       createdAt: new Date(now).toISOString(),
       expiresAt,
+      expireAt: new Date(expiresAt),
       consumedAt: null,
       lastSentAt: new Date(now).toISOString(),
     };

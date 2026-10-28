@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { DataStore } from '../store.js';
 import { noStore, requireAuth, requireCsrf, requireOnboarded, type AuthedRequest } from '../auth/middleware.js';
 import { http } from '../auth/accounts.js';
+import { withAccountWriteLease } from '../auth/writeLease.js';
 import {
   archivePlaylist, deletePlaylistPermanently, playlistSummary,
 } from '../services/userData.js';
@@ -40,7 +41,11 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
       const id = validId(req.params.playlistId);
       const body = versionSchema.safeParse(req.body);
       if (!body.success) throw http(400, 'A valid data version is required.', 'INVALID_REQUEST');
-      const result = await archivePlaylist(store, req.auth!.userId, id, true, body.data.version);
+      const result = await withAccountWriteLease(
+        store,
+        req.auth!.userId,
+        () => archivePlaylist(store, req.auth!.userId, id, true, body.data.version),
+      );
       res.json({ ok: true, mode: 'archived', ...result });
     } catch (e) {
       next(e);
@@ -52,7 +57,11 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
       const id = validId(req.params.playlistId);
       const body = versionSchema.safeParse(req.body);
       if (!body.success) throw http(400, 'A valid data version is required.', 'INVALID_REQUEST');
-      const result = await archivePlaylist(store, req.auth!.userId, id, false, body.data.version);
+      const result = await withAccountWriteLease(
+        store,
+        req.auth!.userId,
+        () => archivePlaylist(store, req.auth!.userId, id, false, body.data.version),
+      );
       res.json({ ok: true, mode: 'restored', ...result });
     } catch (e) {
       next(e);
@@ -75,8 +84,12 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
         });
         return;
       }
-      const result = await deletePlaylistPermanently(
-        store, req.auth!.userId, id, body.data.version, body.data.confirmTitle,
+      const result = await withAccountWriteLease(
+        store,
+        req.auth!.userId,
+        () => deletePlaylistPermanently(
+          store, req.auth!.userId, id, body.data.version, body.data.confirmTitle,
+        ),
       );
       res.json({ ok: true, mode: 'deleted', ...result });
     } catch (e: any) {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
+import { createSharedRateLimiter } from '../middleware/sharedRateLimit.js';
 import type { DataStore } from '../store.js';
 import { env } from '../config/env.js';
 import type { EmailService } from '../email/brevo.js';
@@ -13,13 +13,14 @@ import {
   isRecentAuth, listSessions, revokeAllSessions, revokeSessionById,
 } from '../auth/sessions.js';
 import {
-  consumeEmailActionToken, invalidateAllEmailActions, invalidateEmailAction, issueEmailActionToken,
-  latestEmailAction,
+  consumeEmailActionToken, inspectEmailActionToken, invalidateAllEmailActions, invalidateEmailAction,
+  issueEmailActionToken, latestEmailAction,
 } from '../auth/actionTokens.js';
 import {
   clearSessionCookie, noStore, requireAuth, requireCsrf, requireOnboarded, requireRecentAuth,
   type AuthedRequest,
 } from '../auth/middleware.js';
+import { withAccountWriteLease } from '../auth/writeLease.js';
 import {
   USER_COLLECTIONS, type UserCollectionName,
 } from '../store.js';
@@ -160,12 +161,12 @@ async function notifyPreviousEmail(
 export function createAccountRouter({ store, email }: AccountRouterDeps): Router {
   const router = Router();
   const auth = requireAuth(store);
-  const emailActionLimiter = rateLimit({
+  // Same scope as the auth router's recovery limiter, so reset and
+  // email-verification attempts share one cross-instance window.
+  const emailActionLimiter = createSharedRateLimiter(store, {
+    scope: 'email-action',
     windowMs: 15 * 60_000,
     max: env.emailActionRateLimitPer15Min,
-    standardHeaders: 'draft-7',
-    legacyHeaders: false,
-    message: { error: 'Too many email verification requests. Wait 15 minutes and try again.' },
   });
 
   /**
@@ -176,34 +177,54 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
   router.post('/email/confirm', emailActionLimiter, noStore, async (req, res, next) => {
     try {
       const body = parseBody(emailConfirmSchema, req.body);
-      const record = await consumeEmailActionToken(store, body.token, 'email_change');
-      if (!record) {
+      const inspected = await inspectEmailActionToken(store, body.token, 'email_change');
+      if (inspected.state !== 'valid' || !inspected.record) {
         throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
       }
-      const account = await findAccountById(store, record.userId);
+      const account = await findAccountById(store, inspected.record.userId);
       if (
         !account
         || account.status !== 'active'
-        || account.emailNormalized !== record.accountEmailNormalized
+        || account.emailNormalized !== inspected.record.accountEmailNormalized
       ) {
         throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
       }
-      let updated: Account;
+      let updated!: Account;
       try {
-        updated = await setAccountEmail(store, account, record.emailNormalized);
+        updated = await withAccountWriteLease(store, account.userId, async () => {
+          const record = await consumeEmailActionToken(store, body.token, 'email_change');
+          if (!record) {
+            throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
+          }
+          const current = await findAccountById(store, record.userId);
+          if (
+            !current
+            || current.status !== 'active'
+            || current.emailNormalized !== record.accountEmailNormalized
+          ) {
+            throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
+          }
+          const changed = await setAccountEmail(store, current, record.emailNormalized);
+          // A verified email change is security-sensitive: every existing
+          // session is revoked and the person must authenticate with the new
+          // address.
+          await revokeAllSessions(store, changed.userId);
+          await invalidateAllEmailActions(store, changed.userId, ['email_change']);
+          await notifyPreviousEmail(email, {
+            to: current.email,
+            subject: 'Your LearnQuest account email was changed',
+            message: `The account email was changed to ${changed.email} on ${new Date().toUTCString()}. All sessions were signed out. If this was not you, reset your password and contact the LearnQuest administrator.`,
+          });
+          return changed;
+        });
       } catch (e: any) {
+        if (e?.code === 'ACCOUNT_UNAVAILABLE') {
+          throw http(400, 'This email verification link is invalid, expired, or already used. Request a new one.', 'INVALID_EMAIL_TOKEN');
+        }
+        if (e?.status === 409) throw e;
         throw e?.status ? e : http(409, 'That email address is unavailable.', 'EMAIL_TAKEN');
       }
-      // A verified email change is security-sensitive: every existing session
-      // is revoked and the person must authenticate with the new address.
-      await revokeAllSessions(store, updated.userId);
-      await invalidateAllEmailActions(store, updated.userId, ['email_change']);
       clearSessionCookie(res);
-      await notifyPreviousEmail(email, {
-        to: account.email,
-        subject: 'Your LearnQuest account email was changed',
-        message: `The account email was changed to ${updated.email} on ${new Date().toUTCString()}. All sessions were signed out. If this was not you, reset your password and contact the LearnQuest administrator.`,
-      });
       res.json({
         ok: true,
         email: updated.email,
@@ -228,10 +249,10 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
   router.patch('/profile', requireCsrf, async (req: AuthedRequest, res, next) => {
     try {
       const body = parseBody(profileSchema, req.body);
-      const updated = await updateProfile(store, req.auth!.account, {
+      const updated = await withAccountWriteLease(store, req.auth!.userId, () => updateProfile(store, req.auth!.account, {
         username: body.username,
         displayName: body.displayName,
-      });
+      }));
       res.json({ user: safeAccount(updated) });
     } catch (e) {
       next(e);
@@ -242,23 +263,26 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     try {
       const body = parseBody(prefsSchema, req.body);
       const account = req.auth!.account;
-      const updated = await updateAccountPreferences(store, account, body);
-      // Mirror timezone/session defaults into the learning preferences record
-      // so every device sees the same values, without discarding reducedMotion.
-      const prefDoc = await store.domainData('prefs').findOne({ userId: account.userId, key: 'singleton' });
-      const current = prefDoc?.value && typeof prefDoc.value === 'object' ? prefDoc.value : {};
-      const nextPrefs = {
-        ...current,
-        ...(body.timezone !== undefined ? { timezone: updated.timezone } : {}),
-        ...(body.sessionLenMin !== undefined ? { sessionLenMin: updated.sessionLenMin } : {}),
-        ...(body.breakMin !== undefined ? { breakMin: updated.breakMin } : {}),
-        ...(body.minViableMin !== undefined ? { minViableMin: updated.minViableMin } : {}),
-      };
-      await store.domainData('prefs').updateOne(
-        { userId: account.userId, key: 'singleton' },
-        { $set: { userId: account.userId, key: 'singleton', value: nextPrefs, updatedAt: new Date().toISOString(), order: 0 } },
-        { upsert: true },
-      );
+      const updated = await withAccountWriteLease(store, account.userId, async () => {
+        const next = await updateAccountPreferences(store, account, body);
+        // Mirror timezone/session defaults into the learning preferences record
+        // so every device sees the same values, without discarding reducedMotion.
+        const prefDoc = await store.domainData('prefs').findOne({ userId: account.userId, key: 'singleton' });
+        const current = prefDoc?.value && typeof prefDoc.value === 'object' ? prefDoc.value : {};
+        const nextPrefs = {
+          ...current,
+          ...(body.timezone !== undefined ? { timezone: next.timezone } : {}),
+          ...(body.sessionLenMin !== undefined ? { sessionLenMin: next.sessionLenMin } : {}),
+          ...(body.breakMin !== undefined ? { breakMin: next.breakMin } : {}),
+          ...(body.minViableMin !== undefined ? { minViableMin: next.minViableMin } : {}),
+        };
+        await store.domainData('prefs').updateOne(
+          { userId: account.userId, key: 'singleton' },
+          { $set: { userId: account.userId, key: 'singleton', value: nextPrefs, updatedAt: new Date().toISOString(), order: 0 } },
+          { upsert: true },
+        );
+        return next;
+      });
       res.json({ user: safeAccount(updated) });
     } catch (e) {
       next(e);
@@ -292,7 +316,11 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
       const name = req.params.collection as UserCollectionName;
       if (!USER_COLLECTIONS.includes(name)) throw http(404, 'Unknown data collection.', 'NOT_FOUND');
       const body = parseBody(collectionSchema, req.body);
-      const saved = await replaceUserCollection(store, req.auth!.userId, name, body.items, body.version);
+      const saved = await withAccountWriteLease(
+        store,
+        req.auth!.userId,
+        () => replaceUserCollection(store, req.auth!.userId, name, body.items, body.version),
+      );
       res.json({ ok: true, ...saved, savedAt: new Date().toISOString() });
     } catch (e) {
       next(e);
@@ -303,9 +331,11 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     try {
       const body = parseBody(importSchema, req.body);
       const raw = extractBackupState(body.backup ?? body.state, body.backup);
-      const current = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
-      const baseVersion = body.version ?? current.version;
-      const result = await replaceAllUserState(store, req.auth!.userId, raw, baseVersion);
+      const result = await withAccountWriteLease(store, req.auth!.userId, async () => {
+        const current = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
+        const baseVersion = body.version ?? current.version;
+        return replaceAllUserState(store, req.auth!.userId, raw, baseVersion);
+      });
       res.json({ ok: true, version: result.version, collections: USER_COLLECTIONS.length });
     } catch (e) {
       next(e);
@@ -321,22 +351,36 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         return;
       }
       const incoming = validateStatePayload(extractBackupState(body.state, undefined));
-      const current = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
-      const merged = mergeMigrationState(current.state, incoming);
-      const baseVersion = body.version ?? current.version;
-      const result = await replaceAllUserState(store, req.auth!.userId, merged.state, baseVersion);
-      const payload = {
-        migratedAt: new Date().toISOString(),
-        fromSchema: (body.state as any)?.schemaVersion ?? (body.state as any)?.version ?? 1,
-        collections: merged.summary,
-      };
-      await store.migrations.insertOne({
-        userId: req.auth!.userId,
-        migrationId: body.migrationId,
-        result: payload,
-        createdAt: new Date().toISOString(),
+      const payload = await withAccountWriteLease(store, req.auth!.userId, async () => {
+        const current = await readUserState(store, req.auth!.userId, stateDefaultsFor(req.auth!.account));
+        const merged = mergeMigrationState(current.state, incoming);
+        const baseVersion = body.version ?? current.version;
+        const summary = {
+          migratedAt: new Date().toISOString(),
+          fromSchema: (body.state as any)?.schemaVersion ?? (body.state as any)?.version ?? 1,
+          collections: merged.summary,
+        };
+        const result = await replaceAllUserState(
+          store,
+          req.auth!.userId,
+          merged.state,
+          baseVersion,
+          {
+            // The idempotency record commits with the data. A crash can never
+            // leave applied data without the marker (or vice versa).
+            afterWrite: async (tx) => {
+              await tx.migrations.insertOne({
+                userId: req.auth!.userId,
+                migrationId: body.migrationId,
+                result: summary,
+                createdAt: new Date().toISOString(),
+              });
+            },
+          },
+        );
+        return { version: result.version, summary };
       });
-      res.json({ ok: true, version: result.version, ...payload });
+      res.json({ ok: true, version: payload.version, ...payload.summary });
     } catch (e) {
       next(e);
     }
@@ -402,24 +446,27 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
       if (latest && Date.now() - Date.parse(latest.createdAt) < env.emailActionResendSec * 1000) {
         throw http(429, `Wait ${env.emailActionResendSec} seconds before requesting another verification link.`, 'EMAIL_ACTION_COOLDOWN');
       }
-      const issued = await issueEmailActionToken(store, {
-        userId: account.userId,
-        purpose: 'email_change',
-        accountEmailNormalized: account.emailNormalized,
-        emailNormalized: normalizeEmail(newEmail),
-        targetEmail: newEmail,
-      });
-      try {
-        await email.sendActionEmail({
-          to: newEmail,
+      const issued = await withAccountWriteLease(store, account.userId, async () => {
+        const token = await issueEmailActionToken(store, {
+          userId: account.userId,
           purpose: 'email_change',
-          actionUrl: issued.actionUrl,
-          expiresInMin: issued.expiresInMin,
+          accountEmailNormalized: account.emailNormalized,
+          emailNormalized: normalizeEmail(newEmail),
+          targetEmail: newEmail,
         });
-      } catch (e) {
-        await invalidateEmailAction(store, issued.tokenId);
-        throw e;
-      }
+        try {
+          await email.sendActionEmail({
+            to: newEmail,
+            purpose: 'email_change',
+            actionUrl: token.actionUrl,
+            expiresInMin: token.expiresInMin,
+          });
+        } catch (e) {
+          await invalidateEmailAction(store, token.tokenId);
+          throw e;
+        }
+        return token;
+      });
       res.status(202).json({
         ok: true,
         email: newEmail,

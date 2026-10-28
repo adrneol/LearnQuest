@@ -67,8 +67,11 @@ export function csrfToken(): string {
   return randomToken(24);
 }
 
-export function cookieHeader(token: string | null, maxAgeSec: number): string {
-  const name = env.sessionCookieName;
+export function cookieHeader(
+  token: string | null,
+  maxAgeSec: number,
+  name: string = env.sessionCookieName,
+): string {
   const age = Math.max(0, Math.floor(maxAgeSec));
   const parts = [
     `${name}=${token ?? ''}`,
@@ -82,6 +85,11 @@ export function cookieHeader(token: string | null, maxAgeSec: number): string {
   ];
   if (env.cookieSecure) parts.push('Secure');
   return parts.join('; ');
+}
+
+/** HttpOnly, short-lived browser binding for one OAuth authorization flow. */
+export function oauthCookieHeader(binding: string | null, maxAgeSec: number): string {
+  return cookieHeader(binding, maxAgeSec, env.oauthCookieName);
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {

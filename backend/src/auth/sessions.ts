@@ -27,6 +27,8 @@ export interface SessionRecord {
   lastSeenAt: string;
   idleExpiresAt: string;
   expiresAt: string;
+  /** BSON Date used by the MongoDB TTL index; `expiresAt` remains the app value. */
+  expireAt?: Date;
   revokedAt: string | null;
   reauthenticatedAt: string;
   userAgent: string;
@@ -85,6 +87,7 @@ export async function createSession(
     lastSeenAt: new Date(now).toISOString(),
     idleExpiresAt: new Date(idle).toISOString(),
     expiresAt: new Date(absolute).toISOString(),
+    expireAt: new Date(absolute),
     revokedAt: null,
     reauthenticatedAt: new Date(now).toISOString(),
     userAgent: (opts?.userAgent ?? '').slice(0, MAX_USER_AGENT),

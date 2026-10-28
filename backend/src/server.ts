@@ -4,6 +4,8 @@ import { closeMongo, getMongoAdapter, mongoTargetDescription } from './db/mongo.
 import { createMongoSupervisor } from './db/mongoSupervisor.js';
 import { createDataStore } from './store.js';
 import { resumePendingAccountDeletions } from './services/accountDeletion.js';
+import { resumeDeletionFences } from './auth/writeLease.js';
+import { purgeExpiredSecurityRecords } from './services/securityMaintenance.js';
 
 const entry = (process.argv[1] ?? '').replace(/\\/g, '/');
 if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
@@ -26,11 +28,29 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
         if (resumed.attempted > 0) {
           console.log(`Account-deletion sweep: attempted=${resumed.attempted} completed=${resumed.completed} failed=${resumed.failed}.`);
         }
+        const fences = await resumeDeletionFences(store);
+        if (fences.scanned > 0) {
+          console.log(`Account-deletion fence sweep: scanned=${fences.scanned} cleaned=${fences.cleaned} removed=${fences.removed}.`);
+        }
+        const expired = await purgeExpiredSecurityRecords(store);
+        const expiredTotal = expired.sessions + expired.actionTokens + expired.oauthStates + expired.rateLimits;
+        if (expiredTotal > 0) {
+          console.log(`Expired security-record sweep: removed=${expiredTotal}.`);
+        }
       } catch {
         console.error('MongoDB is ready but the account-deletion sweep failed. No deletion is reported complete; review pending deletion jobs before the next restart.');
       }
     },
   });
+
+  const maintenanceTimer = setInterval(() => {
+    void purgeExpiredSecurityRecords(store).catch(() => {
+      // Best-effort housekeeping; readiness and request correctness do not
+      // depend on it. The next interval or startup sweep retries.
+    });
+  }, 15 * 60_000);
+  const unrefMaintenance = (maintenanceTimer as { unref?: () => void }).unref;
+  if (typeof unrefMaintenance === 'function') unrefMaintenance.call(maintenanceTimer);
 
   const app = createApp({
     store,
@@ -59,6 +79,7 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`Received ${signal}; closing LearnQuest API.`);
+    clearInterval(maintenanceTimer);
     supervisor.stop();
     server.close(() => {
       void closeMongo().finally(() => process.exit(0));

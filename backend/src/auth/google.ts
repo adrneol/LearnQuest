@@ -21,13 +21,19 @@ export interface GoogleOAuthResult {
 
 export interface GoogleOAuthService {
   readonly configured: boolean;
-  start(intent: GoogleAuthIntent, userId?: string | null): Promise<{ url: string; state: string }>;
-  complete(code: string, state: string): Promise<GoogleOAuthResult>;
+  /**
+   * `browserBinding` is a high-entropy value held only in a short-lived
+   * HttpOnly cookie. Only its SHA-256 digest is stored with the state.
+   */
+  start(intent: GoogleAuthIntent, userId: string | null, browserBinding: string): Promise<{ url: string; state: string }>;
+  complete(code: string, state: string, browserBinding: string): Promise<GoogleOAuthResult>;
 }
 
 interface GoogleStateDoc {
   _id?: unknown;
   stateHash: string;
+  /** Digest of the initiating browser's HttpOnly flow cookie. */
+  browserHash: string;
   nonce: string;
   verifier: string;
   intent: GoogleAuthIntent;
@@ -35,6 +41,8 @@ interface GoogleStateDoc {
   userId?: string;
   createdAt: string;
   expiresAt: string;
+  /** BSON Date used by the MongoDB TTL index. */
+  expireAt?: Date;
   usedAt: string | null;
 }
 
@@ -90,12 +98,15 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
     get configured() {
       return env.googleConfigured;
     },
-    async start(intent, userId) {
+    async start(intent, userId, browserBinding) {
       if (!env.googleConfigured) {
         throw Object.assign(new Error('Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.'), { status: 503, code: 'SETUP_REQUIRED' });
       }
       if (intent !== 'login' && intent !== 'register') {
         throw Object.assign(new Error('Choose whether to sign in or create an account.'), { status: 400, code: 'INVALID_OAUTH_INTENT' });
+      }
+      if (typeof browserBinding !== 'string' || browserBinding.length < 32 || browserBinding.length > 512) {
+        throw Object.assign(new Error('The Google sign-in browser binding is missing. Start again.'), { status: 400, code: 'INVALID_OAUTH_BINDING' });
       }
       const state = randomToken(32);
       const nonce = randomToken(24);
@@ -103,12 +114,14 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
       const now = Date.now();
       const doc: GoogleStateDoc = {
         stateHash: sha256(state),
+        browserHash: sha256(browserBinding),
         nonce,
         verifier,
         intent,
         ...(userId ? { userId } : {}),
         createdAt: new Date(now).toISOString(),
         expiresAt: new Date(now + 10 * 60_000).toISOString(),
+        expireAt: new Date(now + 10 * 60_000),
         usedAt: null,
       };
       await store.oauthStates.insertOne(doc);
@@ -125,17 +138,24 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
       });
       return { url: `${GOOGLE_AUTH_URL}?${params.toString()}`, state };
     },
-    async complete(code, state) {
+    async complete(code, state, browserBinding) {
       if (!env.googleConfigured) {
         throw Object.assign(new Error('Google sign-in is not configured.'), { status: 503, code: 'SETUP_REQUIRED' });
       }
-      if (!code || !state || code.length > 4096 || state.length > 512) {
+      if (!code || !state || !browserBinding || code.length > 4096 || state.length > 512 || browserBinding.length > 512) {
         throw Object.assign(new Error('The Google sign-in response is incomplete.'), { status: 400, code: 'INVALID_OAUTH_CALLBACK' });
       }
       const now = new Date().toISOString();
-      // Single-use state: consume atomically before exchanging the code.
+      // Single-use state: consume atomically before exchanging the code. The
+      // state is valid only in the browser that received the binding cookie;
+      // a state copied to another browser cannot match the stored digest.
       const record = await store.oauthStates.findOneAndUpdate(
-        { stateHash: sha256(state), usedAt: null, expiresAt: { $gt: now } },
+        {
+          stateHash: sha256(state),
+          browserHash: sha256(browserBinding),
+          usedAt: null,
+          expiresAt: { $gt: now },
+        },
         { $set: { usedAt: now } },
       ) as GoogleStateDoc | null;
       if (!record) {

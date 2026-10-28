@@ -33,8 +33,16 @@ function intEnvAlias(name: string, legacyName: string, fallback: number, min: nu
   return n;
 }
 
+function nodeEnvValue(): 'development' | 'test' | 'production' {
+  const value = stringEnv('NODE_ENV', 'development');
+  if (value !== 'development' && value !== 'test' && value !== 'production') {
+    throw new Error('NODE_ENV must be exactly "development", "test", or "production" (received an invalid value).');
+  }
+  return value;
+}
+
 function productionRuntime(): boolean {
-  return stringEnv('NODE_ENV', 'development') === 'production';
+  return nodeEnvValue() === 'production';
 }
 
 /**
@@ -99,8 +107,7 @@ function secretEnv(name: string): string {
 
 export const env = {
   get nodeEnv(): 'development' | 'test' | 'production' {
-    const v = stringEnv('NODE_ENV', 'development');
-    return v === 'production' || v === 'test' ? v : 'development';
+    return nodeEnvValue();
   },
   get isProduction(): boolean {
     return this.nodeEnv === 'production';
@@ -125,11 +132,32 @@ export const env = {
     }
     const merged = [...new Set([this.appOrigin, ...origins])];
     for (const o of merged) {
+      let u: URL;
       try {
-        const u = new URL(o);
-        if (u.pathname !== '/' || u.search || u.hash) throw new Error('origin only');
+        u = new URL(o);
       } catch {
         throw new Error('CORS_ORIGIN contains an invalid origin. Use comma-separated absolute origins.');
+      }
+      if (u.pathname !== '/' || u.search || u.hash) {
+        throw new Error('CORS_ORIGIN contains an invalid origin. Use comma-separated absolute origins without paths, queries, or fragments.');
+      }
+      if (u.username || u.password) {
+        throw new Error('CORS_ORIGIN must not contain credentials.');
+      }
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        throw new Error('CORS_ORIGIN must use http or https.');
+      }
+      // APP_ORIGIN is validated separately, but an extra CORS origin must not
+      // reintroduce a development-only or plain-text origin into production.
+      // Without this check a production deployment could silently allow a
+      // localhost or HTTP origin that bypasses the same-origin cookie model.
+      if (this.isProduction) {
+        if (u.protocol !== 'https:') {
+          throw new Error('CORS_ORIGIN must use https in production.');
+        }
+        if (isLocalOrPrivateHost(u.hostname)) {
+          throw new Error('CORS_ORIGIN must contain only public origins in production, never localhost, a private IP, or an internal host.');
+        }
       }
     }
     return merged;
@@ -259,6 +287,10 @@ export const env = {
   get sessionCookieName(): string {
     return this.isProduction ? '__Host-lq_session' : 'lq_session';
   },
+  /** Short-lived browser binding for a Google authorization flow. */
+  get oauthCookieName(): string {
+    return this.isProduction ? '__Host-lq_oauth' : 'lq_oauth';
+  },
   get cookieSecure(): boolean {
     return this.isProduction;
   },
@@ -345,7 +377,15 @@ export function configStatus(): PublicConfigStatus {
  * may run in a clearly identified setup-required state; production may not.
  */
 export function assertProductionConfig(): void {
-  if (!env.isProduction) return;
+  if (!env.isProduction) {
+    // Render sets RENDER=true and normally injects NODE_ENV=production. A
+    // dashboard override to development/test must not silently disable the
+    // production cookie and origin checks on a public Render service.
+    if (stringEnv('RENDER') === 'true') {
+      throw new Error('NODE_ENV must be production when running on Render; refusing to start in a non-production mode.');
+    }
+    return;
+  }
   const problems: string[] = [];
   const capture = <T>(read: () => T): T | null => {
     try {
@@ -367,6 +407,9 @@ export function assertProductionConfig(): void {
   const appOrigin = capture(() => env.appOrigin);
   const apiOrigin = capture(() => env.apiOrigin);
   const redirectUri = capture(() => env.googleRedirectUri);
+  // Validate the complete CORS allowlist at startup. Otherwise an invalid
+  // extra origin would only fail when createApp() first reads it.
+  capture(() => env.corsOrigin);
   if (appOrigin && !appOrigin.startsWith('https://')) {
     problems.push('APP_ORIGIN must use https in production.');
   }

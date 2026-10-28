@@ -21,7 +21,7 @@ const PRODUCTION_ENV: Record<string, string> = {
   EMAIL_ACTION_RESEND_SEC: '60',
 };
 const saved: Record<string, string | undefined> = {};
-const KEYS = [...Object.keys(PRODUCTION_ENV), 'OTP_TTL_MIN', 'OTP_HMAC_SECRET'];
+const KEYS = [...Object.keys(PRODUCTION_ENV), 'OTP_TTL_MIN', 'OTP_HMAC_SECRET', 'RENDER'];
 for (const key of KEYS) saved[key] = process.env[key];
 
 function restore(key: string): void {
@@ -33,6 +33,7 @@ beforeEach(() => {
   for (const [key, value] of Object.entries(PRODUCTION_ENV)) process.env[key] = value;
   delete process.env.OTP_TTL_MIN;
   delete process.env.OTP_HMAC_SECRET;
+  delete process.env.RENDER;
 });
 
 afterEach(() => {
@@ -93,6 +94,38 @@ describe('APP_ORIGIN configuration and action-link construction', () => {
     expect(() => env.appOrigin).toThrow(/public origin/i);
     process.env.APP_ORIGIN = 'https://app.internal';
     expect(() => env.appOrigin).toThrow(/public origin/i);
+  });
+
+  it('rejects an unrecognized NODE_ENV instead of silently using development defaults', () => {
+    process.env.NODE_ENV = 'prod';
+    expect(() => env.nodeEnv).toThrow(/NODE_ENV must be exactly/i);
+    expect(() => assertProductionConfig()).toThrow(/NODE_ENV must be exactly/i);
+  });
+
+  it('refuses to run a Render service in a non-production NODE_ENV', () => {
+    process.env.NODE_ENV = 'development';
+    process.env.RENDER = 'true';
+    expect(() => assertProductionConfig()).toThrow(/NODE_ENV must be production when running on Render/i);
+  });
+
+  it('fails closed for insecure, local, or credentialed extra CORS origins in production', () => {
+    for (const value of [
+      'http://localhost:5173',
+      'https://127.0.0.1:5173',
+      'https://learn-quest-one.vercel.app/reset-password',
+      'https://user:secret@learn-quest-one.vercel.app',
+      'file://learn-quest-one.vercel.app',
+    ]) {
+      process.env.CORS_ORIGIN = value;
+      expect(() => env.corsOrigin, value).toThrow(/CORS_ORIGIN/);
+      expect(() => assertProductionConfig(), value).toThrow(/CORS_ORIGIN/);
+    }
+    process.env.CORS_ORIGIN = 'https://learn-quest-one.vercel.app,https://admin.example.test';
+    expect(env.corsOrigin).toEqual(expect.arrayContaining([
+      'https://learn-quest-one.vercel.app',
+      'https://admin.example.test',
+    ]));
+    expect(() => assertProductionConfig()).not.toThrow();
   });
 
   it('rejects invalid URLs, unapproved schemes, credentials, and non-origin paths', () => {

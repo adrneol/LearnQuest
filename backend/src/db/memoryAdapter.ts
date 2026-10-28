@@ -58,7 +58,7 @@ class MemoryCollection implements CollectionAdapter {
     const idx = this.docs.findIndex((d) => matchesQuery(d, query));
     if (idx < 0) {
       if (!opts?.upsert) return { matchedCount: 0, modifiedCount: 0 };
-      const base = applyUpdate({ ...query }, update);
+      const base = applyUpdate({ ...query }, update, true);
       const copy = structuredClone({ _id: randomUUID(), ...base });
       this.docs.push(copy);
       return { matchedCount: 0, modifiedCount: 0 };
@@ -72,7 +72,7 @@ class MemoryCollection implements CollectionAdapter {
     const idx = this.docs.findIndex((d) => matchesQuery(d, query));
     if (idx < 0) {
       if (!opts?.upsert) return null;
-      const base = applyUpdate({ ...query }, update);
+      const base = applyUpdate({ ...query }, update, true);
       const copy = structuredClone({ _id: randomUUID(), ...base });
       this.docs.push(copy);
       return structuredClone(copy);
@@ -101,7 +101,7 @@ class MemoryCollection implements CollectionAdapter {
 
 export function createMemoryDb(): DbAdapter {
   const collections = new Map<string, CollectionAdapter>();
-  return {
+  const adapter: DbAdapter = {
     collection(name: string): CollectionAdapter {
       let c = collections.get(name);
       if (!c) {
@@ -110,6 +110,38 @@ export function createMemoryDb(): DbAdapter {
       }
       return c;
     },
+    async transaction<T>(fn: (tx: DbAdapter) => Promise<T>): Promise<T> {
+      // Test equivalent of a MongoDB transaction: snapshot every collection,
+      // run the callback against the same adapter, and restore the snapshot if
+      // anything throws. This makes failure-path tests meaningful instead of
+      // relying on a best-effort application-level rollback.
+      const namesBefore = new Set(collections.keys());
+      const snapshot = new Map<string, Doc[]>();
+      for (const [name, collection] of collections) {
+        snapshot.set(name, await collection.find({}));
+      }
+      const transactionAdapter: DbAdapter = {
+        collection: (name: string) => adapter.collection(name),
+        dropCollection: (name: string) => adapter.dropCollection!(name),
+        close: () => adapter.close!(),
+      };
+      try {
+        return await fn(transactionAdapter);
+      } catch (error) {
+        for (const name of [...collections.keys()]) {
+          if (!namesBefore.has(name)) {
+            collections.delete(name);
+            continue;
+          }
+          const collection = collections.get(name);
+          const docs = snapshot.get(name) ?? [];
+          if (!collection) continue;
+          await collection.deleteMany({});
+          for (const doc of docs) await collection.insertOne(doc);
+        }
+        throw error;
+      }
+    },
     async dropCollection(name: string) {
       collections.delete(name);
     },
@@ -117,4 +149,5 @@ export function createMemoryDb(): DbAdapter {
       collections.clear();
     },
   };
+  return adapter;
 }

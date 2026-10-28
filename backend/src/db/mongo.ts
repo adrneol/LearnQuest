@@ -1,16 +1,25 @@
-import { MongoClient, type Db, type Collection, type Filter, type Document } from 'mongodb';
+import {
+  MongoClient, type ClientSession, type Db, type Collection, type Filter, type Document,
+} from 'mongodb';
 import { env } from '../config/env.js';
 import type { CollectionAdapter, DbAdapter, Doc, FindOptions, UpdateResult } from './adapter.js';
 
 class MongoCollection implements CollectionAdapter {
-  constructor(private readonly c: Collection<Document>) {}
+  constructor(
+    private readonly c: Collection<Document>,
+    private readonly session?: ClientSession,
+  ) {}
+
+  private options(): { session?: ClientSession } {
+    return this.session ? { session: this.session } : {};
+  }
 
   async findOne(query: Doc): Promise<Doc | null> {
-    return (await this.c.findOne(query as Filter<Document>)) as Doc | null;
+    return (await this.c.findOne(query as Filter<Document>, this.options())) as Doc | null;
   }
 
   async find(query: Doc, opts?: FindOptions): Promise<Doc[]> {
-    let cursor = this.c.find(query as Filter<Document>);
+    let cursor = this.c.find(query as Filter<Document>, this.options());
     if (opts?.sort) cursor = cursor.sort(opts.sort);
     if (opts?.skip) cursor = cursor.skip(opts.skip);
     if (opts?.limit !== undefined) cursor = cursor.limit(opts.limit);
@@ -18,12 +27,15 @@ class MongoCollection implements CollectionAdapter {
   }
 
   async insertOne(doc: Doc): Promise<Doc> {
-    const r = await this.c.insertOne(doc as Document);
+    const r = await this.c.insertOne(doc as Document, this.options());
     return { ...doc, _id: r.insertedId };
   }
 
   async updateOne(query: Doc, update: Doc, opts?: { upsert?: boolean }): Promise<UpdateResult> {
-    const r = await this.c.updateOne(query as Filter<Document>, update as Document, { upsert: Boolean(opts?.upsert) });
+    const r = await this.c.updateOne(query as Filter<Document>, update as Document, {
+      upsert: Boolean(opts?.upsert),
+      ...this.options(),
+    });
     return { matchedCount: r.matchedCount, modifiedCount: r.modifiedCount };
   }
 
@@ -31,26 +43,27 @@ class MongoCollection implements CollectionAdapter {
     return (await this.c.findOneAndUpdate(query as Filter<Document>, update as Document, {
       upsert: Boolean(opts?.upsert),
       returnDocument: 'after',
+      ...this.options(),
     })) as Doc | null;
   }
 
   async deleteOne(query: Doc): Promise<number> {
-    return (await this.c.deleteOne(query as Filter<Document>)).deletedCount ?? 0;
+    return (await this.c.deleteOne(query as Filter<Document>, this.options())).deletedCount ?? 0;
   }
 
   async deleteMany(query: Doc): Promise<number> {
-    return (await this.c.deleteMany(query as Filter<Document>)).deletedCount ?? 0;
+    return (await this.c.deleteMany(query as Filter<Document>, this.options())).deletedCount ?? 0;
   }
 
   async count(query: Doc): Promise<number> {
-    return this.c.countDocuments(query as Filter<Document>);
+    return this.c.countDocuments(query as Filter<Document>, this.options());
   }
 }
 
-export function createMongoAdapter(db: Db): DbAdapter {
+export function createMongoAdapter(db: Db, session?: ClientSession): DbAdapter {
   return {
     collection(name: string): CollectionAdapter {
-      return new MongoCollection(db.collection(name));
+      return new MongoCollection(db.collection(name), session);
     },
     async dropCollection(name: string): Promise<void> {
       try {
@@ -150,20 +163,33 @@ async function ensureIndexes(db: Db): Promise<void> {
     db.collection('lq_sessions').createIndex({ tokenHash: 1 }, { unique: true }),
     db.collection('lq_sessions').createIndex({ userId: 1, revokedAt: 1 }),
     db.collection('lq_sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    // MongoDB TTL indexes only expire real BSON dates. New documents carry a
+    // Date `expireAt`; the legacy string `expiresAt` remains for application
+    // comparisons and is purged by the maintenance sweep.
+    db.collection('lq_sessions').createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'session_expire_at_ttl' }),
     // Legacy lq_challenges / lq_reset_grants documents are intentionally left
     // untouched for a non-destructive rollout. New email action links use the
     // collection below and never write numeric codes or reset grants.
     db.collection('lq_action_tokens').createIndex({ tokenHash: 1 }, { unique: true }),
     db.collection('lq_action_tokens').createIndex({ userId: 1, purpose: 1, consumedAt: 1 }),
     db.collection('lq_action_tokens').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('lq_action_tokens').createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'action_token_expire_at_ttl' }),
     db.collection('lq_oauth_states').createIndex({ stateHash: 1 }, { unique: true }),
     db.collection('lq_oauth_states').createIndex({ userId: 1 }, { sparse: true }),
     db.collection('lq_oauth_states').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('lq_oauth_states').createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'oauth_state_expire_at_ttl' }),
     db.collection('lq_deletions').createIndex({ userId: 1, playlistId: 1 }, { unique: true }),
     // One resumable deletion saga per account. The document is removed after
     // successful verification, so it never becomes a permanent account index.
     db.collection('lq_account_deletions').createIndex({ userId: 1 }, { unique: true }),
     db.collection('lq_account_deletions').createIndex({ status: 1, updatedAt: 1 }),
+    // Non-PII anti-resurrection fence. TTL expiry is the only cleanup path
+    // after a verified deletion; the startup sweep also removes residue.
+    db.collection('lq_account_fences').createIndex({ userId: 1 }, { unique: true }),
+    db.collection('lq_account_fences').createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'account_fence_expire_at_ttl' }),
+    // Shared atomic security-endpoint counters. Keys are hashed; no raw IP or
+    // account identifier is stored.
+    db.collection('lq_rate_limits').createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'rate_limit_expire_at_ttl' }),
     db.collection('lq_migrations').createIndex({ userId: 1, migrationId: 1 }, { unique: true }),
     db.collection('lq_state_versions').createIndex({ userId: 1 }, { unique: true }),
     // Consolidated learning-data target. Its repository cutover is selected
@@ -303,6 +329,19 @@ function createLazyMongoAdapter(getDb: () => Promise<Db>): DbAdapter {
         },
       } satisfies CollectionAdapter;
       return lazy;
+    },
+    async transaction<T>(fn: (tx: DbAdapter) => Promise<T>): Promise<T> {
+      const db = await getDb();
+      const session = db.client.startSession();
+      try {
+        let result!: T;
+        await session.withTransaction(async () => {
+          result = await fn(createMongoAdapter(db, session));
+        });
+        return result;
+      } finally {
+        await session.endSession().catch(() => undefined);
+      }
     },
     async dropCollection(name: string) {
       try {

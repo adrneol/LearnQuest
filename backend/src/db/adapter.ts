@@ -34,6 +34,14 @@ export interface CollectionAdapter {
 
 export interface DbAdapter {
   collection(name: string): CollectionAdapter;
+  /**
+   * Run a set of operations atomically when the backend supports it. MongoDB
+   * uses a multi-document transaction; the in-memory test adapter snapshots and
+   * restores its collections. Callers must not treat this as optional for
+   * destructive multi-collection imports unless they can prove an equivalent
+   * staged recovery protocol.
+   */
+  transaction?<T>(fn: (adapter: DbAdapter) => Promise<T>): Promise<T>;
   /** Optional destructive maintenance capability used only by the explicit retirement CLI. */
   dropCollection?(name: string): Promise<void>;
   close?(): Promise<void>;
@@ -73,10 +81,11 @@ export function matchesQuery(doc: Doc, query: Doc): boolean {
   return true;
 }
 
-export function applyUpdate(doc: Doc, update: Doc): Doc {
+export function applyUpdate(doc: Doc, update: Doc, inserting = false): Doc {
   const set = isOperatorObject(update.$set) ? update.$set : update;
   const inc = isOperatorObject(update.$inc) ? update.$inc : null;
-  const next: Doc = { ...doc, ...set };
+  const setOnInsert = inserting && isOperatorObject(update.$setOnInsert) ? update.$setOnInsert : null;
+  const next: Doc = { ...doc, ...set, ...(setOnInsert ?? {}) };
   if (inc) {
     for (const [key, amount] of Object.entries(inc)) {
       next[key] = (typeof next[key] === 'number' ? next[key] : 0) + Number(amount);
