@@ -23,6 +23,11 @@ describe('production proxy and runtime configuration', () => {
 
   it('pins the public Vercel origin, callback, API origin, and two proxy hops in render.yaml', () => {
     const yaml = readFileSync(resolve(root, 'render.yaml'), 'utf8');
+    // NODE_ENV=production causes npm to omit devDependencies. The Render build
+    // must explicitly include them because TypeScript and @types/* are needed.
+    expect(yaml).toMatch(/rootDir:\s*backend/);
+    expect(yaml).toMatch(/buildCommand:\s*npm ci --include=dev && npm run build/);
+    expect(yaml).toMatch(/startCommand:\s*npm run start/);
     expect(yaml).toContain('APP_ORIGIN');
     expect(yaml).toMatch(/key:\s*APP_ORIGIN\s*\n\s*value:\s*https:\/\/learn-quest-one\.vercel\.app/);
     expect(yaml).toMatch(/key:\s*NODE_ENV\s*\n\s*value:\s*production/);

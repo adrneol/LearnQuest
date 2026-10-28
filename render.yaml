@@ -3,7 +3,10 @@ services:
     name: learnquest-api
     runtime: node
     rootDir: backend
-    buildCommand: npm ci && npm run build
+    # NODE_ENV=production makes npm omit devDependencies by default. The
+    # TypeScript compiler and @types/* packages are build-only dependencies,
+    # so they must be installed explicitly or `npm run build` cannot run.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run start
     # Liveness only. /api/ready reports MongoDB readiness separately; pointing
     # Render's health check at readiness would restart a live service during a

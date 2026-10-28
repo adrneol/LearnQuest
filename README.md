@@ -212,7 +212,9 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Production deployment
 
 - **Backend → Render** via `render.yaml`: service root `backend/`,
-  build `npm ci && npm run build`, start `npm run start`.
+  build `npm ci --include=dev && npm run build`, start `npm run start`.
+  The explicit `--include=dev` is required because `NODE_ENV=production`
+  makes npm omit the TypeScript compiler and `@types/*` build dependencies.
   `render.yaml` requests Node `24.22.1`; `backend/.node-version` and
   `backend/package.json#engines` pin the same patched 24 LTS line.
   **Render Dashboard caveat:** a dashboard-level `NODE_VERSION` environment

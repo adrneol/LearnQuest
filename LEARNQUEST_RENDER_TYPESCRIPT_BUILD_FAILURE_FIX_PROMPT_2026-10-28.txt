@@ -1,0 +1,138 @@
+﻿# LEARNQUEST — RENDER TYPESCRIPT BUILD FAILURE REPAIR
+
+Repository: E:\progressGameTracker
+Latest audit: docs/user-doc/audit2/19_LEARNQUEST_FINAL_RELEASE_REMEDIATION_ENV_AUDIT_2026-10-28.md
+
+## Objective
+
+Fix the current Render build failure after NODE_ENV was correctly set to production.
+
+Render logs show TypeScript errors including:
+- Cannot find name 'process'
+- Cannot find name 'Buffer'
+- Missing Node.js type definitions
+- Implicit-any route parameters in backend/src/routes/playlists.ts
+- Request properties such as params and body apparently missing from AuthenticatedRequest
+- Additional errors in MongoDB diagnostic, migration, inspection, and server scripts.
+
+Do not change production NODE_ENV back to development. Do not remove security validation.
+
+## Execution policy
+
+Use opencode/deepseek-v4.1-flash-free#max wherever supported. Do not claim maximum effort was active if it cannot be confirmed.
+
+Inspect the working tree, all current diffs, Report 19, backend/package.json, all lockfiles, tsconfig files, render.yaml, and the actual Render build/start commands before editing.
+
+Preserve every existing change and credential. Never print secrets or database URIs. Do not commit, push, deploy, reset, clean, stash, switch branches, or modify production dashboard values.
+
+## Phase 1 — Identify the actual root cause
+
+Determine the configured Render root directory, build command, start command, package manager, and lockfile.
+
+Verify whether setting NODE_ENV=production causes the current installation command to omit development dependencies required for TypeScript compilation.
+
+Inspect whether @types/node, TypeScript, Express type definitions, and any required middleware type packages are present in the correct package.json and lockfile.
+
+Check tsconfig settings, especially any explicit types/typeRoots overrides and whether the compilation includes scripts under src.
+
+Do not assume every error has the same cause. Reproduce the actual build failure with a clean, reproducible install and the relevant production build environment.
+
+## Phase 2 — Fix dependency installation correctly
+
+Ensure the Render build installs every dependency required to compile the application, even when NODE_ENV=production.
+
+If devDependencies are being omitted during the build, correct the install/build configuration. For npm, consider the supported `npm ci --include=dev` pattern at the correct monorepo/package location.
+
+Follow the repository's actual workspace and lockfile layout. Do not invent a root or backend lockfile.
+
+Ensure TypeScript and required @types packages exist in the appropriate devDependencies, using compatible versions and updating the correct lockfile when needed.
+
+The runtime should still start the compiled dist/server.js using production dependencies and NODE_ENV=production.
+
+Do not blindly prune or remove dependencies unless the build/start layout proves it safe.
+
+## Phase 3 — Correct the genuine TypeScript errors
+
+After dependency resolution is fixed, rerun the build and inspect all remaining errors.
+
+For backend/src/routes/playlists.ts:
+- Inspect the route handlers and middleware declarations.
+- Restore correct Express request, response, and next-function typing.
+- Ensure AuthenticatedRequest correctly extends or narrows the actual Express Request type while retaining the authenticated-user contract.
+- Type route params, query, body, and middleware parameters from the real schemas.
+- Preserve runtime input validation and authorization.
+- Do not fix these errors by adding `any`, @ts-ignore, broad type assertions, or disabling strict TypeScript checks.
+
+For process and Buffer errors:
+- Verify Node.js type packages and tsconfig configuration.
+- Preserve existing compiler strictness and package engine requirements.
+- Do not exclude scripts merely to hide errors. If operational scripts legitimately need a separate build configuration, establish that explicitly and keep their types checked in a separate validation step.
+
+Do not rename public API fields or change runtime route behavior just to satisfy TypeScript.
+
+## Phase 4 — Validate the build like Render
+
+Run the exact intended installation and build steps locally using the current supported Node.js 24 LTS runtime.
+
+Keep NODE_ENV=production for the production-build verification.
+
+Run:
+1. Clean dependency installation using the actual lockfile.
+2. Backend typecheck.
+3. Backend lint.
+4. Backend test suite.
+5. Backend production build.
+6. Frontend typecheck, lint, tests, and build if configuration changes affect it.
+7. npm audit for the affected packages.
+8. git diff --check.
+9. A safe compiled-server/startup smoke test using test configuration only.
+
+Ensure the compiled entry point exists and matches Render's configured start command.
+
+Do not use production credentials or perform destructive database operations during smoke tests.
+
+Do not weaken or skip tests. Report fresh pass/fail counts and the exact commands that succeeded.
+
+## Phase 5 — Prepare the exact Render settings
+
+Inspect render.yaml and the actual service configuration documented in the repository.
+
+Provide the exact correct values for:
+- Root Directory
+- Build Command
+- Start Command
+- NODE_ENV
+- NODE_VERSION, based on the verified supported Node.js baseline.
+
+If the service root is `backend`, determine whether commands should be run directly from that directory or whether the root repository path requires explicit `cd backend`.
+
+Do not blindly copy a command without checking the package layout.
+
+Keep NODE_ENV=production. Render supplies PORT, so do not introduce an arbitrary production PORT override.
+
+If a dashboard override supersedes render.yaml, explain the manual change required. Do not change dashboard settings automatically.
+
+## Phase 6 — Report
+
+Create exactly one new report:
+
+docs/user-doc/audit2/20_LEARNQUEST_RENDER_TYPESCRIPT_BUILD_FAILURE_REMEDIATION_2026-10-28.md
+
+If Report 20 already exists, inspect and continue it rather than creating a duplicate.
+
+Update docs/user-doc/audit2/README.md in place.
+
+Do not create any other summary or progress Markdown files.
+
+Include:
+- The demonstrated root cause.
+- Every changed file and reason.
+- Dependency and lockfile changes.
+- Exact verified Render build/start settings.
+- Typecheck, lint, test, build, and audit results.
+- Any remaining deployment or owner-side blockers.
+- Final Git status.
+
+Clearly distinguish a successful local build from a successful production deployment.
+
+Begin by inspecting the current failed build and repository. Fix the causes, reproduce the successful production build, and finish the report. Do not stop after an analysis plan.
