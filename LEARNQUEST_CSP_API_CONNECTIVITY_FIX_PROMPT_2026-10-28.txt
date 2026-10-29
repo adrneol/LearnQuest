@@ -1,0 +1,181 @@
+﻿# LEARNQUEST — PRODUCTION CSP/API CONNECTIVITY REPAIR
+
+Use maximum reasoning effort with opencode/deepseek-v4.1-flash-free#max wherever supported.
+
+## Confirmed failure
+
+The production browser console shows:
+
+- Fetch API cannot load https://learnquest-hhiv.onrender.com/...
+- Refused to connect because it violates the document Content Security Policy.
+- The active CSP connect-src directive is 'self'.
+
+Both https://learn-quest-one.vercel.app/api/health and
+https://learnquest-hhiv.onrender.com/api/health currently return healthy responses.
+Both /api/auth/config endpoints also report setupRequired=false.
+
+The frontend is nevertheless attempting direct browser requests to Render.
+Investigate and fix that mismatch.
+
+## Objective
+
+Make LearnQuest account authentication and all account-data operations work
+through the intended Vercel-to-Render proxy in production and remain functional
+during local development.
+
+## Rules
+
+Read the latest audit reports, current Git status, existing diffs, frontend
+API client, environment files/schema, Vercel configuration, Vite configuration,
+CSP/header configuration, and Render deployment configuration first.
+
+Preserve all existing changes and secrets. Never print .env values.
+
+Do not commit, push, deploy, reset, clean, stash, or switch branches.
+Do not change MongoDB credentials, production database contents, Brevo
+credentials, NODE_ENV, session secrets, or unrelated authentication policies.
+Do not weaken CSP broadly or disable security checks.
+
+## 1. Fix the actual frontend API destination
+
+Trace the exact source of the Render URL in the production bundle.
+
+Inspect:
+- VITE_API_BASE_URL and every other frontend API-origin setting.
+- The shared API client and all direct fetch/axios calls.
+- Authentication, session restoration, account data, profile, settings,
+  learning data, playlists, progress, goals, checkpoints, focus, analytics,
+  deletion, and import/export endpoints.
+- Any hardcoded Render hostname or origin fallback.
+- URL joining and /api prefix behavior.
+
+In production, browser API calls should use relative same-origin /api paths,
+for example /api/health and /api/auth/config, with the existing Vercel rewrite
+proxying them to the Render backend.
+
+Do not leave direct browser-to-Render requests in the built frontend unless
+a specific, documented endpoint genuinely requires them.
+
+Ensure paths are joined correctly without losing /api or producing /api/api.
+
+Do not hardcode production origins in the client bundle.
+
+## 2. Verify Vercel rewrites
+
+Inspect the existing frontend/vercel.json and the actual deployment layout.
+
+Verify that all required /api/* requests, including authentication callbacks,
+session/configuration requests, account APIs, and learning-data routes, reach
+the corresponding Render backend path correctly.
+
+Preserve the existing Vercel frontend and Render backend architecture.
+Avoid rewrite loops or redirecting API paths to the SPA index.html.
+
+Use the existing healthy /api/health proxy as a starting reference, but prove
+that non-health API routes work too.
+
+If the rewrite is already correct, do not rewrite it needlessly.
+
+## 3. Keep local development working
+
+Inspect the Vite development server configuration.
+
+If frontend requests are switched to relative /api paths, configure or verify
+a development proxy from the Vite server to the local backend at
+http://localhost:3001, preserving the exact API path.
+
+Local development must continue to use:
+- Frontend: http://localhost:5173
+- Backend: http://localhost:3001
+
+Do not copy production environment values into the local .env.
+
+Keep the existing Google OAuth local callback supported. Do not break Google
+sign-in or password authentication while changing the API base URL.
+
+## 4. CSP and security
+
+Keep a strict same-origin connect-src policy if all required browser API
+requests can use the same-origin /api proxy.
+
+Do not add '*' or arbitrary origins to connect-src.
+
+Only add other trusted origins if the actual feature set proves they are
+required, with a documented justification.
+
+Inspect CSP delivery through Vercel response headers and any HTML meta policy.
+Check whether multiple CSP policies are present and whether an older policy
+continues to block requests.
+
+Do not remove the existing CSP, weaken script-src, or add unsafe-eval to
+silence a warning.
+
+Ensure OAuth redirects, session cookies, CSRF protection, and authenticated
+account requests remain compatible with the proxy.
+
+Keep credentials included where the actual session API contract requires them.
+Do not expose session tokens to JavaScript or localStorage.
+
+## 5. Add regression coverage
+
+Add/update tests proving that:
+
+- The production frontend API client uses same-origin /api paths.
+- It does not build direct browser API URLs using the Render hostname.
+- The Vercel rewrite forwards API paths correctly.
+- Local development uses the local backend proxy.
+- URL composition does not double-prefix /api.
+- Auth/session requests preserve the required credentials and CSRF behavior.
+- Failed requests are handled properly without false cloud-save success.
+- A CSP with connect-src 'self' is compatible with the selected API architecture.
+
+Run the existing tests, typechecks, lints, production builds, and relevant
+security tests. Do not weaken assertions or skip tests.
+
+Inspect the built frontend assets to confirm the old direct Render API URL is
+not embedded as the browser API base. The Render origin may still correctly
+appear in server-side deployment configuration such as vercel.json.
+
+## 6. Verify the exact cause after the fix
+
+If local/browser test automation is available, exercise:
+- /api/health through Vercel.
+- /api/auth/config through Vercel.
+- Session restoration.
+- Authenticated account-data loading.
+- A non-destructive learning-data read.
+- Password sign-in and Google sign-in initiation.
+- The existing CSP and cookie/CSRF behavior.
+
+If live browser testing is unavailable, report the exact owner-side browser
+checks required after deployment.
+
+Do not claim that browser CSP behavior is verified solely by unit tests.
+
+## 7. Report and output limits
+
+Create exactly one new report:
+
+docs/user-doc/audit2/21_LEARNQUEST_CSP_API_CONNECTIVITY_REPAIR_2026-10-28.md
+
+If that report already exists, inspect and continue it instead of duplicating it.
+
+Update docs/user-doc/audit2/README.md in place.
+
+Do not create separate progress reports or extra audit files.
+
+Document:
+- The exact root cause.
+- All source/config files changed.
+- The corrected API-routing design.
+- CSP decisions and why the policy remains secure.
+- Local and production proxy behavior.
+- Fresh test/build results.
+- Remaining production verification steps.
+- Final Git status.
+
+Do not commit, push, or deploy. Preserve the work for owner review.
+
+Begin by inspecting the current code and the specific CSP error, fix the
+root cause rather than suppressing the symptom, run the checks, and finish
+the report.

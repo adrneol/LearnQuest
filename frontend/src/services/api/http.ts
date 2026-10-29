@@ -11,18 +11,18 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * Production contract (see backend/.env.example): the service origin WITHOUT
- * trailing slash or `/api` suffix. Empty = same-origin `/api`. Prefer the
- * same-origin proxy so session cookies remain first-party.
- */
+/** API requests always stay on the frontend origin and use its /api proxy. */
 export function getApiBase(): string {
-  const raw = import.meta.env?.VITE_API_BASE_URL ?? '';
-  return String(raw).replace(/\/+$/, '');
+  // Do not honor a build-time API origin here. Vercel forwards /api to Render,
+  // while Vite forwards it to localhost:3001 in development. Keeping browser
+  // requests same-origin is required by the production connect-src 'self'
+  // policy and preserves first-party session cookies.
+  return '';
 }
 
 export function apiUrl(path: string): string {
-  return `${getApiBase()}/api${path.startsWith('/') ? path : `/${path}`}`;
+  const normalized = path.replace(/^\/+/, '').replace(/^api(?:\/|$)/, '');
+  return `/api${normalized ? `/${normalized}` : ''}`;
 }
 
 let csrfToken: string | null = null;
