@@ -349,6 +349,8 @@ describe('fixed challenge snapshots', () => {
       playlistId: 'PL1',
       playlistSnapshotVersion: 4,
       playlistDurationSec: 36000,
+      playlistEntryCount: 100,
+      playlistAvgVideoSec: 360,
       windowDates: dates,
       now,
     });
@@ -361,6 +363,8 @@ describe('fixed challenge snapshots', () => {
     expect(snap.weights).toEqual({ progress: 0.75, consistency: 0.25 });
     expect(snap.playlistId).toBe('PL1');
     expect(snap.playlistDurationSec).toBe(36000);
+    expect(snap.playlistEntryCount).toBe(100);
+    expect(snap.playlistAvgVideoSec).toBe(360);
     expect(snap.windowDates).toEqual(dates);
     // Later config edits cannot mutate the captured snapshot.
     cfg.seed = 999;
@@ -466,6 +470,24 @@ describe('computeArenaUserEvidence', () => {
     expect(evidence.manualCompleted).toBe(1);
     expect(evidence.verifiedCompleted).toBe(0);
     expect(evidence.qualifyingDays).toBe(1);
+  });
+
+  it('does not treat a completedAt timestamp as completion when status is not done', () => {
+    const snap = snapshot([{ position: 1, entryId: 'e1', videoId: 'v1', title: 'A', durationSec: 600 }]);
+    const progress: Record<string, ProgressRecord> = {
+      'PL1::e1': {
+        playlistId: 'PL1', position: 1, entryId: 'e1', videoId: 'v1',
+        completedAt: `${DAY}T12:00:00.000Z`, status: 'in-progress', source: 'manual',
+      },
+    };
+    const evidence = computeArenaUserEvidence({
+      snapshot: snap, progress, segments: [], sessions: [session()], timeZone: TZ, windowDates: [DAY],
+    });
+    expect(evidence.manualCompleted).toBe(0);
+    expect(evidence.verifiedCompleted).toBe(0);
+    expect(evidence.uniqueContentSec).toBe(0);
+    expect(evidence.daily[0].completedVideo).toBe(false);
+    expect(evidence.qualifyingDays).toBe(0);
   });
 
   it('duplicate occurrences remain distinct and unresolved durations disable the ratio', () => {

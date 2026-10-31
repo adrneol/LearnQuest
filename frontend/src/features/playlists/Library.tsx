@@ -216,7 +216,7 @@ export function Library() {
             <Search size={14} className="absolute left-2.5 top-2.5 text-slate-500" />
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search titles…" className={`${inputCls} pl-8`} aria-label="Search videos" />
           </div>
-          <div className="w-40">
+          <div className="w-[calc(50%-0.25rem)] min-w-0 sm:w-40">
             <Dropdown
               label="Filter"
               value={filter}
@@ -229,7 +229,7 @@ export function Library() {
               onChange={(v) => { setFilter(v as any); setPage(0); }}
             />
           </div>
-          <div className="w-44">
+          <div className="w-[calc(50%-0.25rem)] min-w-0 sm:w-44">
             <Dropdown
               label="Sort"
               value={sort}
@@ -245,7 +245,81 @@ export function Library() {
           </div>
           <span className="text-xs text-slate-500">{rows.length} shown</span>
         </div>
-        <div className="mt-2 overflow-x-auto">
+        {/*
+          Phones get a real card list: no 640px horizontal canvas, no clipped
+          titles, and 44px-friendly action targets. The table remains for
+          tablet/desktop where its density is useful.
+        */}
+        <ul className="mt-2 space-y-2 md:hidden" aria-label="Videos">
+          {pageRows.map((e) => {
+            const pk = identityKey(snap.playlistId, e.entryId!);
+            const rec = progressIndex.get(e.position);
+            const done = isProgressComplete(rec);
+            const conf = rec?.confidence;
+            return (
+              <li key={e.position} className={`rounded-xl border border-white/10 p-3 ${done ? 'bg-emerald-500/5' : 'bg-white/[0.02]'}`}>
+                <div className="flex min-w-0 items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(e.position)}
+                    onChange={() => toggleSel(e.position)}
+                    aria-label={`Select video ${e.position}`}
+                    className="mt-1 h-4 w-4 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-sm font-medium" title={e.title}>{e.title}</p>
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                      <span className="font-mono">#{e.position}</span>
+                      <span className="font-mono">{e.durationSec !== null ? formatSecondsHHMMSS(e.durationSec) : 'unresolved'}</span>
+                      <span className={done ? 'text-emerald-300' : 'text-slate-500'}>{done ? 'done' : 'not done'}</span>
+                      {conf ? <span className="text-cyan-300">confidence {conf}/5</span> : null}
+                      {rec?.needsRevision ? <span className="text-amber-300">needs revision</span> : null}
+                    </p>
+                  </div>
+                  {e.videoId ? (
+                    <a
+                      href={`https://www.youtube.com/watch?v=${e.videoId}&list=${snap.playlistId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Open video ${e.position} on YouTube`}
+                      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10"
+                    >
+                      <ExternalLink size={17} />
+                    </a>
+                  ) : null}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => s.toggleDone(snap.playlistId, e.position, e.videoId)}
+                    aria-label={done ? `Mark video ${e.position} incomplete` : `Mark video ${e.position} complete`}
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-white/5 px-2.5 text-xs text-slate-200"
+                  >
+                    {done ? <CheckCircle2 size={16} className="text-emerald-400" /> : <Circle size={16} className="text-slate-500" />}
+                    {done ? 'Done' : 'Not done'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      s.updateRecord(pk, {
+                        playlistId: snap.playlistId, position: e.position, entryId: e.entryId, videoId: e.videoId,
+                        status: rec?.status ?? 'in-progress', completedAt: rec?.completedAt ?? null,
+                        needsRevision: !rec?.needsRevision,
+                      } as any);
+                    }}
+                    aria-label={rec?.needsRevision ? `Unflag video ${e.position} for revision` : `Flag video ${e.position} for revision`}
+                    aria-pressed={!!rec?.needsRevision}
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-white/5 px-2.5 text-xs text-slate-200"
+                  >
+                    <BookmarkPlus size={16} className={rec?.needsRevision ? 'text-amber-300' : 'text-slate-500'} />
+                    {rec?.needsRevision ? 'Unflag revision' : 'Needs revision'}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="mt-2 hidden overflow-x-auto md:block">
           <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-400">

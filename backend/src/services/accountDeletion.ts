@@ -9,6 +9,7 @@ import {
   waitForAccountWriters,
 } from '../auth/writeLease.js';
 import { http, type Account } from '../auth/accounts.js';
+import { assertLearningDataWritable } from './migrationControl.js';
 
 /**
  * Account deletion is a resumable saga, not a single document delete.
@@ -198,6 +199,10 @@ async function finalizeDeletion(store: DataStore, userId: string): Promise<Accou
  * Callers must have completed every destructive-action validation first.
  */
 export async function deleteAccountPermanently(store: DataStore, userId: string): Promise<AccountDeletionResult> {
+  // A deletion removes every account-owned learning record. It must not race a
+  // migration snapshot or reverse copy, even if the caller passed auth before
+  // the durable fence was acquired.
+  await assertLearningDataWritable(store);
   const account = (await store.accounts.findOne({ userId })) as Account | null;
   if (!account && !(await store.accountDeletions.findOne({ userId }))) {
     throw http(404, 'This account no longer exists.', 'NOT_FOUND');

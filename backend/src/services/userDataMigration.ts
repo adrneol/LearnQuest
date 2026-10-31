@@ -7,6 +7,11 @@ import {
   type UserCollectionName,
 } from '../store.js';
 import { validateRecordValue } from './userData.js';
+import {
+  MIGRATION_FORWARD_DIRECTION,
+  readMigrationJournal,
+  writeMigrationJournal,
+} from './migrationControl.js';
 
 /**
  * Versioned, non-destructive migration from the legacy per-domain
@@ -136,6 +141,8 @@ export interface UserDataMigrationApplyReport {
     domains: number;
     copied: number;
     alreadyPresent: number;
+    /** Domains whose prior verified journal entry was revalidated and skipped. */
+    resumedDomains: number;
   };
   error?: string;
   warnings: string[];
@@ -630,7 +637,7 @@ export async function inspectUserDataMigration(
   };
 }
 
-function isDuplicateKeyError(error: unknown): boolean {
+export function isDuplicateKeyError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === 11000 || code === 11001;
 }
@@ -701,6 +708,24 @@ function verifyApplied(report: UserDataMigrationReport): boolean {
     && report.checksums.source === report.checksums.matchedDestination;
 }
 
+function domainJournalFields(
+  migrationId: string,
+  userId: string,
+  domain: DomainMigrationReport,
+) {
+  return {
+    migrationId,
+    direction: MIGRATION_FORWARD_DIRECTION,
+    userId,
+    domain: domain.domain,
+    sourceDocuments: domain.sourceDocuments,
+    sourceChecksum: domain.sourceChecksum,
+    matchedKeys: domain.matchedKeys,
+    pendingKeys: domain.pendingKeys,
+    destinationOnlyKeys: domain.destinationOnlyKeys,
+  };
+}
+
 /**
  * Copy eligible legacy records into `lq_user_data`. If the dry-run plan has any
  * conflict, duplicate, malformed source, or malformed destination, nothing is
@@ -712,7 +737,7 @@ export async function applyUserDataMigration(
   options: UserDataMigrationOptions = {},
 ): Promise<UserDataMigrationApplyReport> {
   const before = await inspectUserDataMigration(store, options);
-  const emptyApplied = { users: 0, domains: 0, copied: 0, alreadyPresent: 0 };
+  const emptyApplied = { users: 0, domains: 0, copied: 0, alreadyPresent: 0, resumedDomains: 0 };
   if (before.status === 'blocked') {
     return {
       status: 'blocked',
@@ -724,24 +749,120 @@ export async function applyUserDataMigration(
     };
   }
 
+  const previousJournal = await readMigrationJournal(
+    store,
+    before.migration.id,
+    MIGRATION_FORWARD_DIRECTION,
+  );
+  const journalByKey = new Map(
+    previousJournal.map((entry) => [`${entry.userId}\u0000${entry.domain}`, entry]),
+  );
+
+  // Persist the complete 20-domain work plan before copying. An interruption
+  // leaves a durable, payload-free record of exactly which account/domain had
+  // been verified and which still need work.
+  for (const user of before.users) {
+    for (const domain of user.domains) {
+      const prior = journalByKey.get(`${user.userId}\u0000${domain.domain}`);
+      if (prior?.status === 'verified'
+        && prior.sourceChecksum === domain.sourceChecksum
+        && domain.pendingKeys === 0
+        && domain.matchedKeys === domain.validSourceKeys) {
+        continue;
+      }
+      await writeMigrationJournal(store, {
+        migrationId: before.migration.id,
+        direction: MIGRATION_FORWARD_DIRECTION,
+        userId: user.userId,
+        domain: domain.domain,
+        status: domain.pendingKeys === 0 ? 'verified' : 'pending',
+        sourceDocuments: domain.sourceDocuments,
+        sourceChecksum: domain.sourceChecksum,
+        matchedKeys: domain.matchedKeys,
+        pendingKeys: domain.pendingKeys,
+        destinationOnlyKeys: domain.destinationOnlyKeys,
+        copied: 0,
+        verifiedAt: domain.pendingKeys === 0 ? new Date().toISOString() : null,
+      });
+    }
+  }
+
   const stats = { copied: 0, alreadyPresent: 0 };
   let skippedMatched = 0;
   let appliedUsers = 0;
   let appliedDomains = 0;
+  let resumedDomains = 0;
   let failure: string | undefined;
   try {
     for (const user of before.users) {
       let userCopied = false;
       for (const domain of user.domains) {
+        const journalKey = `${user.userId}\u0000${domain.domain}`;
+        const prior = journalByKey.get(journalKey);
+        if (prior?.status === 'verified'
+          && prior.sourceChecksum === domain.sourceChecksum
+          && domain.pendingKeys === 0
+          && domain.matchedKeys === domain.validSourceKeys) {
+          // A previous interrupted run already copied, verified, and
+          // journalled this domain. Re-checking the live report above makes
+          // the skip safe; no record is assumed present without evidence.
+          skippedMatched += domain.matchedKeys;
+          resumedDomains += 1;
+          continue;
+        }
         if (domain.pendingKeys === 0) {
           // A skipped domain still contributes its already-matching records to
           // the idempotency evidence for this run.
           skippedMatched += domain.matchedKeys;
+          await writeMigrationJournal(store, {
+            ...domainJournalFields(before.migration.id, user.userId, domain),
+            status: 'verified',
+            copied: 0,
+            verifiedAt: new Date().toISOString(),
+          });
           continue;
         }
         userCopied = true;
         appliedDomains += 1;
-        await copyDomain(store, user.userId, domain.domain, before.migration.batchSize, stats);
+        await writeMigrationJournal(store, {
+          ...domainJournalFields(before.migration.id, user.userId, domain),
+          status: 'copying',
+          copied: 0,
+          verifiedAt: null,
+        });
+        const copiedBefore = stats.copied;
+        try {
+          await copyDomain(store, user.userId, domain.domain, before.migration.batchSize, stats);
+          const verifiedDomain = await inspectDomain(
+            store,
+            user.userId,
+            domain.domain,
+            before.migration.batchSize,
+          );
+          if (blockingIssuesForDomain(verifiedDomain) > 0
+            || verifiedDomain.pendingKeys !== 0
+            || verifiedDomain.matchedKeys !== verifiedDomain.validSourceKeys
+            || verifiedDomain.sourceChecksum !== domain.sourceChecksum) {
+            throw migrationError(
+              `The source changed during the copy or a destination record differs for domain "${domain.domain}". Nothing was deleted; rerun after the source is stable.`,
+            );
+          }
+          await writeMigrationJournal(store, {
+            ...domainJournalFields(before.migration.id, user.userId, verifiedDomain),
+            status: 'verified',
+            copied: stats.copied - copiedBefore,
+            verifiedAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          await writeMigrationJournal(store, {
+            ...domainJournalFields(before.migration.id, user.userId, domain),
+            status: 'failed',
+            copied: Math.max(0, stats.copied - copiedBefore),
+            verifiedAt: null,
+            error: error instanceof Error ? error.message.slice(0, 500) : 'Domain copy failed.',
+          });
+          throw error;
+        }
       }
       if (userCopied) appliedUsers += 1;
     }
@@ -780,6 +901,11 @@ export async function applyUserDataMigration(
   if (stats.copied === 0 && alreadyPresent > 0) {
     warnings.push('No copy was needed; every eligible source record was already present and identical.');
   }
+  if (resumedDomains > 0) {
+    warnings.push(
+      `${resumedDomains} account/domain unit(s) were resumed from a previously verified journal entry and revalidated against live counts/checksums.`,
+    );
+  }
   if (failure) warnings.push(`Copy stopped: ${failure}`);
   if (verificationFailure && !failure) warnings.push(verificationFailure);
 
@@ -793,8 +919,26 @@ export async function applyUserDataMigration(
       domains: appliedDomains,
       copied: stats.copied,
       alreadyPresent,
+      resumedDomains,
     },
     ...(failureMessage ? { error: 'Migration did not finish; inspect the report and rerun after resolving the listed issues.' } : {}),
     warnings,
   };
 }
+
+// Shared by the controlled reverse migration. These helpers expose only
+// canonical counts/checksums and validation, never record payloads to callers.
+export {
+  accountMigrationIssue,
+  checksumOfRecords,
+  destinationDocument,
+  discoverUserIds,
+  inspectDestinationRecord,
+  inspectSourceRecord,
+  recordChecksum,
+  scanCollection,
+  selectedBatchSize,
+  selectedDomains,
+  selectedUserIds,
+  verifyApplied,
+};

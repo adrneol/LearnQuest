@@ -51,6 +51,12 @@ export const ACCOUNT_DELETION_JOB_COLLECTION = 'lq_account_deletions';
  * automatically and carries no email, name, notes, or tokens.
  */
 export const ACCOUNT_FENCE_COLLECTION = 'lq_account_fences';
+/**
+ * Durable, cross-process migration fence and resumable per-domain journal.
+ * These are global operational records, not account learning data.
+ */
+export const MIGRATION_CONTROL_COLLECTION = 'lq_migration_control';
+export const MIGRATION_JOURNAL_COLLECTION = 'lq_migration_journal';
 
 /**
  * Every collection that can contain account-owned records. Account deletion,
@@ -84,6 +90,8 @@ export interface DataStore {
   deletions: CollectionAdapter;
   accountDeletions: CollectionAdapter;
   accountFences: CollectionAdapter;
+  migrationControl: CollectionAdapter;
+  migrationJournal: CollectionAdapter;
   rateLimits: CollectionAdapter;
   migrations: CollectionAdapter;
   stateVersions: CollectionAdapter;
@@ -182,6 +190,8 @@ export function createDataStore(adapter: DbAdapter): DataStore {
     // Temporary account-deletion saga job. Removed after verified success.
     accountDeletions: adapter.collection(ACCOUNT_DELETION_JOB_COLLECTION),
     accountFences: adapter.collection(ACCOUNT_FENCE_COLLECTION),
+    migrationControl: adapter.collection(MIGRATION_CONTROL_COLLECTION),
+    migrationJournal: adapter.collection(MIGRATION_JOURNAL_COLLECTION),
     rateLimits: adapter.collection('lq_rate_limits'),
     migrations: adapter.collection('lq_migrations'),
     stateVersions: adapter.collection('lq_state_versions'),

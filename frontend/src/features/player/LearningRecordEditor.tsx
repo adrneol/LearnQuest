@@ -189,7 +189,7 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
   return (
     <Card>
       <div className="flex flex-wrap items-start gap-2">
-        <div className="mr-auto">
+        <div className="min-w-0 flex-1">
           <h3 className="text-sm font-bold">Learning record · #{entry.position}</h3>
           <p className="text-[11px] text-slate-500">
             Persistent notes for this exact playlist entry. Saved separately from the pause-note above

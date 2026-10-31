@@ -19,7 +19,8 @@ are available after registration.
 - **MongoDB**, a **Google OAuth web client**, and a **Brevo** API key with a
   verified sender for accounts, sign-in, password-reset links, and email
   verification. Full setup:
-  [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md).
+  [README Configuration](./README.md#configuration) and
+  [Production deployment](./README.md#production-deployment).
 - For live playlist imports, a **YouTube Data API v3 key** (read-only, no
   billing). Without one, JSON snapshot import still works fully offline.
 
@@ -423,8 +424,9 @@ network, no real leaderboard.
   later request or server restart; it never claims the account is gone while
   records remain. Provider-managed backups and email-provider logs follow
   their own retention policies and are not erased by the LearnQuest cascade.
-  See `docs/DEPLOYMENT_MULTIUSER.md` for the owner-side backup/retention
-  checklist.
+  See [Data persistence and privacy](./README.md#data-persistence-and-privacy)
+  and the [migration/rollback runbooks](./docs/user-doc/MIGRATION_RUNBOOK.md)
+  for the owner-side backup/retention checklist.
 
 ## I. Troubleshooting and FAQs
 
@@ -432,7 +434,7 @@ network, no real leaderboard.
 |---|---|
 | Setup/configuration screen | Add the listed names to `backend/.env`, restart, and retry. Accounts fail closed; there is no fake local login |
 | Google sign-in fails | Check the OAuth web client, exact redirect URI, consent-screen test user, and `GOOGLE_CLIENT_ID`/secret |
-| Recovery or verification email missing | Check the email provider's transactional email log for the recipient and status; verify sender/domain authentication (a verified Gmail sender can still fail DKIM/DMARC alignment), API key permissions, and spam; wait for the resend cooldown; request a new link (older links stop working). An unknown or ineligible account intentionally receives no message. See `docs/DEPLOYMENT_MULTIUSER.md` |
+| Recovery or verification email missing | Check the email provider's transactional email log for the recipient and status; verify sender/domain authentication (a verified Gmail sender can still fail DKIM/DMARC alignment), API key permissions, and spam; wait for the resend cooldown; request a new link (older links stop working). An unknown or ineligible account intentionally receives no message. See [Configuration](./README.md#configuration) |
 | Account storage errors | Check the connection string, database user, and network allow-list. No local fallback is used |
 | “Your account data is unavailable” or “incomplete learning data” | The client rejects incomplete account-data responses. If onboarding is unfinished, finish it; otherwise press Retry. Confirm the deployed frontend/backend are from the same release. A genuine read failure is shown as an error, never as an empty account |
 | New account sends me back to onboarding | The Google registration is still pending (no completed username/password). Finish the onboarding form; no learning data is loaded or overwritten before then |
@@ -441,7 +443,7 @@ network, no real leaderboard.
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |
 | API key missing/invalid/restricted | Re-check key + restrictions in Google Cloud; restart backend; Recheck in Settings |
 | Quota exhausted | Wait for the daily reset; use JSON import meanwhile (~5 units per 100-video import, ~21 per 500) |
-| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production must use a cookie-safe topology: either a same-origin Vercel `/api` rewrite (leave `VITE_API_BASE_URL` empty) or same-site custom domains (`app.example.com` + `api.example.com`). A direct `*.vercel.app` → `*.onrender.com` API URL is cross-site and the `SameSite=Lax` session cookie is not sent; see `docs/DEPLOYMENT_MULTIUSER.md` |
+| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production must use a cookie-safe topology: either a same-origin Vercel `/api` rewrite (leave `VITE_API_BASE_URL` empty) or same-site custom domains (`app.example.com` + `api.example.com`). A direct `*.vercel.app` → `*.onrender.com` API URL is cross-site and the `SameSite=Lax` session cookie is not sent; see [Production deployment](./README.md#production-deployment) |
 | Refresh fails | Retry Refresh active — failures never poison the cache or delete progress |
 | Unresolved videos | Expected for deleted/private/region-blocked items; totals stay incomplete-labeled |
 | Focus session lost to reload/sleep | Reopen Focus: a snapshot is recovered **paused**. Time while the page was closed is never counted; resume or finish what was actually observed, or record a History self-reported entry |

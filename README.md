@@ -123,9 +123,15 @@ the app shows a fail-closed setup screen instead of enabling a fake login.
 
 ### External service setup
 
-Detailed step-by-step instructions (Google redirect URI, Brevo sender
-verification, MongoDB Atlas network access, Render/Vercel variables) are in
-[docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md).
+Use the [Configuration](#configuration) table for the exact variable names and
+the [Production deployment](#production-deployment) section for the current
+Render/Vercel topology. In Google Cloud, create a Web OAuth client whose exact
+callback ends in `/api/auth/google/callback`; in Brevo, verify the sender
+address/domain and create a transactional-email API key; in MongoDB Atlas,
+allow the Render egress path and use a least-privilege database user. Store
+secrets only in `backend/.env` locally and in Render's environment settings in
+production. Never commit `.env` or paste credentials into logs, issues, or
+documentation.
 
 ## Configuration
 
@@ -174,7 +180,7 @@ Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`)
 | `VITE_API_BASE_URL` | API origin prefix; empty = same-origin `/api` (dev proxy handles it) | _(empty)_ |
 
 Production has two supported connection layouts; see
-[`docs/DEPLOYMENT_MULTIUSER.md`](./docs/DEPLOYMENT_MULTIUSER.md#6-cookie-safe-production-topology):
+[Production deployment](#production-deployment):
 
 - **Same-origin `/api` proxy (recommended):** keep `VITE_API_BASE_URL` empty
   and add a Vercel rewrite from `/api/*` to the Render service. The session
@@ -265,9 +271,8 @@ Run each from its own directory (`frontend/` or `backend/`):
   `LQ_USER_DATA_CUTOVER_ACK=lq-data-to-user-data-v1`; startup fails closed
   without it, and an empty or unavailable unified store never falls back to
   legacy data. No data has been migrated or retired live. See
-  [the migration and storage audit](./docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md)
-  and the deployment runbook for the dry-run, inspection, and guarded
-  retirement procedures.
+  [Report 24](./docs/user-doc/audit2/24_LEARNQUEST_ACCOUNT_IDENTITY_UNIFIED_MIGRATION_AND_RESPONSIVE_REPORT_2026-10-31.md)
+  and the [migration runbook](./docs/user-doc/MIGRATION_RUNBOOK.md) for the dry-run, inspection, and guarded retirement procedures.
 - Passwords are hashed with Argon2id. Raw passwords, password hashes, raw
   email action tokens, and session tokens are never included in account
   exports.
@@ -299,11 +304,9 @@ Run each from its own directory (`frontend/` or `backend/`):
   stale: `/api/auth/config`, `/api/auth/session`, and `/api/account/data`
   returned 404 and the frontend bundle did not contain the current auth UI.
   Redeploy the matching backend and frontend before judging live behavior. See
-  [the latest audit report](./docs/user-doc/audit2/11_LEARNQUEST_PRODUCTION_UX_SESSIONS_EMAIL_AND_AUDIT_REPAIR_2026-10-28.md),
-  the [database/account baseline](./docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md),
-  and the prior
-  [auth/security report](./docs/user-doc/audit2/09_LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md)
-  for the exact verification boundary and owner-side checks.
+  [Report 25](./docs/user-doc/audit2/25_LEARNQUEST_FINAL_RELEASE_QUALITY_AND_READINESS_AUDIT_2026-11-01.md)
+  and the [audit archive](./docs/user-doc/audit2/README.md) for the exact
+  verification boundary and owner-side checks.
 - The `lq_user_data` migration and legacy retirement were **not** run against
   Atlas. The dry-run tool, checksums, idempotent copy path, read-only inspection,
   guarded retirement command, and regression tests are local only. Legacy
@@ -313,7 +316,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 - Timed in-browser playback events, overnight soak runs, live quota metering,
   2000+-video stress, and live storage-quota exhaustion are verified by
   unit/integration tests and inspection — not by live runs here. See
-  [`docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md`](./docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md).
+  [Report 25](./docs/user-doc/audit2/25_LEARNQUEST_FINAL_RELEASE_QUALITY_AND_READINESS_AUDIT_2026-11-01.md).
 - Playlists are capped at **1000 entries** per fetch (larger ones are rejected
   with a clear error, never silently truncated).
 - Quota costs ≈ 5 units per 100-video import/refresh, ≈ 21 per 500-video
@@ -338,20 +341,21 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Player won't embed (101/150) | Use Open on YouTube; log a self-reported History entry |
 | Totals look wrong | Confirm range endpoints and unresolved flags; content duration ≠ study time |
 | Port conflict (`EADDRINUSE`) | Stop the other process or change `PORT` in `backend/.env` |
-| Frontend can't reach backend | Check the chosen topology in `docs/DEPLOYMENT_MULTIUSER.md`: same-origin `/api` proxy or same-site custom domains. For custom domains, verify `VITE_API_BASE_URL` (no trailing slash or `/api` suffix, then redeploy) and `CORS_ORIGIN`. A `*.vercel.app` → `*.onrender.com` direct API URL fails authentication because the Lax cookie is cross-site |
+| Frontend can't reach backend | Check the chosen topology in [Production deployment](#production-deployment): same-origin `/api` proxy or same-site custom domains. For custom domains, verify `VITE_API_BASE_URL` (no trailing slash or `/api` suffix, then redeploy) and `CORS_ORIGIN`. A `*.vercel.app` → `*.onrender.com` direct API URL fails authentication because the Lax cookie is cross-site |
 | Node version warning on Render | Remove/raise a dashboard `NODE_VERSION` override; the repo pins 24.22.1 |
 
 ## Documentation
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
-- [docs/DEPLOYMENT_MULTIUSER.md](./docs/DEPLOYMENT_MULTIUSER.md) — MongoDB, Google, Brevo, Render, and Vercel setup, plus the migration and deletion runbook.
-- [docs/user-doc/audit2/README.md](./docs/user-doc/audit2/README.md) — indexed, chronological audit archive; report 11 is the latest.
-- [docs/user-doc/audit2/11_LEARNQUEST_PRODUCTION_UX_SESSIONS_EMAIL_AND_AUDIT_REPAIR_2026-10-28.md](./docs/user-doc/audit2/11_LEARNQUEST_PRODUCTION_UX_SESSIONS_EMAIL_AND_AUDIT_REPAIR_2026-10-28.md) — current production UX, cross-tab session, email-diagnostic, deletion, storage-cutover, and archive report.
-- [docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md](./docs/user-doc/audit2/10_LEARNQUEST_EMPTY_ACCOUNT_AND_DATABASE_STRUCTURE_2026-10-27.md) — empty-account, API-contract, MongoDB-layout, migration, and account-deletion baseline.
-- [docs/user-doc/audit2/09_LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md](./docs/user-doc/audit2/09_LEARNQUEST_AUTH_SECURITY_REPAIR_2026-10-27.md) — auth, email-link, proxy, and verification report.
-- [docs/user-doc/audit2/07_LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md](./docs/user-doc/audit2/07_LEARNQUEST_MULTIUSER_PLATFORM_REPORT_2026-10-27.md) — multi-user platform report (historical; numeric OTP flow superseded by report 09).
-- [docs/user-doc/audit2/05_LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md](./docs/user-doc/audit2/05_LEARNQUEST_IMPLEMENTATION_REPORT_2026-10-27.md) — remediation report and verification matrix.
-- [docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md](./docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md) — historical feature acceptance matrix and real-browser evidence.
-- [docs/user-doc/audit2/03_V6_FINAL_AUDIT.md](./docs/user-doc/audit2/03_V6_FINAL_AUDIT.md) — reliability/API-efficiency audit.
-- [docs/user-doc/audit2/02_TIME_AND_ANALYTICS_AUDIT.md](./docs/user-doc/audit2/02_TIME_AND_ANALYTICS_AUDIT.md) — time-correctness matrix.
-- [docs/user-doc/audit2/01_STORAGE_AND_SCALE_AUDIT.md](./docs/user-doc/audit2/01_STORAGE_AND_SCALE_AUDIT.md) — storage, memory, and scale measurements.
+- [docs/user-doc/audit2/README.md](./docs/user-doc/audit2/README.md) — indexed audit archive and historical summaries; reports 22–25 are present.
+- [Report 25](./docs/user-doc/audit2/25_LEARNQUEST_FINAL_RELEASE_QUALITY_AND_READINESS_AUDIT_2026-11-01.md) — final release quality, security, data-integrity and readiness audit.
+- [Report 24](./docs/user-doc/audit2/24_LEARNQUEST_ACCOUNT_IDENTITY_UNIFIED_MIGRATION_AND_RESPONSIVE_REPORT_2026-10-31.md) — account identity, Unified migration implementation, Arena and responsive work.
+- [Report 23](./docs/user-doc/audit2/23_LEARNQUEST_COMPLETE_IMPLEMENTATION_AND_REGRESSION_REPORT_2026-10-30.md) — Phase 23 append persistence, Focus hardening and regression report.
+- [Report 22](./docs/user-doc/audit2/22_LEARNQUEST_COMPLETE_PRODUCT_SECURITY_QUALITY_AUDIT_2026-10-30.md) — product, security, simulation and quality audit.
+- [docs/user-doc/MIGRATION_RUNBOOK.md](./docs/user-doc/MIGRATION_RUNBOOK.md) — forward migration, backup/restore proof and cutover gates.
+- [docs/user-doc/MIGRATION_ROLLBACK.md](./docs/user-doc/MIGRATION_ROLLBACK.md) — reverse migration and rollback gates.
+- [docs/user-doc/ARENA_COMPLETE_GUIDE.md](./docs/user-doc/ARENA_COMPLETE_GUIDE.md) — documented Arena v2 contract.
+
+Historical reports 01–21 are summarized in the archive; their original files
+were removed in Phase 23 and remain recoverable from Git history as described
+there.

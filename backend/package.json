@@ -13,6 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "migrate:user-data": "tsx src/scripts/migrateUserData.ts",
+    "migrate:controlled": "tsx src/scripts/controlledMigration.ts",
+    "compare:migration-reports": "tsx src/scripts/compareMigrationReports.ts",
     "inspect:user-data": "tsx src/scripts/inspectUserData.ts",
     "diagnose:mongo": "tsx src/scripts/diagnoseMongo.ts",
     "retire:legacy-data": "tsx src/scripts/retireLegacyUserData.ts"

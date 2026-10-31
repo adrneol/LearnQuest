@@ -18,7 +18,7 @@ interface BtnProps {
 export const Btn = forwardRef<HTMLButtonElement, BtnProps>(function Btn({
   children, onClick, variant = 'ghost', className = '', type = 'button', disabled, title, 'aria-expanded': ariaExpanded,
 }, ref) {
-  const base = 'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
+  const base = 'inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
   const styles =
     variant === 'primary'
       ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/40 disabled:hover:bg-violet-600'

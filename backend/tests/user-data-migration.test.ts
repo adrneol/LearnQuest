@@ -163,6 +163,41 @@ describe('lq_user_data migration', () => {
     expect(JSON.stringify(first)).not.toContain(SECRET_NOTE);
   });
 
+  it('streams a large account across bounded pages and copies every record once', async () => {
+    const total = 1_205;
+    for (let index = 0; index < total; index += 1) {
+      await insertRecord('user-large', 'sessions', `session-${String(index).padStart(4, '0')}`, {
+        ...SAMPLE.sessions,
+        id: `session-${index}`,
+        startedAt: new Date(Date.parse(NOW) + index * 1_000).toISOString(),
+        activeSec: 60,
+        elapsedSec: 60,
+      }, index);
+    }
+
+    const inspected = await inspectUserDataMigration(store, {
+      userIds: ['user-large'],
+      batchSize: 100,
+    });
+    const sessions = inspected.users[0]?.domains.find((domain) => domain.domain === 'sessions');
+    expect(inspected.status).toBe('ready');
+    expect(sessions?.sourceDocuments).toBe(total);
+    expect(sessions?.validSourceKeys).toBe(total);
+    expect(sessions?.pendingKeys).toBe(total);
+    expect(await store.userData.count({ userId: 'user-large' })).toBe(0);
+
+    const applied = await applyUserDataMigration(store, {
+      userIds: ['user-large'],
+      batchSize: 100,
+    });
+    expect(applied.status).toBe('applied');
+    expect(applied.applied.copied).toBe(total);
+    expect(await store.userData.count({ userId: 'user-large', domain: 'sessions' })).toBe(total);
+    expect(await store.data('sessions').count({ userId: 'user-large' })).toBe(total);
+    expect((await store.data('sessions').findOne({ userId: 'user-large', key: 'session-0000' }))?.value)
+      .toMatchObject({ id: 'session-0' });
+  }, 20_000);
+
   it('copies every domain, preserves fields, leaves legacy data intact, and is idempotent', async () => {
     await seedUser('user-a');
     await seedUser('user-b');

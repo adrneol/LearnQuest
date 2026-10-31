@@ -1,5 +1,6 @@
 import { USER_COLLECTIONS, type DataStore, type UserCollectionName } from '../store.js';
 import { env } from '../config/env.js';
+import { assertLearningDataWritable } from './migrationControl.js';
 
 /**
  * High-volume, stable-id collections that support bounded append writes. The
@@ -794,6 +795,7 @@ export async function replaceUserCollection(
   expectedVersion: number,
 ): Promise<{ version: number; collection: UserCollectionName }> {
   const value = validateCollectionPayload(name, payload);
+  await assertLearningDataWritable(store);
   // Create the version baseline outside the transaction; a duplicate-key
   // insertion inside a transaction aborts the whole transaction and cannot be
   // recovered by a read in the same session.
@@ -834,6 +836,7 @@ export async function appendUserCollection(
   if (items.length > 5_000) {
     throw httpError('Append requests are limited to 5000 records.', 413, 'APPEND_TOO_LARGE');
   }
+  await assertLearningDataWritable(store);
   await getStateVersion(store, userId);
   if (!store.transaction) throw atomicityError();
   return store.transaction(async (tx) => {
@@ -943,6 +946,7 @@ export async function replaceAllUserState(
   options: ReplaceAllUserStateOptions = {},
 ): Promise<{ version: number; state: UserState }> {
   const state = validateStatePayload(raw);
+  await assertLearningDataWritable(store);
   // The baseline must exist before the transaction; see reserveVersionInTransaction.
   await getStateVersion(store, userId);
   if (!store.transaction) throw atomicityError();
@@ -982,6 +986,7 @@ export async function archivePlaylist(
   archived: boolean,
   expectedVersion: number,
 ) {
+  await assertLearningDataWritable(store);
   await getStateVersion(store, userId);
   if (!store.transaction) throw atomicityError();
   return store.transaction((tx) => archivePlaylistInStore(tx, userId, playlistId, archived, expectedVersion));
@@ -1090,6 +1095,7 @@ export async function deletePlaylistPermanently(
   expectedVersion: number,
   confirmTitle: string,
 ): Promise<PlaylistDeleteResult> {
+  await assertLearningDataWritable(store);
   const existingJob = await store.deletions.findOne({ userId, playlistId });
   if (existingJob?.status === 'completed') {
     const activeDoc = await store.domainData('activeId').findOne({ userId, key: 'singleton' });

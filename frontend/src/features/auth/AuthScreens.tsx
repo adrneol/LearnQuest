@@ -15,9 +15,9 @@ import { assessPasswordStrength } from './passwordStrength.js';
 
 const AUTH_ERROR_COPY: Record<string, string> = {
   google_cancelled: 'Google sign-in was cancelled. Nothing changed.',
-  google_account_not_found: 'No LearnQuest account uses that Google identity. If you are new, choose Create an account.',
-  google_account_exists: 'An account already exists for that Google identity. Use Sign in with Google instead.',
-  LINK_REQUIRED: 'An account already uses this email with a different sign-in method. Contact support if you need help linking it.',
+  google_account_not_found: 'No LearnQuest account is linked to that Google identity yet. Create your account below; you will confirm the same Google identity again. No account was created automatically.',
+  google_account_exists: 'An account is already linked to that Google identity. Start again from Sign in with Google; no account was created.',
+  LINK_REQUIRED: 'That verified Google email already belongs to an existing LearnQuest account with a different sign-in method. Sign in to that account with its username and password. For your safety, LearnQuest did not link or sign you into it automatically. If you cannot use its existing sign-in method, contact support with proof of account ownership.',
   EMAIL_NOT_VERIFIED: 'Google did not confirm a verified email address for this identity. No account was created.',
   ACCOUNT_UNAVAILABLE: 'That account is unavailable or is being deleted. No session was created.',
   GOOGLE_IDENTITY_MISMATCH: 'That Google account is not the identity linked to this LearnQuest account. Use the same Google account, or sign in with your password.',
@@ -69,13 +69,22 @@ function clearOAuthErrorFromHash(): void {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/auth`);
 }
 
-/** The expired-link action can open recovery directly with #/auth?mode=forgot. */
-function initialAuthMode(): 'signin' | 'forgot' {
+/**
+ * The expired-link action can open recovery directly with #/auth?mode=forgot.
+ * A verified Google identity with no linked account returns with a dedicated
+ * code and lands on the explicit account-creation screen. The person still has
+ * to press "Continue with Google" again; the redirect never signs in or
+ * creates an account by itself.
+ */
+function initialAuthMode(): Mode {
   if (typeof window === 'undefined') return 'signin';
   const raw = window.location.hash.replace(/^#\/?/, '');
   const [path, query = ''] = raw.split('?');
   if (path !== 'auth') return 'signin';
-  return new URLSearchParams(query).get('mode') === 'forgot' ? 'forgot' : 'signin';
+  const params = new URLSearchParams(query);
+  if (params.get('mode') === 'forgot') return 'forgot';
+  if (params.get('error') === 'google_account_not_found') return 'register';
+  return 'signin';
 }
 
 export function SetupRequiredScreen({ setup: _setup, onRetry }: { setup: AuthConfig | null; onRetry: () => void }) {
@@ -278,7 +287,9 @@ export function AuthScreens({
             <div className="mt-4">
               <h2 className="text-lg font-bold">Create your account</h2>
               <p className="mt-1 text-sm text-slate-400">
-                Continue with Google to verify your identity. You will choose your username and password next.
+                Continue with Google to verify your identity. If that Google identity is already linked, LearnQuest
+                signs you in to the existing account instead of creating a duplicate. Otherwise you will choose your
+                username and password next.
               </p>
               <Btn variant="primary" className="mt-4 w-full justify-center" onClick={() => google('register')} disabled={busy || !googleReady}>
                 {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Connecting…' : 'Continue with Google'}

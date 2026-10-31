@@ -264,8 +264,9 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
   });
 
   /**
-   * Google callback. Login and registration intents are deliberately distinct:
-   * an unknown identity arriving through login is never turned into an account.
+   * Google callback. The stable subject resolves an existing account from
+   * either intent. Only an explicit registration intent may create a new
+   * account, and a matching email never auto-links or signs in another account.
    */
   router.get('/google/callback', oauthLimiter, noStore, async (req, res) => {
     const fail = (code: string) => {
@@ -342,9 +343,17 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         return res.redirect(303, `${env.appOrigin}/#/auth?notice=email-changed`);
       }
 
-      if (intent === 'login') {
-        if (!account) return fail('google_account_not_found');
+      // The stable Google subject is the primary identity. An unknown subject
+      // on sign-in is never turned into an account; the client offers the
+      // explicit account-creation path instead.
+      if (intent === 'login' && !account) return fail('google_account_not_found');
+
+      if (account) {
         if (account.status !== 'active') return fail('ACCOUNT_UNAVAILABLE');
+        // A Google identity already linked to a LearnQuest account resolves to
+        // that account from BOTH sign-in and sign-up screens. It signs in
+        // instead of creating a duplicate or showing a blunt "already exists"
+        // error. An unfinished registration resumes its existing onboarding.
         const onboarding = !account.onboardingComplete;
         const created = await withAccountWriteLease(store, account.userId, async () => {
           const session = await rotateSession(store, oldToken, account.userId, {
@@ -362,32 +371,8 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         return res.redirect(303, `${env.appOrigin}/#/${onboarding ? 'onboarding' : 'dash'}`);
       }
 
-      // Registration intent.
-      if (account) {
-        if (account.status !== 'active') return fail('ACCOUNT_UNAVAILABLE');
-        if (account.onboardingComplete) {
-          // An existing account is never silently signed in through the
-          // registration route; the person must choose sign-in explicitly.
-          return fail('google_account_exists');
-        }
-        // Resume an interrupted registration for the same Google subject. No
-        // duplicate account is created.
-        const created = await withAccountWriteLease(store, account.userId, async () => {
-          const session = await rotateSession(store, oldToken, account.userId, {
-            ...info,
-            authMethod: 'google_register',
-            passwordVersion: account.passwordVersion ?? 0,
-            onboardingExpiresAt: onboardingExpiry(),
-            onboardingGoogleSub: identity.sub,
-          });
-          await store.accounts.updateOne({ userId: account.userId }, { $set: { lastLoginAt: new Date().toISOString() } });
-          return session;
-        });
-        setSessionCookie(res, created.token, created.maxAgeSec);
-        clearOAuthBindingCookie(res);
-        return res.redirect(303, `${env.appOrigin}/#/onboarding`);
-      }
-
+      // Explicit registration for a new Google subject. A verified email that
+      // matches a different/unlinked account is never attached automatically.
       const emailOwner = await store.accounts.findOne({ emailNormalized: normalizeEmail(identity.email) });
       if (emailOwner) return fail('LINK_REQUIRED');
 

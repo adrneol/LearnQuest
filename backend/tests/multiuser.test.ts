@@ -354,19 +354,45 @@ describe('account registration and sessions', () => {
     expect(await store.accounts.count({})).toBe(0);
   });
 
-  it('signs in an existing Google identity only through the login intent', async () => {
-    await seedUser('google_login', 'glogin@example.test', 'correct horse battery staple', 'google-sub-glogin');
+  it('resolves an already-linked Google identity from both sign-in and sign-up without a duplicate', async () => {
+    const seeded = await seedUser('google_login', 'glogin@example.test', 'correct horse battery staple', 'google-sub-glogin');
     googleIdentity = { sub: 'google-sub-glogin', email: 'glogin@example.test', emailVerified: true, name: 'Google Login' };
+
     const loginState = await startGoogle('login');
     const loggedIn = await callback(loginState);
     expect(loggedIn.status).toBe(303);
     expect(loggedIn.headers.location).toContain('/#/dash');
     expect(loggedIn.headers['set-cookie']).toBeTruthy();
 
-    const duplicate = await callback(await startGoogle('register'));
-    expect(duplicate.headers.location).toContain('error=google_account_exists');
-    expect(sessionCookie(duplicate)).toBeUndefined();
+    // Sign Up with the same linked identity is a sign-in, not a duplicate and
+    // not the old blunt "account exists" error.
+    const registration = await callback(await startGoogle('register'));
+    expect(registration.status).toBe(303);
+    expect(registration.headers.location).toContain('/#/dash');
+    expect(registration.headers.location).not.toContain('error=');
+    expect(sessionCookie(registration)).toBeTruthy();
     expect(await store.accounts.count({ googleSub: 'google-sub-glogin' })).toBe(1);
+    expect(await store.accounts.count({ emailNormalized: 'glogin@example.test' })).toBe(1);
+    expect((await findAccountById(store, seeded.userId))?.userId).toBe(seeded.userId);
+  });
+
+  it('resumes an unfinished linked Google registration from either intent', async () => {
+    const pending = await createAccountFromGoogle(store, {
+      sub: 'google-sub-pending',
+      email: 'pending@example.test',
+      emailVerified: true,
+      name: 'Pending',
+    });
+    googleIdentity = { sub: 'google-sub-pending', email: 'pending@example.test', emailVerified: true, name: 'Pending' };
+
+    const fromSignIn = await callback(await startGoogle('login'));
+    expect(fromSignIn.headers.location).toContain('/#/onboarding');
+    expect(sessionCookie(fromSignIn)).toBeTruthy();
+
+    const fromSignUp = await callback(await startGoogle('register'));
+    expect(fromSignUp.headers.location).toContain('/#/onboarding');
+    expect(await store.accounts.count({ googleSub: 'google-sub-pending' })).toBe(1);
+    expect((await findAccountById(store, pending.userId))?.onboardingComplete).toBe(false);
   });
 
   it('rejects an unverified Google email without creating an account', async () => {
@@ -385,6 +411,57 @@ describe('account registration and sessions', () => {
     expect(cb.status).toBe(303);
     expect(cb.headers.location).toContain('error=LINK_REQUIRED');
     expect(await store.accounts.count({ emailNormalized: 'linked@example.test' })).toBe(1);
+  });
+
+  it('serializes concurrent Google account creation for case/whitespace email variants', async () => {
+    const attempts = await Promise.allSettled([
+      createAccountFromGoogle(store, { sub: 'concurrent-sub-a', email: 'Case.User@Example.test', emailVerified: true }),
+      createAccountFromGoogle(store, { sub: 'concurrent-sub-b', email: '  case.user@example.TEST  ', emailVerified: true }),
+      createAccountFromGoogle(store, { sub: 'concurrent-sub-c', email: 'CASE.USER@example.test', emailVerified: true }),
+    ]);
+    const fulfilled = attempts.filter((result) => result.status === 'fulfilled');
+    const rejected = attempts.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(2);
+    for (const result of rejected) expect(result.reason?.code).toBe('LINK_REQUIRED');
+    expect(await store.accounts.count({ emailNormalized: 'case.user@example.test' })).toBe(1);
+    expect(await store.accounts.count({})).toBe(1);
+  });
+
+  it('returns a safe email conflict when another process wins the unique-index race', async () => {
+    const first = await createAccountFromGoogle(store, {
+      sub: 'existing-race-owner',
+      email: 'race@example.test',
+      emailVerified: true,
+    });
+    const originalInsert = store.accounts.insertOne.bind(store.accounts);
+    const originalFindOne = store.accounts.findOne.bind(store.accounts);
+    let emailLookups = 0;
+    store.accounts.insertOne = async () => {
+      throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+    };
+    store.accounts.findOne = async (query) => {
+      // Simulate the window between the application pre-check and insert: the
+      // other account's email is not visible on the first read, then the
+      // unique email index rejects this insert and the re-read finds it.
+      if (query.emailNormalized === 'race@example.test') {
+        emailLookups += 1;
+        if (emailLookups === 1) return null;
+      }
+      return originalFindOne(query);
+    };
+    try {
+      await expect(createAccountFromGoogle(store, {
+        sub: 'losing-race-sub',
+        email: 'RACE@example.test',
+        emailVerified: true,
+      })).rejects.toMatchObject({ code: 'LINK_REQUIRED' });
+    } finally {
+      store.accounts.insertOne = originalInsert;
+      store.accounts.findOne = originalFindOne;
+    }
+    expect(await store.accounts.count({})).toBe(1);
+    expect((await store.accounts.findOne({ googleSub: 'existing-race-owner' }))?.userId).toBe(first.userId);
   });
 
   it('rotates session cookies, invalidates logout, and rejects CSRF-less mutations', async () => {

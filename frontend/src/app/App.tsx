@@ -169,6 +169,31 @@ const COLLECTION_LABELS: Record<string, string> = {
 };
 
 /**
+ * A durable storage-migration freeze makes learning-data writes read-only.
+ * The banner is explicit, does not hide the app, and does not imply the local
+ * edits were saved or discarded.
+ */
+function MigrationReadOnlyBanner() {
+  const s = useStore();
+  if (s.mode !== 'cloud' || !s.migrationReadOnly) return null;
+  return (
+    <section
+      role="status"
+      aria-live="polite"
+      aria-labelledby="migration-readonly-title"
+      className="rounded-2xl border border-cyan-500/40 bg-cyan-500/10 p-3 text-sm"
+    >
+      <h2 id="migration-readonly-title" className="font-semibold text-cyan-100">Learning data is temporarily read-only</h2>
+      <p className="mt-1 text-xs text-cyan-100/80">
+        LearnQuest is finishing a storage-maintenance step. Your edits remain in this tab and are not lost.
+        Keep this tab open; the next edit after the freeze is released will retry the save. Reading and
+        navigation still work.
+      </p>
+    </section>
+  );
+}
+
+/**
  * Two devices that edited the same record differently need an explicit
  * decision. The banner never auto-picks a side and never reloads away the
  * local edit.
@@ -565,6 +590,7 @@ function AppInner() {
           </div>
         )}
         <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
+          <MigrationReadOnlyBanner />
           <CloudConflictBanner />
           {!isAccountPage && !snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
           {!isAccountPage && <LegacyMigrationCard />}

@@ -470,11 +470,11 @@ function PlayerInner() {
     <div className="space-y-4">
       <Card>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="mr-auto">
+          <div className="min-w-0 flex-1 basis-full sm:basis-auto">
             <h2 className="text-base font-bold">Now playing #{pos}</h2>
-            <p className="max-w-xl truncate text-sm text-slate-400" title={entry?.title}>{entry?.title}</p>
+            <p className="max-w-xl break-words text-sm text-slate-400" title={entry?.title}>{entry?.title}</p>
           </div>
-          <span className={`rounded-full px-2 py-1 text-[11px] ${completion === 'verified' ? 'bg-emerald-500/15 text-emerald-300' : completion === 'manual' ? 'bg-cyan-500/15 text-cyan-300' : completion === 'in-progress' ? 'bg-violet-500/20 text-violet-200' : completion === 'unavailable' ? 'bg-red-500/15 text-red-300' : 'bg-white/5 text-slate-400'}`}>
+          <span className={`max-w-full shrink-0 rounded-full px-2 py-1 text-[11px] ${completion === 'verified' ? 'bg-emerald-500/15 text-emerald-300' : completion === 'manual' ? 'bg-cyan-500/15 text-cyan-300' : completion === 'in-progress' ? 'bg-violet-500/20 text-violet-200' : completion === 'unavailable' ? 'bg-red-500/15 text-red-300' : 'bg-white/5 text-slate-400'}`}>
             {completion === 'verified' ? '✓ verified' : completion === 'manual' ? 'manual complete' : completion === 'in-progress' ? 'in progress' : completion === 'needs-revision' ? 'needs revision' : completion === 'unavailable' ? 'unavailable' : 'not started'}
           </span>
         </div>
@@ -505,7 +505,7 @@ function PlayerInner() {
           <Btn onClick={() => go(pos - 1)} disabled={pos <= 1}><SkipBack size={14} /> Prev</Btn>
           <Btn onClick={() => go(pos + 1)} disabled={pos >= N}>Next <SkipForward size={14} /></Btn>
           <Btn onClick={enqueue}><ListPlus size={14} /> Queue</Btn>
-          <span className="ml-auto font-mono text-xs text-slate-400">
+          <span className="w-full break-words font-mono text-xs text-slate-400 sm:ml-auto sm:w-auto">
             {formatSecondsHHMMSS(Math.floor(cur))} / {dur !== null ? formatSecondsHHMMSS(dur) : '?'} · {rate}x · unique {formatSecondsHHMMSS(Math.floor(cov.uniqueSec))}
           </span>
         </div>

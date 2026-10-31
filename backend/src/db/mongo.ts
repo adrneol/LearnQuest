@@ -76,6 +76,31 @@ export function createMongoAdapter(db: Db, session?: ClientSession): DbAdapter {
   };
 }
 
+/**
+ * Adapter for an already-open database, including real MongoDB transactions.
+ * Used by isolated integration/staging rehearsals and migration tooling that
+ * must target a specific database without changing the application's global
+ * connection configuration. It never ensures indexes or drops data by itself.
+ */
+export function createDirectMongoAdapter(db: Db): DbAdapter {
+  const adapter = createMongoAdapter(db);
+  return {
+    ...adapter,
+    async transaction<T>(fn: (tx: DbAdapter) => Promise<T>): Promise<T> {
+      const session = db.client.startSession();
+      try {
+        let result!: T;
+        await session.withTransaction(async () => {
+          result = await fn(createMongoAdapter(db, session));
+        });
+        return result;
+      } finally {
+        await session.endSession().catch(() => undefined);
+      }
+    },
+  };
+}
+
 let clientPromise: Promise<MongoClient> | null = null;
 let dbPromise: Promise<Db> | null = null;
 let indexesPromise: Promise<void> | null = null;
@@ -153,10 +178,56 @@ async function ensureUsernameIndex(db: Db): Promise<void> {
   );
 }
 
+/**
+ * Google subjects are unique only when present. A sparse unique index still
+ * indexes an explicit `null`, which would permit only one unlinked account.
+ * A partial index indexes real string subjects and lets any number of
+ * password-only/unlinked accounts coexist without weakening subject identity.
+ *
+ * Safety: build the replacement index BEFORE dropping the old sparse unique
+ * index. There is therefore never a window without a unique Google-subject
+ * constraint. If the replacement cannot be built, the old index remains.
+ */
+async function ensureGoogleSubjectIndex(db: Db): Promise<void> {
+  const accounts = db.collection('lq_accounts');
+  const replacementName = 'google_sub_partial_unique_v2';
+  let indexes: Document[] = [];
+  try {
+    indexes = await accounts.listIndexes().toArray();
+  } catch (e: unknown) {
+    if ((e as { code?: number })?.code !== 26) throw e;
+  }
+  const googleIndexes = indexes.filter((index) => {
+    const key = index.key as Record<string, unknown> | undefined;
+    return key && Object.keys(key).length === 1 && key.googleSub === 1;
+  });
+  const replacement = googleIndexes.find((index) => index.name === replacementName);
+  if (!replacement) {
+    await accounts.createIndex(
+      { googleSub: 1 },
+      {
+        name: replacementName,
+        unique: true,
+        partialFilterExpression: { googleSub: { $type: 'string' } },
+      },
+    );
+  } else if (replacement.unique !== true) {
+    throw new Error('The Google subject index exists but is not unique; refusing to start with weakened account identity.');
+  }
+  for (const index of googleIndexes) {
+    if (index.name === replacementName) continue;
+    try {
+      await accounts.dropIndex(String(index.name));
+    } catch (e: unknown) {
+      if ((e as { code?: number })?.code !== 27 && (e as { code?: number })?.code !== 26) throw e;
+    }
+  }
+}
+
 async function ensureIndexes(db: Db): Promise<void> {
   await ensureUsernameIndex(db);
+  await ensureGoogleSubjectIndex(db);
   await Promise.all([
-    db.collection('lq_accounts').createIndex({ googleSub: 1 }, { unique: true, sparse: true }),
     db.collection('lq_accounts').createIndex({ emailNormalized: 1 }, { unique: true }),
     // Used by the restartable account-deletion sweep; never a uniqueness rule.
     db.collection('lq_accounts').createIndex({ status: 1 }, { name: 'account_status' }),
@@ -191,6 +262,14 @@ async function ensureIndexes(db: Db): Promise<void> {
     // account identifier is stored.
     db.collection('lq_rate_limits').createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, name: 'rate_limit_expire_at_ttl' }),
     db.collection('lq_migrations').createIndex({ userId: 1, migrationId: 1 }, { unique: true }),
+    // One durable active migration fence, plus a resumable journal keyed by
+    // migration run, direction, account, and logical domain.
+    db.collection('lq_migration_control').createIndex({ phase: 1, updatedAt: 1 }),
+    db.collection('lq_migration_journal').createIndex(
+      { migrationId: 1, direction: 1, userId: 1, domain: 1 },
+      { unique: true },
+    ),
+    db.collection('lq_migration_journal').createIndex({ migrationId: 1, direction: 1, status: 1 }),
     db.collection('lq_state_versions').createIndex({ userId: 1 }, { unique: true }),
     // Consolidated learning-data target. Its repository cutover is selected
     // explicitly by LQ_USER_DATA_STORE; legacy remains the default until an

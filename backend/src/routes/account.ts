@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { createSharedRateLimiter } from '../middleware/sharedRateLimit.js';
 import type { DataStore } from '../store.js';
@@ -30,6 +30,7 @@ import {
   type UserState, type UserStateDefaults,
 } from '../services/userData.js';
 import { deleteAccountPermanently } from '../services/accountDeletion.js';
+import { requireNoActiveMigrationFence } from '../services/migrationControl.js';
 
 const profileSchema = z.object({
   username: z.string().max(64).optional(),
@@ -247,11 +248,20 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
   // dashboard and could let a writer initialize it out of order.
   router.use(requireOnboarded);
 
+  /**
+   * Learning-data writes are blocked while a durable migration fence is active.
+   * Reads continue so the client can render a truthful maintenance state and
+   * keep its pending in-tab edits.
+   */
+  const migrationWritable = (_req: Request, _res: Response, next: NextFunction) => {
+    void requireNoActiveMigrationFence(store).then(() => next()).catch(next);
+  };
+
   router.get('/', (req: AuthedRequest, res) => {
     res.json({ user: safeAccount(req.auth!.account) });
   });
 
-  router.patch('/profile', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.patch('/profile', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const body = parseBody(profileSchema, req.body);
       const updated = await withAccountWriteLease(store, req.auth!.userId, () => updateProfile(store, req.auth!.account, {
@@ -264,7 +274,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     }
   });
 
-  router.patch('/preferences', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.patch('/preferences', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const body = parseBody(prefsSchema, req.body);
       const account = req.auth!.account;
@@ -320,7 +330,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     }
   });
 
-  router.put('/data/:collection', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.put('/data/:collection', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const name = req.params.collection as UserCollectionName;
       if (!USER_COLLECTIONS.includes(name)) throw http(404, 'Unknown data collection.', 'NOT_FOUND');
@@ -340,7 +350,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
    * Bounded append path for high-volume event domains. Full replacement above
    * remains authoritative for edits, deletions, imports and older clients.
    */
-  router.post('/data/:collection/append', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.post('/data/:collection/append', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const name = req.params.collection as UserCollectionName;
       if (!USER_COLLECTIONS.includes(name)) throw http(404, 'Unknown data collection.', 'NOT_FOUND');
@@ -359,7 +369,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     }
   });
 
-  router.post('/import', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.post('/import', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const body = parseBody(importSchema, req.body);
       const raw = extractBackupState(body.backup ?? body.state, body.backup);
@@ -374,7 +384,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     }
   });
 
-  router.post('/migrate', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.post('/migrate', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const body = parseBody(migrateSchema, req.body);
       const prior = await store.migrations.findOne({ userId: req.auth!.userId, migrationId: body.migrationId });
@@ -510,7 +520,7 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
     }
   });
 
-  router.post('/delete', requireCsrf, requireRecentAuth, async (req: AuthedRequest, res, next) => {
+  router.post('/delete', requireCsrf, requireRecentAuth, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const account = req.auth!.account;
       const body = parseBody(deleteSchema, req.body);

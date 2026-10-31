@@ -49,6 +49,11 @@ export function Competition() {
   const [advanced, setAdvanced] = useState(false);
   const cfg = s.challenge;
   const fixed = cfg.mode === 'fixed' && cfg.fixed ? cfg.fixed : null;
+  // A fixed run is bound to the playlist captured at start. Switching the
+  // active playlist must never change its user score or rival basis.
+  const arenaSnap = fixed
+    ? (fixed.playlistId ? s.playlists[fixed.playlistId] : undefined)
+    : snap;
   const effectiveCfg: ChallengeConfig = fixed
     ? {
       ...cfg,
@@ -76,37 +81,58 @@ export function Competition() {
   const windowName = windowLabel(windowDates);
 
   const playlistBasis = useMemo(() => {
-    if (!snap) return { totalSec: null as number | null, n: 0, avgVideoSec: 600, resolved: 0 };
-    const resolved = snap.entries.filter((e) => e.durationSec !== null) as { durationSec: number }[];
+    if (fixed) {
+      const total = fixed.playlistDurationSec;
+      const n = fixed.playlistEntryCount ?? arenaSnap?.entries.length ?? 0;
+      const avg = fixed.playlistAvgVideoSec
+        ?? (typeof total === 'number' && total > 0 && n > 0 ? Math.round(total / n) : 600);
+      return {
+        totalSec: typeof total === 'number' && Number.isFinite(total) && total > 0 ? total : null,
+        n,
+        avgVideoSec: avg,
+        resolved: n,
+      };
+    }
+    if (!arenaSnap) return { totalSec: null as number | null, n: 0, avgVideoSec: 600, resolved: 0 };
+    const resolved = arenaSnap.entries.filter((e) => e.durationSec !== null) as { durationSec: number }[];
     const total = resolved.reduce((a, e) => a + (e.durationSec ?? 0), 0);
     return {
-      totalSec: resolved.length === snap.entries.length && total > 0 ? total : null,
-      n: snap.entries.length,
+      totalSec: resolved.length === arenaSnap.entries.length && total > 0 ? total : null,
+      n: arenaSnap.entries.length,
       avgVideoSec: resolved.length ? Math.round(total / resolved.length) : 600,
       resolved: resolved.length,
     };
-  }, [snap]);
+  }, [arenaSnap, fixed]);
 
   const userEvidence = useMemo(() => {
-    if (!snap) {
+    if (!arenaSnap) {
       return { playlistDurationSec: null, uniqueContentSec: 0, focusSec: 0, verifiedCompleted: 0, manualCompleted: 0, daily: [], qualifyingDays: 0 };
     }
     return computeArenaUserEvidence({
-      snapshot: snap,
+      snapshot: arenaSnap,
       progress: s.progress,
       segments: s.segments,
       sessions: s.sessions,
       timeZone: s.prefs.timezone,
       windowDates,
     });
-  }, [snap, s.progress, s.segments, s.sessions, s.prefs.timezone, windowDatesKey]);
+    // windowDatesKey is the stable serialization of windowDates; depending on
+    // the freshly allocated array would recompute every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arenaSnap, s.progress, s.segments, s.sessions, s.prefs.timezone, windowDatesKey]);
 
   const observedDays = useMemo(() => {
     if (!fixed) return effectiveCfg.windowDays;
-    const start = Date.parse(fixed.startedAt);
-    if (!Number.isFinite(start)) return effectiveCfg.windowDays;
-    return Math.min(effectiveCfg.windowDays, Math.max(0, Math.floor((Date.now() - start) / 86400_000) + 1));
-  }, [fixed, effectiveCfg.windowDays, todayTick]);
+    // Count frozen calendar dates that the user's timezone has already reached.
+    // UTC elapsed-time math can be one day ahead/behind near midnight and would
+    // change provisional eligibility incorrectly.
+    const todayKey = challengeWindowDates(1, s.prefs.timezone)[0];
+    const observed = fixed.windowDates.filter((dateKey) => dateKey <= todayKey).length;
+    return Math.min(effectiveCfg.windowDays, Math.max(0, observed));
+    // todayTick is an intentional date-change signal; the derived key above is
+    // the only value read, so exhaustive-deps would otherwise drop it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixed, effectiveCfg.windowDays, s.prefs.timezone, todayTick]);
 
   const problems = validateChallenge(effectiveCfg);
   const anchorDates = useMemo(() => windowDatesKey.split(',').filter(Boolean), [windowDatesKey]);
@@ -164,11 +190,13 @@ export function Competition() {
   };
 
   const startFixed = () => {
-    if (!snap || !playlistBasis.totalSec) return;
+    if (!snap || !playlistBasis.totalSec || problems.length > 0) return;
     const next = createFixedChallenge(cfg, {
       playlistId: snap.playlistId,
       playlistSnapshotVersion: snap.snapshotVersion,
       playlistDurationSec: playlistBasis.totalSec,
+      playlistEntryCount: playlistBasis.n,
+      playlistAvgVideoSec: playlistBasis.avgVideoSec,
       windowDates,
     });
     s.setChallenge(next);
@@ -181,12 +209,12 @@ export function Competition() {
       confirmLabel: 'End fixed run',
       danger: true,
     });
-    if (ok) s.setChallenge({ mode: 'practice', fixed: null });
+    if (ok) s.endFixedChallenge();
   };
 
   if (!snap) return <Empty title="No active playlist" hint="Pick a playlist — Arena compares your real progress with simulated learners. It is a practice game, not a real leaderboard." />;
 
-  const unavailable = playlistBasis.totalSec === null;
+  const unavailable = playlistBasis.totalSec === null || (fixed !== null && !arenaSnap);
 
   return (
     <div className="space-y-4">
@@ -214,31 +242,41 @@ export function Competition() {
             <Card>
               <h3 className="text-sm font-bold">Arena unavailable</h3>
               <p className="mt-1 text-xs text-slate-300" role="status">
-                Arena needs every video duration. {playlistBasis.resolved}/{playlistBasis.n} entries currently have a resolved duration.
-                Refresh the playlist or resolve the flagged entries. No average or estimated duration is substituted.
+                {fixed && !arenaSnap
+                  ? `This fixed run is bound to playlist "${fixed.playlistId ?? 'unknown'}". That playlist is no longer available, so its score cannot be reconstructed and no other playlist is substituted.`
+                  : <>Arena needs every video duration. {playlistBasis.resolved}/{playlistBasis.n} entries currently have a resolved duration.
+                    Refresh the playlist or resolve the flagged entries. No average or estimated duration is substituted.</>}
               </p>
             </Card>
           ) : (
             <>
               <Card>
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="mr-auto">
-                    <h3 className="text-sm font-bold">{fixed ? 'Fixed challenge run' : 'Practice simulation'}</h3>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-bold">{fixed ? 'Private fixed run' : 'Practice simulation'}</h3>
                     <p className="text-[11px] text-slate-500">
                       {fixed
-                        ? `Started ${fixed.startedAt.slice(0, 10)} · ends ${fixed.endsAt.slice(0, 10)} · settings locked`
+                        ? `Started ${fixed.startedAt.slice(0, 10)} · ends ${fixed.endsAt.slice(0, 10)} · settings locked · client-computed`
                         : 'Change these settings to explore a different fictional cohort. Only the practice simulation changes — never your real learning data.'}
                     </p>
                   </div>
                   {fixed ? (
                     <Btn variant="danger" onClick={endFixed}><Flag size={13} /> End fixed run</Btn>
                   ) : (
-                    <Btn variant="primary" onClick={startFixed}><Lock size={13} /> Start fixed challenge</Btn>
+                    <Btn variant="primary" onClick={startFixed} disabled={problems.length > 0} title={problems.length > 0 ? problems[0] : 'Freeze this practice configuration for a replayable run'}>
+                      <Lock size={13} /> Start private fixed run
+                    </Btn>
                   )}
                 </div>
                 <p className="mt-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-2 text-center text-xs text-violet-200">
                   Ranked by <b>75% progress + 25% consistency</b> over {windowName} ({effectiveCfg.windowDays} days, {s.prefs.timezone}).
                   Progress is unique covered playlist content ÷ total playlist duration. Consistency is qualifying days ÷ window days.
+                </p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  A fixed run is a <b>private, client-computed snapshot</b> of these settings and your playlist basis
+                  (stored with your account data). It is not a global official season, a real-person league, or a
+                  server-verified competition. The UI locks its settings; ending it returns to editable practice
+                  without changing your learning records.
                 </p>
                 <div className="mt-2 grid gap-2 sm:grid-cols-4">
                   <NumberField

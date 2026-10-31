@@ -163,7 +163,7 @@ export async function createAccountFromGoogle(
 ): Promise<Account> {
   if (!identity.emailVerified) throw http(403, 'Google did not confirm a verified email address for this account.', 'EMAIL_NOT_VERIFIED');
   const emailNormalized = normalizeEmail(identity.email);
-  return withLock(`google:${identity.sub}`, async () => {
+  return withLock(`google:${identity.sub}`, () => withLock(`email:${emailNormalized}`, async () => {
     const existing = await store.accounts.findOne({ googleSub: identity.sub });
     if (existing) {
       if ((existing as Account).status === 'deleting') throw http(403, 'This account is being deleted.', 'ACCOUNT_DELETING');
@@ -171,9 +171,11 @@ export async function createAccountFromGoogle(
     }
     const emailOwner = await store.accounts.findOne({ emailNormalized });
     if (emailOwner) {
-      // Never auto-link by email string. The owner must explicitly link from a
-      // signed-in session if linking is added later.
-      throw http(409, 'An account with this email already exists but is not linked to this Google identity. Sign in to the existing account, or contact support for a safe link flow.', 'LINK_REQUIRED');
+      // Never auto-link by email string. Even with a verified Google email,
+      // matching an existing account is not proof that the same person owns
+      // both identities. The owner must authenticate through the existing
+      // account's sign-in method before any explicit linking.
+      throw http(409, 'An account with this email already exists but is not linked to this Google identity. Sign in to the existing account with its password, or contact support for a safe link flow.', 'LINK_REQUIRED');
     }
     const now = new Date().toISOString();
     const account: Account = {
@@ -203,12 +205,23 @@ export async function createAccountFromGoogle(
       return account;
     } catch (e) {
       if (isDuplicateKey(e)) {
+        // Two different backend processes can pass the read checks at the
+        // same time. The database unique indexes are the authority. Re-read
+        // both identity keys and report a safe conflict instead of a generic
+        // 500 or a second account.
         const raced = (await store.accounts.findOne({ googleSub: identity.sub })) as Account | null;
-        if (raced) return raced;
+        if (raced) {
+          if (raced.status === 'deleting') throw http(403, 'This account is being deleted.', 'ACCOUNT_DELETING');
+          return raced;
+        }
+        const racedEmail = (await store.accounts.findOne({ emailNormalized })) as Account | null;
+        if (racedEmail) {
+          throw http(409, 'An account with this email already exists but is not linked to this Google identity. Sign in to the existing account with its password, or contact support for a safe link flow.', 'LINK_REQUIRED');
+        }
       }
       throw e;
     }
-  });
+  }));
 }
 
 export async function completeOnboarding(
@@ -366,10 +379,17 @@ export async function setAccountEmail(store: DataStore, account: Account, email:
   if (owner && owner.userId !== account.userId) throw http(409, 'That email address is unavailable.', 'EMAIL_TAKEN');
   const now = new Date().toISOString();
   const updated: Account = { ...account, email: email.trim(), emailNormalized, emailChangedAt: now, updatedAt: now };
-  await store.accounts.updateOne(
-    { userId: account.userId },
-    { $set: { email: updated.email, emailNormalized, emailChangedAt: now, updatedAt: now } },
-  );
+  try {
+    await store.accounts.updateOne(
+      { userId: account.userId },
+      { $set: { email: updated.email, emailNormalized, emailChangedAt: now, updatedAt: now } },
+    );
+  } catch (error) {
+    // The unique index is the cross-instance authority. A raced change to the
+    // same normalized address must be a safe conflict, never a duplicate.
+    if (isDuplicateKey(error)) throw http(409, 'That email address is unavailable.', 'EMAIL_TAKEN');
+    throw error;
+  }
   return updated;
 }
 

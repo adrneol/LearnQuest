@@ -5,7 +5,7 @@ import { openDB } from 'idb';
 import { StoreProvider, useStore } from '../src/app/store.js';
 import { buildBackup, type BackupState } from '../src/services/persistence/backup.js';
 import { defaultPreferences } from '../src/domain/settings/preferences.js';
-import { DEFAULT_CHALLENGE } from '../src/domain/competition/competition.js';
+import { DEFAULT_CHALLENGE, createFixedChallenge } from '../src/domain/competition/competition.js';
 import { findProgressForEntry, isProgressComplete, countCompletedEntries } from '../src/domain/index.js';
 
 const P = 'PLstorep000000000000';
@@ -72,6 +72,51 @@ beforeEach(async () => {
 });
 
 describe('store data-integrity boundaries', () => {
+  it('locks a private fixed Arena run and can explicitly end it without losing practice settings', async () => {
+    const { result } = await readyHook();
+    const dates = Array.from({ length: 14 }, (_, i) => `2026-10-${String(i + 1).padStart(2, '0')}`);
+    act(() => result.current.setChallenge(createFixedChallenge(DEFAULT_CHALLENGE, {
+      playlistId: P,
+      playlistSnapshotVersion: P_SNAP.snapshotVersion,
+      playlistDurationSec: 180,
+      windowDates: dates,
+      now: new Date('2026-10-01T00:00:00.000Z'),
+    })));
+    await waitFor(() => expect(result.current.challenge.mode).toBe('fixed'));
+    const frozen = result.current.challenge.fixed!;
+    expect(frozen.playlistId).toBe(P);
+
+    // Any attempt to edit settings while the run is frozen is ignored.
+    act(() => result.current.setChallenge({ seed: 12345, cohortSize: 500 }));
+    expect(result.current.challenge.seed).toBe(frozen.seed);
+    expect(result.current.challenge.fixed?.cohortSize).toBe(frozen.cohortSize);
+
+    act(() => result.current.endFixedChallenge());
+    await waitFor(() => expect(result.current.challenge.mode).toBe('practice'));
+    expect(result.current.challenge.fixed).toBeNull();
+    expect(result.current.challenge.seed).toBe(frozen.seed);
+
+    act(() => result.current.setChallenge({ seed: 12345 }));
+    await waitFor(() => expect(result.current.challenge.seed).toBe(12345));
+  });
+
+  it('keeps at most 100 local Arena rank snapshots', async () => {
+    const { result } = await readyHook();
+    act(() => {
+      for (let i = 0; i < 120; i += 1) {
+        result.current.pushRank({
+          at: new Date(2026, 0, 1, 0, i).toISOString(),
+          rank: i + 1,
+          of: 100,
+          metric: 'arena-v2',
+        });
+      }
+    });
+    await waitFor(() => expect(result.current.rankHistory).toHaveLength(100));
+    expect(result.current.rankHistory[0].rank).toBe(21);
+    expect(result.current.rankHistory[99].rank).toBe(120);
+  });
+
   it('refreshes one playlist by identity without orphaning another playlist', async () => {
     const { result } = await readyHook();
     const reordered = {

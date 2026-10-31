@@ -273,6 +273,38 @@ describe('Google intent UI separation', () => {
     await waitFor(() => expect(onGoogle).toHaveBeenCalledWith('register'));
   });
 
+  it('turns an unknown sign-in Google identity into the explicit account-creation screen', () => {
+    window.location.hash = '#/auth?error=google_account_not_found';
+    render(
+      <AuthScreens
+        setup={CONFIG}
+        authError={null}
+        onPasswordLogin={vi.fn(async () => undefined)}
+        onGoogle={vi.fn(async () => undefined)}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeInTheDocument();
+    expect(screen.getByText(/No LearnQuest account is linked to that Google identity yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No account was created automatically/i)).toBeInTheDocument();
+    expect(screen.queryByText(/email already exists/i)).toBeNull();
+  });
+
+  it('explains the blocked auto-link path without offering account takeover', () => {
+    window.location.hash = '#/auth?error=LINK_REQUIRED';
+    render(
+      <AuthScreens
+        setup={CONFIG}
+        authError={null}
+        onPasswordLogin={vi.fn(async () => undefined)}
+        onGoogle={vi.fn(async () => undefined)}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByText(/did not link or sign you into it automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/contact support with proof of account ownership/i)).toBeInTheDocument();
+  });
+
   it('describes recovery as a single-use email link, not a numeric code', async () => {
     render(
       <AuthScreens

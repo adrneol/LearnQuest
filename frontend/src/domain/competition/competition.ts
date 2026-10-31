@@ -14,7 +14,7 @@ import { generateAlias, initialsOf } from './aliases.js';
 import { calendarWindowDates, zonedNoonMs, attributeFocusByDay, attributePlaybackByDay, splitPlaybackSegmentByDay } from '../time/time.js';
 import { supportedZone } from '../time/timezones.js';
 import { mergeIntervals } from '../playback/playback.js';
-import { buildEntryProgressIndex } from '../progress/identity.js';
+import { buildEntryProgressIndex, isProgressComplete } from '../progress/identity.js';
 import type { PlaybackSegment } from '../playback/playback.js';
 import type { PlaylistSnapshot, ProgressRecord, StudySession } from '../../types/index.js';
 
@@ -102,6 +102,9 @@ export interface FixedChallengeSnapshot {
   playlistId: string | null;
   playlistSnapshotVersion: number | null;
   playlistDurationSec: number | null;
+  /** Frozen entry count / average duration used only for rival simulation. */
+  playlistEntryCount?: number | null;
+  playlistAvgVideoSec?: number | null;
   windowDates: string[];
   weights: { progress: number; consistency: number };
 }
@@ -383,6 +386,8 @@ export function createFixedChallenge(
     playlistId: string | null;
     playlistSnapshotVersion: number | null;
     playlistDurationSec: number | null;
+    playlistEntryCount?: number | null;
+    playlistAvgVideoSec?: number | null;
     windowDates: string[];
     now?: Date;
   },
@@ -408,6 +413,8 @@ export function createFixedChallenge(
       playlistId: input.playlistId,
       playlistSnapshotVersion: input.playlistSnapshotVersion,
       playlistDurationSec: input.playlistDurationSec,
+      playlistEntryCount: input.playlistEntryCount ?? null,
+      playlistAvgVideoSec: input.playlistAvgVideoSec ?? null,
       windowDates: dates,
       weights: { ...ARENA_WEIGHTS },
     },
@@ -773,11 +780,11 @@ export function computeArenaUserEvidence(input: {
     if (playlistDurationSec === playlistDurationSec) playlistDurationSec += duration;
     const rec = progressIndex.get(entry.position);
     const complete = Boolean(rec && !rec.orphaned && rec.completedAt && rec.status === 'done');
-    if (rec && rec.completedAt) {
-      const day = calendarWindowDates(1, timeZone, Date.parse(rec.completedAt))[0];
+    if (complete) {
+      const day = calendarWindowDates(1, timeZone, Date.parse(rec!.completedAt!))[0];
       if (day) completedByDay.set(day, (completedByDay.get(day) ?? 0) + 1);
     }
-    if (complete) {
+    if (isProgressComplete(rec)) {
       unique += duration;
       if (rec?.source === 'verified') verifiedCompleted += 1;
       else manualCompleted += 1;

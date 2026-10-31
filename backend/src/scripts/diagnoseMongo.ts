@@ -190,7 +190,6 @@ async function main(): Promise<void> {
     diagnostic: 'mongo-read-only-connectivity',
     readOnly: true,
     runtime: { node: process.version },
-    database: { expected: 'learnquest', matches: false },
   };
 
   let client: MongoClient | null = null;
@@ -212,15 +211,10 @@ async function main(): Promise<void> {
     const dbName = env.mongodbDbName;
     const scheme = uri.startsWith('mongodb+srv://') ? 'mongodb+srv' : 'mongodb';
     result.uri = { scheme, structurallyValid: true, options: uriShape(uri) };
-    result.database = { expected: 'learnquest', matches: dbName === 'learnquest' };
-    if (dbName !== 'learnquest') {
-      result.classification = 'INVALID_DATABASE_NAME' satisfies DiagnosticClassification;
-      result.retryable = false;
-      result.elapsedMs = Date.now() - started;
-      console.log(JSON.stringify(result, null, 2));
-      process.exitCode = 1;
-      return;
-    }
+    // A configured, validated database name is not a defect. The diagnostic
+    // must work for legitimate deployment-specific names instead of assuming
+    // the development default, and it must never print a URI or credential.
+    result.database = { name: dbName, configured: true };
 
     client = new MongoClient(uri, {
       serverSelectionTimeoutMS: 7_000,

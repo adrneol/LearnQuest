@@ -139,6 +139,8 @@ interface Store {
   updateFlexGoal: (id: string, patch: Partial<Goal>) => void;
   deleteFlexGoal: (id: string) => void;
   setChallenge: (patch: Partial<ChallengeConfig>) => void;
+  /** Explicitly end a frozen fixed run and return to editable practice. */
+  endFixedChallenge: () => void;
   setChallengeEnabled: (on: boolean) => void;
   resetChallenge: () => void;
   pushRank: (r: RankSnapshot) => void;
@@ -158,6 +160,12 @@ interface Store {
   clearAuthNotice: () => void;
   syncStatus: 'idle' | 'saving' | 'saved' | 'resolving' | 'review' | 'error';
   syncError: string | null;
+  /**
+   * True when the server reports a durable storage-migration fence. The tab
+   * keeps rendering the person's edits from memory; it must not claim they were
+   * saved or discard them while writes are temporarily read-only.
+   */
+  migrationReadOnly: boolean;
   /** Records changed differently on this device and another device. */
   cloudConflicts: MergeConflict[];
   /** Resolve every remaining conflict in one collection. */
@@ -672,6 +680,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'resolving' | 'review' | 'error'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [migrationReadOnly, setMigrationReadOnly] = useState(false);
   const [cloudConflicts, setCloudConflicts] = useState<MergeConflict[]>([]);
   const [serverVersion, setServerVersion] = useState(0);
   const [migrationAvailable, setMigrationAvailable] = useState(false);
@@ -864,6 +873,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setServerVersion(0);
     setSyncStatus('idle');
     setSyncError(null);
+    setMigrationReadOnly(false);
     setMigrationAvailable(false);
     setMigrationSummary(null);
     setMigrationError(null);
@@ -1034,6 +1044,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       lastSessionCheckRef.current = Date.now();
       setSyncStatus('idle');
       setSyncError(null);
+      setMigrationReadOnly(false);
       setReady(true);
     } catch (e: any) {
       if (generation !== cloudLoadGeneration.current) return;
@@ -1305,6 +1316,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       // award can safely be credited without another network write.
       confirmPendingSessionAwards(state.sessions);
       setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'saved');
+      setMigrationReadOnly(false);
       return;
     }
     setSyncStatus('saving');
@@ -1332,11 +1344,20 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         }
       }
       setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'saved');
+      setMigrationReadOnly(false);
     } catch (e: any) {
       if (cloudUserRef.current !== userId) return;
       if (e?.code !== 'VERSION_CONFLICT') {
         setSyncStatus('error');
-        setSyncError(e?.message ?? 'Your changes were not saved to the server. Retry the save.');
+        if (e?.code === 'MIGRATION_READ_ONLY' || e?.status === 503 && /migration/i.test(String(e?.message ?? ''))) {
+          setMigrationReadOnly(true);
+          setSyncError(
+            'Learning data is temporarily read-only while storage maintenance runs. '
+            + 'Your edits are still in this tab; keep the tab open and retry after the freeze is released.',
+          );
+        } else {
+          setSyncError(e?.message ?? 'Your changes were not saved to the server. Retry the save.');
+        }
         return;
       }
       setSyncStatus('resolving');
@@ -1572,7 +1593,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration,
     segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings,
-    mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, cloudConflicts,
+    mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, migrationReadOnly, cloudConflicts,
     resolveCloudConflict, serverVersion,
     migrationAvailable, migrationSummary, migrationError,
 
@@ -2157,13 +2178,18 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       if (prev.mode === 'fixed' && prev.fixed) return prev;
       return normalizeChallenge({ ...prev, ...patch });
     }),
+    endFixedChallenge: () => setChallengeState((prev) => (
+      prev.mode === 'fixed' && prev.fixed
+        ? normalizeChallenge({ ...prev, mode: 'practice', fixed: null })
+        : prev
+    )),
     setChallengeEnabled: (on) => setChallengeEnabledState(on),
     // NEVER clears real learning data - sim snapshots/history only.
     resetChallenge: () => {
       setRankHistory([]);
       setChallengeState(normalizeChallenge(DEFAULT_CHALLENGE));
     },
-    pushRank: (r) => setRankHistory((prev) => [...prev.slice(-100), r]),
+    pushRank: (r) => setRankHistory((prev) => [...prev.slice(-99), r]),
     setSettings: (patch) => setSettingsState((prev) => sanitizeSettings({ ...prev, ...patch })),
 
     exportBackup: async () => {
@@ -2287,7 +2313,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       }
     },
     setLastDiff: (s) => setLastDiff(s),
-  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, cloudConflicts, resolveCloudConflict, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState, authSyncSourceId]);
+  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, migrationReadOnly, cloudConflicts, resolveCloudConflict, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState, authSyncSourceId]);
 
   if (mode === 'cloud' && actionRoute) {
     const exit = () => leaveEmailAction('signin');

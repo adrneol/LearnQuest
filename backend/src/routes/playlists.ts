@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { DataStore } from '../store.js';
 import { noStore, requireAuth, requireCsrf, requireOnboarded, type AuthedRequest } from '../auth/middleware.js';
@@ -7,6 +7,7 @@ import { withAccountWriteLease } from '../auth/writeLease.js';
 import {
   archivePlaylist, deletePlaylistPermanently, playlistSummary,
 } from '../services/userData.js';
+import { requireNoActiveMigrationFence } from '../services/migrationControl.js';
 
 const versionSchema = z.object({ version: z.number().int().min(0) });
 const deleteSchema = z.object({
@@ -19,6 +20,9 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
   router.use(requireAuth(store));
   router.use(noStore);
   router.use(requireOnboarded);
+  const migrationWritable = (_req: Request, _res: Response, next: NextFunction) => {
+    void requireNoActiveMigrationFence(store).then(() => next()).catch(next);
+  };
 
   const validId = (id: string): string => {
     if (!/^[A-Za-z0-9_-]{3,128}$/.test(id)) throw http(400, 'Invalid playlist ID.', 'INVALID_PLAYLIST_ID');
@@ -36,7 +40,7 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
     }
   });
 
-  router.post('/:playlistId/archive', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.post('/:playlistId/archive', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const id = validId(req.params.playlistId);
       const body = versionSchema.safeParse(req.body);
@@ -52,7 +56,7 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
     }
   });
 
-  router.post('/:playlistId/restore', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.post('/:playlistId/restore', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const id = validId(req.params.playlistId);
       const body = versionSchema.safeParse(req.body);
@@ -68,7 +72,7 @@ export function createPlaylistManagementRouter(store: DataStore): Router {
     }
   });
 
-  router.delete('/:playlistId', requireCsrf, async (req: AuthedRequest, res, next) => {
+  router.delete('/:playlistId', requireCsrf, migrationWritable, async (req: AuthedRequest, res, next) => {
     try {
       const id = validId(req.params.playlistId);
       const body = deleteSchema.safeParse(req.body);

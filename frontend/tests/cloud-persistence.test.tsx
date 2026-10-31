@@ -113,6 +113,7 @@ interface FakeServer {
   version: number;
   failData: boolean;
   failWrites: boolean;
+  readOnly: boolean;
   dataReads: number;
   writes: Array<{ collection: string; body: any }>;
   appends: Array<{ collection: string; body: any }>;
@@ -126,6 +127,7 @@ function makeServer(playlistId = P, note = 'note A'): FakeServer {
     version: 0,
     failData: false,
     failWrites: false,
+    readOnly: false,
     dataReads: 0,
     writes: [],
     appends: [],
@@ -174,6 +176,9 @@ function installFetch(server: FakeServer) {
       const body = JSON.parse(init.body);
       const collection = u.split('/').slice(-2)[0];
       server.appends.push({ collection, body });
+      if (server.readOnly) {
+        return json({ error: 'A learning-data storage migration is in progress.', code: 'MIGRATION_READ_ONLY' }, 503);
+      }
       if (server.failWrites) return json({ error: 'The save could not be completed.' }, 500);
       if (body.version !== server.version) return json({ error: 'Version conflict.', code: 'VERSION_CONFLICT' }, 409);
       const existing = Array.isArray(server.state[collection]) ? server.state[collection] : [];
@@ -192,6 +197,9 @@ function installFetch(server: FakeServer) {
       const body = JSON.parse(init.body);
       const collection = u.split('/').pop()!;
       server.writes.push({ collection, body });
+      if (server.readOnly) {
+        return json({ error: 'A learning-data storage migration is in progress.', code: 'MIGRATION_READ_ONLY' }, 503);
+      }
       if (server.failWrites) return json({ error: 'The save could not be completed.' }, 500);
       if (body.version !== server.version) return json({ error: 'Version conflict.', code: 'VERSION_CONFLICT' }, 409);
       server.state = { ...server.state, [collection]: body.items };
@@ -315,6 +323,26 @@ describe('cloud persistence and source-of-truth boundaries', () => {
     act(() => hook.result.current.retryCloudSave());
     await waitFor(() => expect(hook.result.current.syncStatus).toBe('saved'));
     expect(server.state.progress[`${P}::eA`].notes).toBe('retry this save');
+  });
+
+  it('keeps local edits and shows explicit read-only state during a storage migration', async () => {
+    const server = makeServer();
+    server.readOnly = true;
+    installFetch(server);
+    const hook = await readyHook();
+
+    act(() => hook.result.current.updateRecord(`${P}::eA`, { notes: 'edit during freeze' }));
+    await waitFor(() => expect(hook.result.current.syncStatus).toBe('error'));
+    expect(hook.result.current.migrationReadOnly).toBe(true);
+    expect(hook.result.current.syncError).toMatch(/read-only|storage maintenance/i);
+    expect(hook.result.current.progress[`${P}::eA`].notes).toBe('edit during freeze');
+    expect(server.state.progress[`${P}::eA`].notes).toBe('note A');
+
+    server.readOnly = false;
+    act(() => hook.result.current.retryCloudSave());
+    await waitFor(() => expect(hook.result.current.syncStatus).toBe('saved'));
+    expect(hook.result.current.migrationReadOnly).toBe(false);
+    expect(server.state.progress[`${P}::eA`].notes).toBe('edit during freeze');
   });
 
   it('treats a brand-new fully onboarded account with zero learning records as a valid empty account', async () => {

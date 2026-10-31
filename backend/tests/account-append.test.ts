@@ -175,6 +175,38 @@ describe('bounded append API', () => {
     expect(state.sessions.map((session: any) => session.id)).toEqual(['session-a', 'session-b']);
   });
 
+  it('rejects duplicate stable ids inside one append request before writing', async () => {
+    const account = await completedAccount('append_dupe', 'google-sub-append-dupe', 'append-dupe@example.test');
+    const cookie = await sessionCookie(account.userId);
+    const token = await csrf(cookie);
+    const first = focusSession('session-dupe');
+
+    const duplicated = await request(app)
+      .post('/api/account/data/sessions/append')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', token)
+      .send({ version: 0, items: [first, { ...first }] });
+    expect(duplicated.status).toBe(400);
+    expect(duplicated.body.error).toMatch(/duplicate id/i);
+
+    const conflicting = await request(app)
+      .post('/api/account/data/sessions/append')
+      .set('Cookie', cookie)
+      .set('X-CSRF-Token', token)
+      .send({
+        version: 0,
+        items: [
+          focusSession('session-dupe-2'),
+          focusSession('session-dupe-2', { pausedSec: 1 }),
+        ],
+      });
+    expect(conflicting.status).toBe(400);
+    expect(conflicting.body.error).toMatch(/duplicate id/i);
+
+    const { state } = await readUserState(store, account.userId);
+    expect(state.sessions).toEqual([]);
+  });
+
   it('rejects a conflicting edit and a duplicate XP logical award', async () => {
     const account = await completedAccount('append_conflict', 'google-sub-append-conflict', 'append-conflict@example.test');
     const cookie = await sessionCookie(account.userId);
