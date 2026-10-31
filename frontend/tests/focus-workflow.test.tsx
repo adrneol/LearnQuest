@@ -50,6 +50,32 @@ function Harness() {
   );
 }
 
+function TwoTabHarness() {
+  const s = useStore();
+  const [armed, setArmed] = useState(false);
+  if (!s.ready || !s.activeId) return <p>loading</p>;
+  return (
+    <div>
+      <button onClick={() => setArmed(true)}>arm focus</button>
+      {/* Two Focus instances model two same-origin tabs sharing localStorage. */}
+      {armed && <Focus />}
+      {armed && <Focus />}
+      <pre data-testid="focus-probe">{JSON.stringify({ sessions: s.sessions })}</pre>
+    </div>
+  );
+}
+
+async function mountTwoTabs(at = '2026-10-27T10:00:00.000Z') {
+  const utils = render(<StoreProvider><TwoTabHarness /></StoreProvider>);
+  await screen.findByRole('button', { name: 'arm focus' });
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(at));
+  fireEvent.click(screen.getByRole('button', { name: 'arm focus' }));
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getAllByText(/Focus timer/)).toHaveLength(2);
+  return utils;
+}
+
 async function mount(at = '2026-10-27T10:00:00.000Z') {
   // Let the store hydrate with real timers (IndexedDB can use timers), then
   // install the deterministic clock before Focus mounts its own intervals.
@@ -78,7 +104,7 @@ describe('Focus end-to-end state machine', () => {
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(screen.getByText('00:01:05')).toBeTruthy(); // active time did not advance
-    expect(screen.getByText(/Wall time 00:02:05/)).toBeTruthy();
+    expect(screen.getByText(/Elapsed time 00:02:05/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(35_000); });
@@ -115,12 +141,49 @@ describe('Focus end-to-end state machine', () => {
     expect(screen.getByText(/^00:00:1[12]$/)).toBeTruthy();
   });
 
+  it('prevents a second tab from starting a duplicate timer while the lease is live', async () => {
+    await mountTwoTabs();
+    const starts = screen.getAllByRole('button', { name: 'Start' });
+    fireEvent.click(starts[0]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getAllByRole('button', { name: 'Pause' })).toHaveLength(1);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Start' })[0]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.getByText(/Another LearnQuest tab is already tracking focus/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Pause' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Start' })).toHaveLength(1);
+    expect(probe().sessions).toHaveLength(0);
+  });
+
+  it('requires explicit confirmation before discarding a running timer', async () => {
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    const confirm = screen.getByRole('group', { name: 'Confirm timer reset' });
+    expect(confirm).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+    expect(probe().sessions).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep timer' }));
+    expect(screen.queryByRole('group', { name: 'Confirm timer reset' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard timer' }));
+    expect(screen.queryByRole('group', { name: 'Confirm timer reset' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
+    expect(probe().sessions).toHaveLength(0);
+  });
+
   it('records a manual correction as estimated and does not present it as observed', async () => {
     await mount();
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
-    fireEvent.change(screen.getByLabelText(/Manual correction/), { target: { value: '2' } });
-    fireEvent.blur(screen.getByLabelText(/Manual correction/));
+    fireEvent.change(screen.getByLabelText(/Adjust recorded time/), { target: { value: '2' } });
+    fireEvent.blur(screen.getByLabelText(/Adjust recorded time/));
     fireEvent.click(screen.getByRole('button', { name: /Finish/ }));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     const data = probe();

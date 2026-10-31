@@ -78,6 +78,31 @@ export function summarizeSegments(segments: PlaybackSegment[]): CoverageSummary 
   return { uniqueSec, totalContentSec, activeSec, rewatchedSec: Math.max(0, totalContentSec - uniqueSec) };
 }
 
+/**
+ * Aggregate coverage across distinct playlist occurrences. Segments for the
+ * same occurrence are unioned; segments for duplicate occurrences remain
+ * separate. This is the denominator/numerator rule used by Analytics and
+ * Arena, so a rewatch or overlapping poll cannot inflate "content watched".
+ */
+export function summarizeByEntry(segments: PlaybackSegment[]): CoverageSummary {
+  const groups = new Map<string, PlaybackSegment[]>();
+  for (const segment of segments) {
+    const key = `${segment.playlistId}::${segment.entryId ?? `${segment.position}:${segment.videoId}`}`;
+    const group = groups.get(key) ?? [];
+    group.push(segment);
+    groups.set(key, group);
+  }
+  const total: CoverageSummary = { uniqueSec: 0, totalContentSec: 0, activeSec: 0, rewatchedSec: 0 };
+  for (const group of groups.values()) {
+    const summary = summarizeSegments(group);
+    total.uniqueSec += summary.uniqueSec;
+    total.totalContentSec += summary.totalContentSec;
+    total.activeSec += summary.activeSec;
+    total.rewatchedSec += summary.rewatchedSec;
+  }
+  return total;
+}
+
 /** Coverage from player-observed evidence only. */
 export function summarizeVerifiedSegments(segments: PlaybackSegment[]): CoverageSummary {
   return summarizeSegments(segments.filter((s) => s.source === 'verified'));

@@ -19,21 +19,23 @@ describe('module position parsing', () => {
   });
 });
 
-describe('efficiency-only ranking ignores volume', () => {
-  it('highest average daily efficiency ranks first; thin data stays provisional', () => {
+describe('Arena v2 ranks sustainable completion, never thin volume', () => {
+  it('full progress and consistency ranks first; thin data stays provisional', () => {
     const basis = { totalSec: 36000, n: 100, avgVideoSec: 360 };
-    const comps = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 20 }, basis);
+    const full = { uniqueContentSec: 36000, playlistDurationSec: 36000, qualifyingDays: 14, observedDays: 14 };
     const top = rankBoard(
       { ...DEFAULT_CHALLENGE, cohortSize: 20 },
-      comps,
-      { dailyEffs: [115, 115, 115], uniqueContentSec: 1, verifiedCount: 0, focusSec: 1, activeDays: 0 },
+      generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 20 }, basis),
+      full,
     );
-    expect(top.rows[0].isUser).toBe(true);
     expect(top.userRank).toBe(1);
+    expect(top.userScore).toBe(100);
+    const solo = rankBoard({ ...DEFAULT_CHALLENGE, cohortSize: 20 }, [], full);
+    expect(solo.rows[0].isUser).toBe(true);
     const thin = rankBoard(
       { ...DEFAULT_CHALLENGE },
-      comps,
-      { dailyEffs: [], uniqueContentSec: 0, verifiedCount: 0, focusSec: 0, activeDays: 0 },
+      [],
+      { uniqueContentSec: 0, playlistDurationSec: 36000, qualifyingDays: 0, observedDays: 14 },
     );
     expect(thin.rows.find((r) => r.isUser)?.provisional).toBe(true);
     expect(thin.userRank).toBeNull();

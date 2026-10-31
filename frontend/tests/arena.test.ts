@@ -1,13 +1,48 @@
 import { describe, it, expect } from 'vitest';
 import {
-  generateCompetitors, rankBoard, gapToNext, arenaScore, requiredEligibleDays, validateChallenge,
-  DEFAULT_CHALLENGE, TIER_BANDS, TIER_DEVIATION, type Competitor, type UserArenaInput,
+  generateCompetitors, rankBoard, gapToNext, arenaScore, arenaComponents, isQualifyingArenaDay,
+  countQualifyingDays, requiredQualifyingDays, requiredObservedDays, requiredEligibleDays,
+  createFixedChallenge, computeArenaUserEvidence, normalizeChallenge,
+  validateChallenge, DEFAULT_CHALLENGE, ARENA_MODEL_VERSION, ARENA_WEIGHTS,
+  type Competitor, type FixedChallengeSnapshot,
 } from '../src/domain/competition/competition.js';
 import { generateAlias, initialsOf } from '../src/domain/competition/aliases.js';
 import { mulberry32 } from '../src/domain/competition/competition.js';
+import type {
+  PlaybackSegment, PlaylistSnapshot, ProgressRecord, StudySession,
+} from '../src/domain/index.js';
 
 const BASIS = { totalSec: 36000, n: 100, avgVideoSec: 360 };
-const USER: UserArenaInput = { dailyEffs: [60, 70, 80], uniqueContentSec: 5000, verifiedCount: 10, focusSec: 3600, activeDays: 3 };
+
+function comp(over: Partial<Competitor> & { id: string }): Competitor {
+  return {
+    name: over.id, initials: 'TB', tier: 'Normal',
+    uniqueContentSec: 0, verifiedCount: 0, focusSec: 0,
+    activeDays: 0, windowDays: 14, sessions: [], efficiency: 0, practiceMin: 0,
+    arenaScore: null, eligibleDays: 0, qualifyingDays: 0, observedDays: 14,
+    progress: 0, consistency: 0, provisional: true, ...over,
+  };
+}
+
+function rival(id: string, score: number | null, qualifyingDays = 7, observedDays = 14): Competitor {
+  return comp({
+    id,
+    arenaScore: score,
+    eligibleDays: qualifyingDays,
+    qualifyingDays,
+    observedDays,
+    provisional: score === null || qualifyingDays < requiredQualifyingDays(14) || observedDays < requiredObservedDays(14),
+    progress: score === null ? 0 : score / 100,
+    consistency: qualifyingDays / 14,
+  });
+}
+
+const USER = {
+  uniqueContentSec: 18000, // 50% of 36000
+  playlistDurationSec: 36000,
+  qualifyingDays: 7, // 50% of 14
+  observedDays: 14,
+};
 
 describe('gamer aliases', () => {
   it('unique across a 2000 cohort, stable for a seed, varied in style', () => {
@@ -15,15 +50,12 @@ describe('gamer aliases', () => {
     const names = comps.map((c) => c.name);
     expect(new Set(names).size).toBe(names.length);
     expect(new Set(comps.map((c) => c.id)).size).toBe(comps.length);
-    // gamer style: single PascalCase token, no ordinary "First Last" people names
     for (const n of names) {
       expect(n).not.toMatch(/ /);
       expect(n).toMatch(/^[A-Z][A-Za-z-]+$/);
     }
-    // variety: more than a handful of distinct leading words
     const heads = new Set(names.map((n) => n.split(/(?=[A-Z])/)[0]));
     expect(heads.size).toBeGreaterThan(20);
-    // stable on refresh
     const again = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 2000 }, BASIS);
     expect(again.map((c) => c.name)).toEqual(names);
   });
@@ -56,76 +88,113 @@ describe('gamer aliases', () => {
   });
 });
 
-describe('coherent tier-band simulation', () => {
-  // Huge playlist => no content capping; band conformance must hold exactly.
-  const BIG = { totalSec: 100_000_000, n: 100000, avgVideoSec: 600 };
-
-  it('every competitor efficiency lands inside its tier band (Ultra ≤ 110%)', () => {
-    const comps = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 600, seed: 99 }, BIG);
-    for (const c of comps) {
-      if (c.focusSec === 0) continue; // inactive window: no ratio to judge
-      const [lo, hi] = TIER_BANDS[c.tier];
-      expect(c.efficiency).toBeGreaterThanOrEqual(lo * 100 - 0.5);
-      expect(c.efficiency).toBeLessThanOrEqual(hi * 100 + 0.5);
-    }
-    const ultras = comps.filter((c) => c.tier === 'Ultra' && c.focusSec > 0);
-    expect(ultras.length).toBeGreaterThan(0);
-    for (const u of ultras) expect(u.efficiency).toBeLessThanOrEqual(110.01);
+describe('Arena v2 score (independent hand-computed fixtures)', () => {
+  it('P = U/L, C = Q/W, score = 100 × (0.75P + 0.25C)', () => {
+    const c = arenaComponents({
+      uniqueContentSec: 18000,
+      playlistDurationSec: 36000,
+      qualifyingDays: 7,
+      windowDays: 14,
+      observedDays: 14,
+    });
+    expect(c.progress).toBeCloseTo(0.5, 10);
+    expect(c.consistency).toBeCloseTo(0.5, 10);
+    // 100 × (0.75×0.5 + 0.25×0.5) = 50
+    expect(c.score).toBeCloseTo(50, 10);
+    expect(c.progressWeight).toBe(0.75);
+    expect(c.consistencyWeight).toBe(0.25);
+    expect(c.modelVersion).toBe(ARENA_MODEL_VERSION);
   });
 
-  it('aggregates always agree with the session history; bounds hold', () => {
-    const comps = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 200, seed: 7 }, BASIS);
-    for (const c of comps) {
-      const f = c.sessions.reduce((a, s) => a + Math.round(s.focusMin * 60), 0);
-      const u = c.sessions.reduce((a, s) => a + Math.round(s.contentMin * 60), 0);
-      expect(c.focusSec).toBe(f);
-      expect(Math.abs(c.uniqueContentSec - u)).toBeLessThanOrEqual(c.sessions.length); // per-session rounding only
-      expect(c.uniqueContentSec).toBeLessThanOrEqual(36000);
-      expect(c.focusSec).toBeGreaterThanOrEqual(0);
-      expect(c.verifiedCount).toBeLessThanOrEqual(100);
-      expect(c.activeDays).toBe(c.sessions.length);
-      for (const s of c.sessions) {
-        expect(s.focusMin).toBeGreaterThanOrEqual(10);
-        expect(s.focusMin).toBeLessThanOrEqual(180);
-        expect(s.contentMin).toBeGreaterThanOrEqual(0);
-      }
-      // displayed efficiency derives from the same history (real formula)
-      if (c.focusSec > 0) expect(c.efficiency).toBeCloseTo((c.uniqueContentSec / c.focusSec) * 100, 0);
+  it('progress and consistency are clamped to 100% and never exceed the playlist', () => {
+    const c = arenaComponents({
+      uniqueContentSec: 999_999,
+      playlistDurationSec: 3600,
+      qualifyingDays: 99,
+      windowDays: 14,
+      observedDays: 14,
+    });
+    expect(c.progress).toBe(1);
+    expect(c.consistency).toBe(1);
+    expect(c.score).toBe(100);
+    expect(c.uniqueContentSec).toBe(3600);
+  });
+
+  it('zero/negative inputs stay bounded; unresolved playlist makes the score unavailable', () => {
+    const zero = arenaComponents({
+      uniqueContentSec: 0, playlistDurationSec: 3600, qualifyingDays: 0, windowDays: 14, observedDays: 14,
+    });
+    expect(zero.score).toBe(0);
+    const negative = arenaComponents({
+      uniqueContentSec: -500, playlistDurationSec: 3600, qualifyingDays: -2, windowDays: 14, observedDays: 14,
+    });
+    expect(negative.score).toBe(0);
+    const missing = arenaComponents({
+      uniqueContentSec: 5000, playlistDurationSec: null, qualifyingDays: 7, windowDays: 14, observedDays: 14,
+    });
+    expect(missing.available).toBe(false);
+    expect(missing.progress).toBeNull();
+    expect(missing.score).toBeNull();
+    const zeroWindow = arenaComponents({
+      uniqueContentSec: 0, playlistDurationSec: 3600, qualifyingDays: 0, windowDays: 0, observedDays: 0,
+    });
+    expect(zeroWindow.consistency).toBeNull();
+    expect(zeroWindow.score).toBeNull();
+  });
+
+  it('arenaScore accepts ratios only and clamps them', () => {
+    expect(arenaScore(0, 0)).toBe(0);
+    expect(arenaScore(0.5, 0.5)).toBe(50);
+    expect(arenaScore(2, 2)).toBe(100);
+    expect(arenaScore(-1, -1)).toBe(0);
+    expect(arenaScore(Number.NaN, 0.5)).toBeNull();
+    expect(arenaScore(0.5, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(arenaScore(null, 0.5)).toBeNull();
+  });
+
+  it('all supported windows derive sensible eligibility requirements', () => {
+    for (const w of [1, 2, 3, 7, 14, 30, 90]) {
+      expect(requiredQualifyingDays(w)).toBe(Math.min(3, w));
+      expect(requiredObservedDays(w)).toBe(Math.min(7, w));
+      expect(requiredEligibleDays(w)).toBe(requiredQualifyingDays(w));
     }
-    // useful variation: not everyone identical
-    const vals = new Set(comps.map((c) => c.uniqueContentSec));
-    expect(vals.size).toBeGreaterThan(20);
+    expect(validateChallenge({ ...DEFAULT_CHALLENGE, windowDays: 0 })).not.toHaveLength(0);
+    expect(validateChallenge({ ...DEFAULT_CHALLENGE, windowDays: 91 })).not.toHaveLength(0);
   });
 });
 
-function comp(over: Partial<Competitor> & { id: string }): Competitor {
-  return {
-    name: 'TestBot', initials: 'TB', tier: 'Normal',
-    uniqueContentSec: 0, verifiedCount: 0, focusSec: 0,
-    activeDays: 0, windowDays: 14, sessions: [], efficiency: 0, practiceMin: 0,
-    arenaScore: null, eligibleDays: 0, ...over,
-  };
-}
-
-function scored(id: string, effs: number[]): Competitor {
-  const score = arenaScore(effs)!;
-  const focusSec = effs.length * 3600;
-  const unique = Math.round(effs.reduce((a, e) => a + e, 0) / 100 * 3600);
-  return comp({ id, arenaScore: score, eligibleDays: effs.length, focusSec, uniqueContentSec: unique, efficiency: score, activeDays: effs.length });
-}
-
-describe('arena scoring (average daily efficiency, fixed basis)', () => {
-  it('arenaScore is the mean of eligible dailies; empty means unmeasurable', () => {
-    expect(arenaScore([60, 70, 80])).toBe(70);
-    expect(arenaScore([])).toBeNull();
-    expect(requiredEligibleDays(14)).toBe(3);
-    expect(requiredEligibleDays(2)).toBe(2);
-    expect(requiredEligibleDays(1)).toBe(1);
+describe('arena qualifying days', () => {
+  it('rejects the one-minute exploit and timer-only days', () => {
+    expect(isQualifyingArenaDay({ contentGainSec: 60, completedVideo: false, focusSec: 60, activePlaybackSec: 0 })).toBe(false);
+    expect(isQualifyingArenaDay({ contentGainSec: 0, completedVideo: false, focusSec: 36000, activePlaybackSec: 36000 })).toBe(false);
+    // 299s of content is below the 300s product threshold.
+    expect(isQualifyingArenaDay({ contentGainSec: 299, completedVideo: false, focusSec: 600, activePlaybackSec: 0 })).toBe(false);
+    // Content progress without the activity floor does not qualify.
+    expect(isQualifyingArenaDay({ contentGainSec: 1000, completedVideo: false, focusSec: 599, activePlaybackSec: 0 })).toBe(false);
   });
 
+  it('accepts 5 min new content + 10 min activity, or a completed video + activity', () => {
+    expect(isQualifyingArenaDay({ contentGainSec: 300, completedVideo: false, focusSec: 600, activePlaybackSec: 0 })).toBe(true);
+    expect(isQualifyingArenaDay({ contentGainSec: 0, completedVideo: true, focusSec: 0, activePlaybackSec: 600 })).toBe(true);
+    // Active playback can satisfy the activity floor.
+    expect(isQualifyingArenaDay({ contentGainSec: 300, completedVideo: false, focusSec: 0, activePlaybackSec: 600 })).toBe(true);
+  });
+
+  it('three short 100% days count; duplicates do not inflate the count', () => {
+    const days = [
+      { contentGainSec: 300, completedVideo: false, focusSec: 600, activePlaybackSec: 0 },
+      { contentGainSec: 300, completedVideo: false, focusSec: 600, activePlaybackSec: 0 },
+      { contentGainSec: 300, completedVideo: false, focusSec: 600, activePlaybackSec: 0 },
+    ];
+    expect(countQualifyingDays(days)).toBe(3);
+    expect(countQualifyingDays([...days, ...days])).toBe(6); // raw count; caller dedupes days by dateKey
+  });
+});
+
+describe('Arena v2 ranking', () => {
   it('ties share a competition rank (1,2,2,4); percentile counts strictly below', () => {
-    const comps = [scored('a', [80, 80, 80]), scored('b', [80, 80, 80]), scored('c', [50, 50, 50])];
-    const r = rankBoard(DEFAULT_CHALLENGE, comps, { ...USER, dailyEffs: [80, 80, 80] });
+    const comps = [rival('a', 50), rival('b', 50), rival('c', 10)];
+    const r = rankBoard(DEFAULT_CHALLENGE, comps, USER);
     const ranks = new Map(r.rows.map((x) => [x.id, x.rank]));
     expect(ranks.get('a')).toBe(1);
     expect(ranks.get('b')).toBe(1);
@@ -135,92 +204,307 @@ describe('arena scoring (average daily efficiency, fixed basis)', () => {
   });
 
   it('rank 1 of N is best; last place percentile is 0', () => {
-    const comps = [scored('a', [10, 10, 10])];
-    const top = rankBoard(DEFAULT_CHALLENGE, comps, { ...USER, dailyEffs: [99, 99, 99] });
+    const comps = [rival('a', 10)];
+    const top = rankBoard(DEFAULT_CHALLENGE, comps, {
+      uniqueContentSec: 36000, playlistDurationSec: 36000, qualifyingDays: 14, observedDays: 14,
+    });
     expect(top.userRank).toBe(1);
     expect(top.percentile).toBe(100);
-    const bottom = rankBoard(DEFAULT_CHALLENGE, comps, { ...USER, dailyEffs: [1, 1, 1] });
+    const bottom = rankBoard(DEFAULT_CHALLENGE, comps, {
+      uniqueContentSec: 0, playlistDurationSec: 36000, qualifyingDays: 3, observedDays: 14,
+    });
     expect(bottom.userRank).toBe(2);
     expect(bottom.percentile).toBe(0);
   });
 
-  it('volume never ranks: more hours at lower efficiency loses', () => {
-    // rival: 10 eligible days of 40% (huge volume); user: 3 days of 90%
-    const comps = [scored('big', Array(10).fill(40))];
-    const r = rankBoard(DEFAULT_CHALLENGE, comps, { ...USER, dailyEffs: [90, 90, 90] });
-    expect(r.userRank).toBe(1);
+  it('provisional users get no rank, no percentile and are not shown as last place', () => {
+    const comps = [rival('a', 70), rival('b', 60)];
+    const oneDay = rankBoard(DEFAULT_CHALLENGE, comps, {
+      uniqueContentSec: 36000, playlistDurationSec: 36000, qualifyingDays: 1, observedDays: 14,
+    });
+    expect(oneDay.userRank).toBeNull();
+    expect(oneDay.percentile).toBeNull();
+    expect(oneDay.userQualifyingDays).toBe(1);
+    expect(oneDay.required).toBe(3);
+    const me = oneDay.rows.find((x) => x.isUser)!;
+    expect(me.provisional).toBe(true);
+    expect(me.display).toMatch(/calibrating/i);
+    // Not sorted as zero: provisional rows follow every scored row.
+    const lastScored = Math.max(...oneDay.rows.filter((x) => x.value !== null).map((x) => oneDay.rows.indexOf(x)));
+    expect(oneDay.rows.indexOf(me)).toBeGreaterThan(lastScored);
+
+    const fewObserved = rankBoard(DEFAULT_CHALLENGE, comps, {
+      uniqueContentSec: 36000, playlistDurationSec: 36000, qualifyingDays: 3, observedDays: 6,
+    });
+    expect(fewObserved.userRank).toBeNull();
+    const calibrated = rankBoard(DEFAULT_CHALLENGE, comps, {
+      uniqueContentSec: 36000, playlistDurationSec: 36000, qualifyingDays: 3, observedDays: 7,
+    });
+    expect(calibrated.userRank).not.toBeNull();
   });
 
-  it('provisional users get no rank and no bottom-place percentile', () => {
-    const comps = [scored('a', [70, 70, 70])];
-    const r = rankBoard(DEFAULT_CHALLENGE, comps, { ...USER, dailyEffs: [95] }); // 1 of required 3
-    expect(r.userRank).toBeNull();
-    expect(r.percentile).toBeNull();
-    expect(r.userEligible).toBe(1);
-    expect(r.required).toBe(3);
-    const me = r.rows.find((x) => x.isUser)!;
-    expect(me.provisional).toBe(true);
-    expect(me.display).toMatch(/provisional/);
-    // not sorted as zero: provisional section follows all scored rows
-    const lastScored = Math.max(...r.rows.filter((x) => x.value !== null).map((x) => r.rows.indexOf(x)));
-    expect(r.rows.indexOf(me)).toBeGreaterThan(lastScored);
+  it('short windows scale the provisional requirements', () => {
+    const twoDay = rankBoard({ ...DEFAULT_CHALLENGE, windowDays: 2 }, [], {
+      uniqueContentSec: 18000, playlistDurationSec: 36000, qualifyingDays: 2, observedDays: 2,
+    });
+    expect(twoDay.required).toBe(2);
+    expect(twoDay.requiredObserved).toBe(2);
+    expect(twoDay.userRank).not.toBeNull();
+  });
+
+  it('unresolved playlist duration displays Unavailable and is never ranked', () => {
+    const board = rankBoard(DEFAULT_CHALLENGE, [rival('a', 50)], {
+      uniqueContentSec: 1000, playlistDurationSec: null, qualifyingDays: 14, observedDays: 14,
+    });
+    expect(board.userScore).toBeNull();
+    expect(board.userRank).toBeNull();
+    const me = board.rows.find((r) => r.isUser)!;
+    expect(me.display).toBe('Unavailable');
   });
 
   it('gap is in percentage points, null when leading or provisional', () => {
     expect(gapToNext(90, 92.4)).toBe('2.4 percentage points');
-    expect(gapToNext(95, 90)).toBeNull(); // not above
+    expect(gapToNext(95, 90)).toBeNull();
     expect(gapToNext(null, 90)).toBeNull();
     expect(gapToNext(90, null)).toBeNull();
   });
 });
 
-describe('date-varying tier simulation', () => {
-  it('daily efficiency varies by date within tier bounds (never one flat value)', () => {
-    // Huge playlist: no exhaustion capping, so every recorded day must obey its band.
-    const big = { totalSec: 100_000_000, n: 100000, avgVideoSec: 600 };
-    const comps = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 300, seed: 42 }, big);
-    let varied = 0;
+describe('coherent deterministic competitor trajectories', () => {
+  it('rivals use the same v2 formula and their aggregates derive from session history', () => {
+    const comps = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 300, seed: 7 }, BASIS);
+    expect(comps.length).toBe(299);
+    let scored = 0;
     for (const c of comps) {
-      if (c.sessions.length < 5) continue;
-      const effs = c.sessions.map((s) => (s.contentMin / s.focusMin) * 100);
-      const hi = TIER_BANDS[c.tier][1];
-      const dev = TIER_DEVIATION[c.tier];
-      for (const e of effs) {
-        expect(e).toBeLessThanOrEqual(hi * 100 + 0.6);
-        expect(e).toBeGreaterThanOrEqual(hi * 100 - dev - 0.6);
+      const focus = c.sessions.reduce((a, s) => a + s.focusSec, 0);
+      const content = c.sessions.reduce((a, s) => a + s.contentSec, 0);
+      expect(c.focusSec).toBe(focus);
+      expect(c.uniqueContentSec).toBe(Math.min(36000, content));
+      expect(c.uniqueContentSec).toBeLessThanOrEqual(36000);
+      expect(c.progress).toBeGreaterThanOrEqual(0);
+      expect(c.progress).toBeLessThanOrEqual(1);
+      expect(c.consistency).toBeGreaterThanOrEqual(0);
+      expect(c.consistency).toBeLessThanOrEqual(1);
+      expect(c.qualifyingDays).toBe(c.sessions.filter((s) => s.qualifies).length);
+      expect(c.activeDays).toBe(c.sessions.length);
+      if (c.arenaScore !== null) {
+        scored += 1;
+        expect(c.arenaScore).toBeCloseTo(100 * (0.75 * c.progress + 0.25 * c.consistency), 8);
+        expect(c.arenaScore).toBeGreaterThanOrEqual(0);
+        expect(c.arenaScore).toBeLessThanOrEqual(100);
       }
-      if (Math.max(...effs) - Math.min(...effs) > 0.5) varied += 1;
+      for (const s of c.sessions) {
+        // Every simulated day meets the same product qualifying rule.
+        expect(isQualifyingArenaDay({
+          contentGainSec: s.contentSec,
+          completedVideo: Boolean(s.completedVideo),
+          focusSec: s.focusSec,
+          activePlaybackSec: s.activePlaybackSec ?? 0,
+        })).toBe(true);
+        expect(s.contentSec).toBeGreaterThan(0);
+        expect(s.focusSec).toBeGreaterThanOrEqual(600);
+      }
     }
-    expect(varied).toBeGreaterThan(10); // natural variation, not flat lines
+    expect(scored).toBeGreaterThan(250);
+    const vals = new Set(comps.map((c) => c.arenaScore));
+    expect(vals.size).toBeGreaterThan(20);
   });
 
-  it('daily cap binds rival sessions; user history is never capped by it', () => {
-    const capped = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 200, seed: 5, dailyCapHours: 1 }, BASIS);
-    for (const c of capped) {
-      for (const s of c.sessions) expect(s.focusMin).toBeLessThanOrEqual(60);
-    }
-    // 6h default never binds habit ranges (max 180m) — cap only bites when lowered
-    const def = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 200, seed: 5 }, BASIS);
-    for (const c of def) {
-      for (const s of c.sessions) expect(s.focusMin).toBeLessThanOrEqual(360);
-    }
-    expect(validateCapRejects()).toBe(true);
+  it('season and cohort expansion are deterministic and stable', () => {
+    const a = generateCompetitors(DEFAULT_CHALLENGE, BASIS);
+    const b = generateCompetitors(DEFAULT_CHALLENGE, BASIS);
+    expect(a).toEqual(b);
+    const expanded = generateCompetitors({ ...DEFAULT_CHALLENGE, cohortSize: 200 }, BASIS);
+    expect(expanded.slice(0, a.length).map((c) => c.id)).toEqual(a.map((c) => c.id));
   });
 
-  it('rolling window changes recompute eligibility requirements', () => {
-    const comps = generateCompetitors({ ...DEFAULT_CHALLENGE, windowDays: 14 }, BASIS);
-    const w14 = rankBoard({ ...DEFAULT_CHALLENGE, windowDays: 14 }, comps, USER);
-    expect(w14.required).toBe(3);
-    const w2 = rankBoard({ ...DEFAULT_CHALLENGE, windowDays: 2 }, comps, USER);
-    expect(w2.required).toBe(2);
+  it('missing or zero playlist duration yields no rivals and no score', () => {
+    expect(generateCompetitors(DEFAULT_CHALLENGE, { totalSec: null, n: 100, avgVideoSec: 360 })).toEqual([]);
+    expect(generateCompetitors(DEFAULT_CHALLENGE, { totalSec: 0, n: 100, avgVideoSec: 360 })).toEqual([]);
+  });
+
+  it('2,000 opponents over 90 days stay within the performance budget', () => {
+    const start = performance.now();
+    const comps = generateCompetitors(
+      { ...DEFAULT_CHALLENGE, cohortSize: 2000, windowDays: 90 },
+      { totalSec: 3_600_000, n: 10_000, avgVideoSec: 360 },
+    );
+    const board = rankBoard({ ...DEFAULT_CHALLENGE, cohortSize: 2000, windowDays: 90 }, comps, USER);
+    const elapsed = performance.now() - start;
+    expect(board.rows).toHaveLength(2000);
+    expect(elapsed).toBeLessThan(8000);
   });
 });
 
-function validateCapRejects(): boolean {
-  // dailyCapHours outside 1–12 is rejected by validateChallenge
-  return (
-    validateChallenge({ ...DEFAULT_CHALLENGE, dailyCapHours: 0 }).length > 0 &&
-    validateChallenge({ ...DEFAULT_CHALLENGE, dailyCapHours: 13 }).length > 0 &&
-    validateChallenge({ ...DEFAULT_CHALLENGE, dailyCapHours: 6 }).length === 0
-  );
-}
+describe('fixed challenge snapshots', () => {
+  const now = new Date('2026-10-01T00:00:00.000Z');
+  const dates = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date(now.getTime() + i * 86400_000);
+    return d.toISOString().slice(0, 10);
+  });
+
+  it('captures formula, weights, seed, cohort and playlist basis immutably', () => {
+    const cfg = { ...DEFAULT_CHALLENGE, seed: 77, cohortSize: 50 };
+    const fixed = createFixedChallenge(cfg, {
+      playlistId: 'PL1',
+      playlistSnapshotVersion: 4,
+      playlistDurationSec: 36000,
+      windowDates: dates,
+      now,
+    });
+    expect(fixed.mode).toBe('fixed');
+    expect(fixed.fixed).not.toBeNull();
+    const snap = fixed.fixed as FixedChallengeSnapshot;
+    expect(snap.modelVersion).toBe(ARENA_MODEL_VERSION);
+    expect(snap.seed).toBe(77);
+    expect(snap.cohortSize).toBe(50);
+    expect(snap.weights).toEqual({ progress: 0.75, consistency: 0.25 });
+    expect(snap.playlistId).toBe('PL1');
+    expect(snap.playlistDurationSec).toBe(36000);
+    expect(snap.windowDates).toEqual(dates);
+    // Later config edits cannot mutate the captured snapshot.
+    cfg.seed = 999;
+    expect((fixed.fixed as FixedChallengeSnapshot).seed).toBe(77);
+  });
+
+  it('replaying the same snapshot reproduces identical scores', () => {
+    const fixed = createFixedChallenge(DEFAULT_CHALLENGE, {
+      playlistId: 'PL1',
+      playlistSnapshotVersion: 4,
+      playlistDurationSec: 36000,
+      windowDates: dates,
+      now,
+    });
+    const snap = fixed.fixed as FixedChallengeSnapshot;
+    const replayCfg = {
+      ...fixed,
+      seed: snap.seed,
+      cohortSize: snap.cohortSize,
+      tierDist: snap.tierDist,
+      windowDays: snap.windowDays,
+      dailyCapHours: snap.dailyCapHours,
+    };
+    const first = generateCompetitors(replayCfg, BASIS, { anchorDates: snap.windowDates });
+    const second = generateCompetitors(replayCfg, BASIS, { anchorDates: snap.windowDates });
+    expect(first.map((c) => c.id)).toEqual(second.map((c) => c.id));
+    expect(first.map((c) => c.arenaScore)).toEqual(second.map((c) => c.arenaScore));
+    // A new practice cohort changes the seed but not user progress inputs.
+    const practice = normalizeChallenge({ ...DEFAULT_CHALLENGE, seed: 123, mode: 'practice' });
+    expect(practice.mode).toBe('practice');
+    expect(practice.fixed).toBeNull();
+    expect(USER.uniqueContentSec).toBe(18000);
+  });
+});
+
+describe('computeArenaUserEvidence', () => {
+  const TZ = 'UTC';
+  const DAY = '2026-10-27';
+  const dayStart = Date.parse(`${DAY}T00:00:00.000Z`);
+
+  function snapshot(entries: PlaylistSnapshot['entries']): PlaylistSnapshot {
+    return {
+      playlistId: 'PL1', title: 'Test', reportedCount: entries.length, entries,
+      source: 'api', fetchedAt: new Date(dayStart).toISOString(), snapshotVersion: 1,
+    };
+  }
+
+  function segment(over: Partial<PlaybackSegment> & { id: string }): PlaybackSegment {
+    return {
+      playlistId: 'PL1', position: 1, entryId: 'e1', videoId: 'v1', sessionId: 's1',
+      wallStartMs: dayStart, wallEndMs: dayStart + 300_000,
+      timelineStartSec: 0, timelineEndSec: 300, playbackRate: 1, source: 'verified',
+      ...over,
+    };
+  }
+
+  function session(over: Partial<StudySession> = {}): StudySession {
+    return {
+      id: 'focus-1', playlistId: 'PL1', startedAt: new Date(dayStart).toISOString(),
+      finishedAt: new Date(dayStart + 900_000).toISOString(), activeSec: 900, elapsedSec: 900,
+      ...over,
+    };
+  }
+
+  it('deduplicates overlapping/repeated verified coverage per stable entry', () => {
+    const snap = snapshot([{ position: 1, entryId: 'e1', videoId: 'v1', title: 'A', durationSec: 600 }]);
+    const evidence = computeArenaUserEvidence({
+      snapshot: snap,
+      progress: {},
+      segments: [
+        segment({ id: 's1', timelineStartSec: 0, timelineEndSec: 300, wallEndMs: dayStart + 300_000 }),
+        segment({ id: 's2', timelineStartSec: 200, timelineEndSec: 600, wallStartMs: dayStart + 200_000, wallEndMs: dayStart + 600_000 }),
+        // Rewatch must not add unique content.
+        segment({ id: 's3', timelineStartSec: 0, timelineEndSec: 300, wallStartMs: dayStart + 600_000, wallEndMs: dayStart + 900_000 }),
+      ],
+      sessions: [session()],
+      timeZone: TZ,
+      windowDates: [DAY],
+    });
+    expect(evidence.playlistDurationSec).toBe(600);
+    expect(evidence.uniqueContentSec).toBe(600);
+    expect(evidence.qualifyingDays).toBe(1);
+    expect(evidence.daily[0].contentGainSec).toBe(600);
+    expect(evidence.verifiedCompleted).toBe(0);
+  });
+
+  it('manual completion credits duration once but stays self-reported', () => {
+    const snap = snapshot([
+      { position: 1, entryId: 'e1', videoId: 'v1', title: 'A', durationSec: 600 },
+      { position: 2, entryId: 'e2', videoId: 'v2', title: 'B', durationSec: 600 },
+    ]);
+    const progress: Record<string, ProgressRecord> = {
+      'PL1::e2': {
+        playlistId: 'PL1', position: 2, entryId: 'e2', videoId: 'v2',
+        completedAt: `${DAY}T12:00:00.000Z`, status: 'done', source: 'manual',
+      },
+    };
+    const evidence = computeArenaUserEvidence({
+      snapshot: snap, progress, segments: [], sessions: [session()], timeZone: TZ, windowDates: [DAY],
+    });
+    expect(evidence.playlistDurationSec).toBe(1200);
+    expect(evidence.uniqueContentSec).toBe(600);
+    expect(evidence.manualCompleted).toBe(1);
+    expect(evidence.verifiedCompleted).toBe(0);
+    expect(evidence.qualifyingDays).toBe(1);
+  });
+
+  it('duplicate occurrences remain distinct and unresolved durations disable the ratio', () => {
+    const snap = snapshot([
+      { position: 1, entryId: 'e1', videoId: 'v1', title: 'A', durationSec: 600 },
+      { position: 2, entryId: 'e2', videoId: 'v1', title: 'A again', durationSec: 600 },
+      { position: 3, entryId: 'e3', videoId: 'v3', title: 'C', durationSec: null, unresolvedReason: 'missingDuration' },
+    ]);
+    const evidence = computeArenaUserEvidence({
+      snapshot: snap, progress: {}, segments: [], sessions: [], timeZone: TZ, windowDates: [DAY],
+    });
+    expect(evidence.playlistDurationSec).toBeNull();
+    const components = arenaComponents({
+      uniqueContentSec: evidence.uniqueContentSec,
+      playlistDurationSec: evidence.playlistDurationSec,
+      qualifyingDays: evidence.qualifyingDays,
+      windowDays: 14,
+      observedDays: 14,
+    });
+    expect(components.available).toBe(false);
+    expect(components.score).toBeNull();
+  });
+
+  it('cross-midnight coverage splits by calendar day without inventing time', () => {
+    const snap = snapshot([{ position: 1, entryId: 'e1', videoId: 'v1', title: 'A', durationSec: 600 }]);
+    const evidence = computeArenaUserEvidence({
+      snapshot: snap,
+      progress: {},
+      segments: [segment({
+        id: 'midnight', timelineStartSec: 0, timelineEndSec: 600,
+        wallStartMs: Date.parse('2026-10-27T23:55:00.000Z'),
+        wallEndMs: Date.parse('2026-10-28T00:05:00.000Z'),
+      })],
+      sessions: [],
+      timeZone: TZ,
+      windowDates: ['2026-10-27', '2026-10-28'],
+    });
+    expect(evidence.uniqueContentSec).toBe(600);
+    expect(evidence.daily[0].contentGainSec).toBe(300);
+    expect(evidence.daily[1].contentGainSec).toBe(300);
+  });
+});

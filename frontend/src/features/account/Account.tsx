@@ -51,8 +51,8 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
             </h1>
             <p className="truncate text-xs text-slate-400">{user.email} · @{user.username}</p>
           </div>
-          <span className={`rounded-full px-2.5 py-1 text-[11px] ${s.syncStatus === 'error' || s.syncStatus === 'conflict' ? 'bg-red-500/15 text-red-200' : s.syncStatus === 'saving' ? 'bg-amber-500/15 text-amber-200' : 'bg-emerald-500/15 text-emerald-200'}`}>
-            {s.syncStatus === 'saving' ? 'Saving to server…' : s.syncStatus === 'error' ? 'Save failed' : s.syncStatus === 'conflict' ? 'Save conflict' : s.syncStatus === 'saved' ? 'Cloud saves confirmed' : 'Cloud account'}
+          <span className={`rounded-full px-2.5 py-1 text-[11px] ${s.syncStatus === 'error' || s.syncStatus === 'review' ? 'bg-red-500/15 text-red-200' : s.syncStatus === 'saving' ? 'bg-amber-500/15 text-amber-200' : 'bg-emerald-500/15 text-emerald-200'}`}>
+            {s.syncStatus === 'saving' ? 'Saving changes…' : s.syncStatus === 'resolving' ? 'Merging device changes…' : s.syncStatus === 'error' ? 'Save failed' : s.syncStatus === 'review' ? 'Changes need review' : s.syncStatus === 'saved' ? 'All changes saved' : 'Cloud account'}
           </span>
         </div>
         <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Account sections" aria-orientation="horizontal" onKeyDown={onTabKeyDown}>
@@ -217,7 +217,7 @@ function SettingsSection() {
     <div className="space-y-4">
       <Card>
         <h2 className="text-base font-bold">Learning preferences</h2>
-        <p className="mt-1 text-xs text-slate-400">These belong to your account and are stored on the server, not only in this browser.</p>
+        <p className="mt-1 text-xs text-slate-400">These are saved to your LearnQuest account.</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <TimezonePicker value={timezone} onChange={setTimezone} />
           <div className="space-y-3">
@@ -362,7 +362,7 @@ function DeleteAccountDialog({
           </Field>
         ) : (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-            <p>This account uses Google sign-in. Deletion requires a fresh Google authentication within the server's recent-auth window.</p>
+            <p>This account uses Google sign-in. For your safety, account deletion asks you to confirm with Google again.</p>
             <Btn type="button" className="mt-2" onClick={onGoogleReauth} disabled={busy}>Reauthenticate with Google</Btn>
           </div>
         )}
@@ -404,9 +404,6 @@ function SecuritySection() {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [newEmail, setNewEmail] = useState('');
-  const [emailPassword, setEmailPassword] = useState('');
-  const [emailRequest, setEmailRequest] = useState<{ email: string; expiresInMin: number } | null>(null);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -448,18 +445,18 @@ function SecuritySection() {
     }
   };
 
-  const requestEmail = async () => {
+  const changeEmailWithGoogle = async () => {
     setEmailError(null);
     setEmailMessage(null);
     setEmailBusy(true);
     try {
-      const result = await s.requestEmailChange(newEmail.trim(), emailPassword || undefined);
-      setEmailRequest({ email: result.email, expiresInMin: result.expiresInMin });
-      setEmailMessage(`Check ${result.email} for a verification link. It expires in ${result.expiresInMin} minutes; your current email remains active until it is opened.`);
-      setEmailPassword('');
+      // The server binds this flow to the authenticated account and, when one
+      // is linked, to the stable Google subject. No emailed verification link
+      // is created. The browser leaves for Google, so this call normally does
+      // not return before navigation.
+      await s.signInWithGoogle('email_change');
     } catch (e: any) {
-      setEmailError(e?.message ?? 'Email change could not be started.');
-    } finally {
+      setEmailError(e?.message ?? 'Google verification could not be started.');
       setEmailBusy(false);
     }
   };
@@ -502,24 +499,23 @@ function SecuritySection() {
       <Card>
         <h2 className="flex items-center gap-1.5 text-base font-bold"><Mail size={16} /> Email address</h2>
         <p className="mt-1 text-xs text-slate-400">
-          The current verified email is <b className="text-slate-200">{user.email}</b>. A secure single-use link sent to the new
-          address must be opened before the change takes effect; the old address stays active until then.
+          The current verified email is <b className="text-slate-200">{user.email}</b>. LearnQuest changes it only through
+          a fresh Google verification, and never through a typed address or emailed link.
         </p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <Field label="New email address">
-            <input className={inputCls} type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} autoComplete="email" />
-          </Field>
-          {user.hasPassword && (
-            <Field label="Current password">
-              <input className={inputCls} type="password" value={emailPassword} onChange={(e) => setEmailPassword(e.target.value)} autoComplete="current-password" />
-            </Field>
-          )}
-        </div>
+        <p className="mt-1 text-xs text-slate-400">
+          Continue with the same Google account linked to LearnQuest. If that Google account uses a different address,
+          that address becomes your LearnQuest email. Every session is signed out afterwards.
+        </p>
         {emailError && <p role="alert" className="mt-2 text-sm text-red-300">{emailError}</p>}
         {emailMessage && <p role="status" className="mt-2 text-sm text-cyan-200">{emailMessage}</p>}
-        <Btn className="mt-3" onClick={requestEmail} disabled={emailBusy || !newEmail.trim() || (user.hasPassword && !emailPassword)}>
-          {emailRequest ? 'Send another verification link' : 'Send verification link'}
+        <Btn className="mt-3" onClick={changeEmailWithGoogle} disabled={emailBusy}>
+          <Mail size={14} /> {emailBusy ? 'Opening Google…' : 'Verify a new email with Google'}
         </Btn>
+        {!user.googleLinked && (
+          <p className="mt-2 text-xs text-slate-500">
+            Linking Google for the first time requires a recent sign-in. If this session is older, sign in again first.
+          </p>
+        )}
       </Card>
 
       <Card>

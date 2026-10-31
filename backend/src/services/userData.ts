@@ -1,6 +1,18 @@
 import { USER_COLLECTIONS, type DataStore, type UserCollectionName } from '../store.js';
 import { env } from '../config/env.js';
 
+/**
+ * High-volume, stable-id collections that support bounded append writes. The
+ * full collection replacement endpoint remains the compatibility path for
+ * edits, deletions, imports and restores.
+ */
+export const APPEND_COLLECTIONS = ['sessions', 'segments', 'playSessions', 'xp'] as const;
+export type AppendCollectionName = (typeof APPEND_COLLECTIONS)[number];
+
+export function isAppendCollection(name: UserCollectionName): name is AppendCollectionName {
+  return (APPEND_COLLECTIONS as readonly UserCollectionName[]).includes(name);
+}
+
 export const COLLECTION_KIND: Record<UserCollectionName, 'map' | 'array' | 'singleton'> = {
   playlists: 'map',
   meta: 'map',
@@ -170,6 +182,103 @@ function requirePlaylistRef(value: any, name: string): void {
   }
 }
 
+const FOCUS_INTERVAL_TOLERANCE_MS = 1_500;
+const FOCUS_DURATION_TOLERANCE_SEC = 2;
+
+/**
+ * Cross-field validation for focus sessions. Shape validation alone cannot
+ * detect impossible sessions (active > elapsed, contradictory intervals, or a
+ * finish before its start). Legacy sessions without intervals/timerVersion stay
+ * readable and are only checked for the relationships they actually store.
+ */
+function validateFocusSession(value: any, where: string): void {
+  const startedMs = Date.parse(value.startedAt);
+  const finishedMs = value.finishedAt === null ? null : Date.parse(value.finishedAt);
+  if (finishedMs !== null && finishedMs < startedMs) {
+    throw httpError(`${where}.finishedAt must not precede startedAt.`, 400, 'FOCUS_TIME_ORDER');
+  }
+  const activeSec = Number(value.activeSec);
+  const elapsedSec = Number(value.elapsedSec);
+  if (activeSec > elapsedSec + FOCUS_DURATION_TOLERANCE_SEC) {
+    throw httpError(`${where}.activeSec cannot exceed elapsedSec.`, 400, 'FOCUS_ACTIVE_GT_ELAPSED');
+  }
+  if (value.pausedSec !== undefined) {
+    if (!finiteNonNegative(value.pausedSec, 31 * 24 * 3600)) {
+      throw httpError(`${where}.pausedSec is invalid.`, 400);
+    }
+    if (Math.abs(Number(value.pausedSec) - Math.max(0, elapsedSec - activeSec)) > FOCUS_DURATION_TOLERANCE_SEC) {
+      throw httpError(`${where}.pausedSec must match elapsedSec - activeSec.`, 400, 'FOCUS_PAUSED_MISMATCH');
+    }
+  }
+  if (finishedMs !== null && activeSec > 0 && finishedMs === startedMs) {
+    throw httpError(`${where} has focus time but no elapsed wall time.`, 400, 'FOCUS_ZERO_DURATION');
+  }
+  const version = Number(value.timerVersion);
+  if (version >= 2 && elapsedSec > 24 * 3600) {
+    throw httpError(`${where} exceeds the supported 24-hour focus session.`, 400, 'FOCUS_DURATION_IMPLAUSIBLE');
+  }
+  if (value.monotonicActiveMs !== undefined) {
+    if (!finiteNonNegative(value.monotonicActiveMs, 31 * 24 * 3600_000)) {
+      throw httpError(`${where}.monotonicActiveMs is invalid.`, 400);
+    }
+  }
+  if (value.gapExcludedMs !== undefined && !finiteNonNegative(value.gapExcludedMs, 31 * 24 * 3600_000)) {
+    throw httpError(`${where}.gapExcludedMs is invalid.`, 400);
+  }
+  if (value.interruptionCount !== undefined
+    && (!Number.isSafeInteger(value.interruptionCount) || value.interruptionCount < 0 || value.interruptionCount > 10_000)) {
+    throw httpError(`${where}.interruptionCount is invalid.`, 400);
+  }
+  for (const flag of ['estimated', 'recovered', 'qualified']) {
+    if (value[flag] !== undefined && typeof value[flag] !== 'boolean') {
+      throw httpError(`${where}.${flag} must be a boolean.`, 400);
+    }
+  }
+  if (value.saveState !== undefined && value.saveState !== 'draft' && value.saveState !== 'confirmed') {
+    throw httpError(`${where}.saveState is invalid.`, 400);
+  }
+  if (!Array.isArray(value.intervals) || value.intervals.length === 0) return;
+
+  const intervals: { startMs: number; endMs: number; kind: 'active' | 'paused' }[] = value.intervals;
+  const lower = startedMs - FOCUS_INTERVAL_TOLERANCE_MS;
+  const upper = (finishedMs ?? startedMs + Math.max(elapsedSec, activeSec) * 1000) + FOCUS_INTERVAL_TOLERANCE_MS;
+  let activeUnion = 0;
+  let pausedUnion = 0;
+  const merged: { start: number; end: number; kind: 'active' | 'paused' }[] = [];
+  for (const interval of [...intervals].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)) {
+    if (interval.startMs < lower || interval.endMs > upper) {
+      throw httpError(`${where}.intervals must fall inside the session.`, 400, 'FOCUS_INTERVAL_BOUNDS');
+    }
+    const last = merged[merged.length - 1];
+    if (last && interval.startMs < last.end) {
+      if (last.kind !== interval.kind) {
+        throw httpError(`${where}.intervals contain overlapping active and paused time.`, 400, 'FOCUS_INTERVAL_OVERLAP');
+      }
+      last.end = Math.max(last.end, interval.endMs);
+    } else {
+      merged.push({ start: interval.startMs, end: interval.endMs, kind: interval.kind });
+    }
+  }
+  for (const interval of merged) {
+    const ms = interval.end - interval.start;
+    if (interval.kind === 'active') activeUnion += ms;
+    else pausedUnion += ms;
+  }
+  // A manual correction is an explicit estimate and may carry no synthetic
+  // intervals; when intervals exist they must still agree with the recorded
+  // active time.
+  if (!value.estimated && Math.abs(activeUnion / 1000 - activeSec) > FOCUS_DURATION_TOLERANCE_SEC) {
+    throw httpError(`${where}.intervals do not match activeSec.`, 400, 'FOCUS_INTERVAL_SUM');
+  }
+  if (value.monotonicActiveMs !== undefined
+    && Math.abs(Number(value.monotonicActiveMs) - activeUnion) > FOCUS_INTERVAL_TOLERANCE_MS) {
+    throw httpError(`${where}.monotonicActiveMs does not match the active intervals.`, 400, 'FOCUS_MONOTONIC_SUM');
+  }
+  if (!value.estimated && pausedUnion / 1000 > elapsedSec - activeSec + FOCUS_DURATION_TOLERANCE_SEC) {
+    throw httpError(`${where}.paused intervals exceed recorded pause time.`, 400, 'FOCUS_PAUSED_SUM');
+  }
+}
+
 function validateItem(name: UserCollectionName, value: any, index: number): void {
   const where = `${name}[${index}]`;
   if (name === 'queue') {
@@ -263,6 +372,7 @@ function validateItem(name: UserCollectionName, value: any, index: number): void
         }
       }
       if (value.note !== undefined && !boundedString(value.note, 20_000)) throw httpError(`${where}.note is invalid.`, 400);
+      validateFocusSession(value, where);
       return;
     }
     case 'goals': {
@@ -365,6 +475,10 @@ export function validateCollectionPayload(name: UserCollectionName, input: unkno
   if (!Array.isArray(input)) throw httpError(`${name} must be an array.`, 400);
   if (input.length > MAX_ITEMS[name]) throw httpError(`${name} exceeds its supported item limit.`, 400);
   const ids = new Set<string>();
+  // XP is an append-only ledger keyed by the client's stable dedupKey. The UI
+  // also checks locally, but the server must reject a duplicate key so a
+  // retried/merged write cannot award the same event twice.
+  const xpDedupKeys = new Set<string>();
   input.forEach((item, i) => {
     validateItem(name, item, i);
     // Only item types that define a stable id use it for duplicate detection.
@@ -375,6 +489,13 @@ export function validateCollectionPayload(name: UserCollectionName, input: unkno
       : `order:${i}`;
     if (ids.has(id)) throw httpError(`${name} contains a duplicate id.`, 400);
     ids.add(id);
+    if (name === 'xp' && isObj(item)) {
+      const dedupKey = String(item.dedupKey);
+      if (xpDedupKeys.has(dedupKey)) {
+        throw httpError('xp contains a duplicate dedupKey; the award was already recorded.', 400, 'XP_DUPLICATE_DEDUP_KEY');
+      }
+      xpDedupKeys.add(dedupKey);
+    }
   });
   return input;
 }
@@ -488,6 +609,20 @@ function arrayItemKey(item: unknown, index: number): string {
     }
   }
   return `order:${index}`;
+}
+
+/** Stable, field-order-independent comparison for append idempotency. */
+function canonicalValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalValue(item)).join(',')}]`;
+  if (isObj(value)) {
+    const fields = Object.keys(value)
+      .sort()
+      .filter((key) => value[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${canonicalValue(value[key])}`);
+    return `{${fields.join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /**
@@ -668,6 +803,127 @@ export async function replaceUserCollection(
     const version = await reserveVersionInTransaction(tx, userId, expectedVersion);
     await writeCollection(tx, userId, name, value ?? null);
     return { version, collection: name };
+  });
+}
+
+export interface AppendUserCollectionResult {
+  version: number;
+  collection: AppendCollectionName;
+  appended: number;
+  skipped: number;
+}
+
+/**
+ * Append-only write for the high-volume event domains. Items are identified by
+ * their stable `id` (and XP additionally by `dedupKey`), so a retry after a
+ * timeout is safe: records already present with the same payload are skipped.
+ * A differing payload for an existing identity is a conflict, never an
+ * overwrite. The whole request is one transaction and one version reservation.
+ */
+export async function appendUserCollection(
+  store: DataStore,
+  userId: string,
+  name: AppendCollectionName,
+  rawItems: unknown,
+  expectedVersion: number,
+): Promise<AppendUserCollectionResult> {
+  const items = validateCollectionPayload(name, rawItems) as unknown[];
+  if (!Array.isArray(items) || items.length === 0) {
+    throw httpError('Append requires at least one item.', 400, 'INVALID_REQUEST');
+  }
+  if (items.length > 5_000) {
+    throw httpError('Append requests are limited to 5000 records.', 413, 'APPEND_TOO_LARGE');
+  }
+  await getStateVersion(store, userId);
+  if (!store.transaction) throw atomicityError();
+  return store.transaction(async (tx) => {
+    const col = tx.domainData(name);
+    const existing = await col.find({ userId }, { sort: { order: 1 } });
+    if (existing.length + items.length > MAX_ITEMS[name]) {
+      throw httpError(`${name} exceeds its supported item limit.`, 413, 'COLLECTION_TOO_LARGE');
+    }
+    const byKey = new Map<string, unknown>();
+    const xpKeyByDedup = new Map<string, string>();
+    let maxOrder = -1;
+    let bytes = 0;
+    for (const doc of existing) {
+      const key = String(doc.key);
+      byKey.set(key, doc.value);
+      maxOrder = Math.max(maxOrder, Number(doc.order) || 0);
+      bytes += Buffer.byteLength(JSON.stringify(doc.value ?? null), 'utf8');
+      if (name === 'xp' && isObj(doc.value) && typeof doc.value.dedupKey === 'string') {
+        xpKeyByDedup.set(doc.value.dedupKey, key);
+      }
+    }
+    const fresh: Array<{ key: string; value: unknown }> = [];
+    let skipped = 0;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const key = arrayItemKey(item, existing.length + i);
+      const prior = byKey.get(key);
+      if (prior !== undefined) {
+        if (canonicalValue(prior) !== canonicalValue(item)) {
+          throw httpError(
+            `The ${name} record "${key}" already exists with different data. Reload before saving.`,
+            409,
+            'APPEND_CONFLICT',
+          );
+        }
+        skipped += 1;
+        continue;
+      }
+      if (name === 'xp' && isObj(item)) {
+        const dedupKey = String(item.dedupKey);
+        const priorKey = xpKeyByDedup.get(dedupKey);
+        if (priorKey !== undefined) {
+          if (canonicalValue(byKey.get(priorKey)) !== canonicalValue(item)) {
+            throw httpError(
+              'This XP award was already recorded with a different record. Nothing was added.',
+              409,
+              'XP_DUPLICATE_DEDUP_KEY',
+            );
+          }
+          skipped += 1;
+          continue;
+        }
+        xpKeyByDedup.set(dedupKey, key);
+      }
+      fresh.push({ key, value: item });
+      bytes += Buffer.byteLength(JSON.stringify(item ?? null), 'utf8');
+    }
+    if (bytes > env.accountMaxStateBytes) {
+      throw httpError(
+        `Account data exceeds the ${Math.round(env.accountMaxStateBytes / 1024 / 1024)} MB safety limit. Export a backup and split large histories.`,
+        413,
+        'STATE_TOO_LARGE',
+      );
+    }
+    if (fresh.length === 0) {
+      // The previous request may have committed and its response was lost.
+      // Every supplied record is already present and identical: return the
+      // current version without reserving another one.
+      const currentDoc = await tx.stateVersions.findOne({ userId });
+      return {
+        version: Number(currentDoc?.version) || 0,
+        collection: name,
+        appended: 0,
+        skipped,
+      };
+    }
+    const version = await reserveVersionInTransaction(tx, userId, expectedVersion);
+    const now = new Date().toISOString();
+    let order = maxOrder + 1;
+    for (const entry of fresh) {
+      await col.insertOne({
+        userId,
+        key: entry.key,
+        value: entry.value,
+        playlistId: playlistIdOf(entry.value),
+        updatedAt: now,
+        order: order++,
+      });
+    }
+    return { version, collection: name, appended: fresh.length, skipped };
   });
 }
 

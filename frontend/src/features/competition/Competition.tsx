@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Swords, RotateCcw, Pause, Play, Search, Crosshair, Dices } from 'lucide-react';
+import { Swords, RotateCcw, Pause, Play, Search, Crosshair, Dices, Lock, Flag, Trophy } from 'lucide-react';
 import {
   TIERS, validateChallenge, generateCompetitors, rankBoard, gapToNext,
-  challengeWindowDates, windowLabel,
-  type Tier,
+  challengeWindowDates, windowLabel, createFixedChallenge, computeArenaUserEvidence,
+  ARENA_MODEL_VERSION, ARENA_WEIGHTS, DEFAULT_TIER_DIST,
+  type Tier, type ChallengeConfig, type ArenaComponents,
 } from '../../domain/index.js';
 import { initialsOf } from '../../domain/competition/aliases.js';
-import {
-  summarizeSegments, eligibleDailyEfficiencies, attributeFocusByDay,
-  splitPlaybackSegmentByDay, segmentIdentityKey, buildEntryProgressIndex, isProgressComplete,
-} from '../../domain/index.js';
-import type { PlaybackSegment } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
 import { confirmDialog } from '../../components/ui/dialog.js';
@@ -18,7 +14,29 @@ import { Dropdown } from '../../components/ui/Dropdown.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import { Card, Btn, inputCls, Empty } from '../../components/ui/ui.js';
 
-/** Ranking is FIXED: average daily content efficiency. No metric selector. */
+/**
+ * Arena v2 is a FICTIONAL practice simulation. It scores progress and
+ * consistency with the same functions for the user and every synthetic rival.
+ * No real people, real leaderboard, XP, hours, or tier value affects rank.
+ */
+
+const INTENSITY: Record<'relaxed' | 'standard' | 'competitive', { label: string; dist: Record<Tier, number> }> = {
+  relaxed: {
+    label: 'Relaxed',
+    dist: { Ultra: 0, High: 4, Good: 14, Normal: 32, Average: 32, 'Below Average': 18 },
+  },
+  standard: { label: 'Standard', dist: { ...DEFAULT_TIER_DIST } },
+  competitive: {
+    label: 'Competitive',
+    dist: { Ultra: 5, High: 15, Good: 25, Normal: 30, Average: 17, 'Below Average': 8 },
+  },
+};
+
+function intensityOf(dist: Record<Tier, number>): 'relaxed' | 'standard' | 'competitive' {
+  const match = (Object.keys(INTENSITY) as Array<keyof typeof INTENSITY>)
+    .find((k) => TIERS.every((t) => Math.abs((INTENSITY[k].dist[t] ?? 0) - (dist[t] ?? 0)) < 0.001));
+  return match ?? 'standard';
+}
 
 export function Competition() {
   const s = useStore();
@@ -28,107 +46,102 @@ export function Competition() {
   const [page, setPage] = useState(0);
   const [view, setView] = useState<'top' | 'near'>('top');
   const [aliasQ, setAliasQ] = useState('');
+  const [advanced, setAdvanced] = useState(false);
   const cfg = s.challenge;
+  const fixed = cfg.mode === 'fixed' && cfg.fixed ? cfg.fixed : null;
+  const effectiveCfg: ChallengeConfig = fixed
+    ? {
+      ...cfg,
+      seed: fixed.seed,
+      cohortSize: fixed.cohortSize,
+      tierDist: fixed.tierDist,
+      windowDays: fixed.windowDays,
+      dailyCapHours: fixed.dailyCapHours,
+      mode: 'fixed',
+      fixed,
+    }
+    : cfg;
 
-  // Challenge-window calendar identities (oldest → newest) in the display
-  // timezone. Shared by the user table and the simulator so both sides align;
-  // the window slides when the calendar advances and is stable on refresh.
-  // todayTick refreshes the window after midnight / sleep / timezone change.
   const todayTick = useDayTick(s.prefs.timezone);
   const windowDates = useMemo(
-    () => challengeWindowDates(cfg.windowDays, s.prefs.timezone),
-    [cfg.windowDays, s.prefs.timezone, todayTick],
+    () => (fixed
+      ? fixed.windowDates
+      : challengeWindowDates(effectiveCfg.windowDays, s.prefs.timezone, Date.now())),
+    // todayTick forces a refresh after midnight/sleep even though Date.now() is
+    // intentionally not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fixed, effectiveCfg.windowDays, s.prefs.timezone, todayTick],
   );
   const windowDatesKey = windowDates.join(',');
   const windowName = windowLabel(windowDates);
 
-  // User daily efficiencies over the challenge window (tz day boundaries).
-  // Same raw records + interval rules as the Efficiency page; only the
-  // aggregation (mean of eligible dailies) is Arena-specific.
-  const userArena = useMemo(() => {
-    const pid = snap?.playlistId;
-    if (!pid) return { dailyEffs: [] as number[], table: [] as { dateKey: string; uniqueSec: number; focusSec: number }[], unique: 0, verified: 0, focus: 0, days: 0 };
-    const tz = s.prefs.timezone;
-    const keys: string[] = windowDatesKey.split(',').filter(Boolean);
-    const segs = s.segments.filter((x) => x.playlistId === pid);
-    // Split playback evidence at local midnight instead of trusting start day.
-    const segsByDay = new Map<string, PlaybackSegment[]>();
-    for (const seg of segs) {
-      for (const slice of splitPlaybackSegmentByDay(seg, tz)) {
-        const arr = segsByDay.get(slice.dateKey) ?? [];
-        arr.push(slice.segment);
-        segsByDay.set(slice.dateKey, arr);
-      }
-    }
-    // Focus attributed by the authoritative interval splitter (cross-midnight
-    // sessions contribute to both days; pauses excluded at record time).
-    const focusByDay = attributeFocusByDay(s.sessions.filter((x) => x.playlistId === pid), tz);
-    const table = keys.map((dateKey) => {
-      const byKey = new Map<string, PlaybackSegment[]>();
-      for (const x of segsByDay.get(dateKey) ?? []) {
-        const k = segmentIdentityKey(x);
-        const arr = byKey.get(k) ?? [];
-        arr.push(x);
-        byKey.set(k, arr);
-      }
-      let unique = 0;
-      for (const arr of byKey.values()) unique += summarizeSegments(arr).uniqueSec;
-      const focus = focusByDay.get(dateKey) ?? 0;
-      return { dateKey, uniqueSec: Math.round(unique), focusSec: focus };
-    });
-    const dailyEffs = eligibleDailyEfficiencies(table);
-    const unique = table.reduce((a, t) => a + t.uniqueSec, 0);
-    const focus = table.reduce((a, t) => a + t.focusSec, 0);
-    // Only current occurrences with completed verified evidence count.
-    const index = snap ? buildEntryProgressIndex(snap, s.progress) : new Map();
-    const verified = snap
-      ? snap.entries.filter((e) => {
-        const rec = index.get(e.position);
-        return isProgressComplete(rec) && rec?.source === 'verified';
-      }).length
-      : 0;
-    return { dailyEffs, table, unique, verified, focus, days: new Set(table.filter((t) => t.focusSec > 0).map((t) => t.dateKey)).size };
-  }, [s.segments, s.sessions, s.progress, snap, s.prefs.timezone, windowDatesKey]);
-
   const playlistBasis = useMemo(() => {
-    if (!snap) return { totalSec: null as number | null, n: 0, avgVideoSec: 600 };
+    if (!snap) return { totalSec: null as number | null, n: 0, avgVideoSec: 600, resolved: 0 };
     const resolved = snap.entries.filter((e) => e.durationSec !== null) as { durationSec: number }[];
-    const total = resolved.reduce((a, e) => a + (e as any).durationSec, 0);
+    const total = resolved.reduce((a, e) => a + (e.durationSec ?? 0), 0);
     return {
-      totalSec: resolved.length === snap.entries.length ? total : null,
+      totalSec: resolved.length === snap.entries.length && total > 0 ? total : null,
       n: snap.entries.length,
       avgVideoSec: resolved.length ? Math.round(total / resolved.length) : 600,
+      resolved: resolved.length,
     };
   }, [snap]);
 
-  const problems = validateChallenge(cfg);
+  const userEvidence = useMemo(() => {
+    if (!snap) {
+      return { playlistDurationSec: null, uniqueContentSec: 0, focusSec: 0, verifiedCompleted: 0, manualCompleted: 0, daily: [], qualifyingDays: 0 };
+    }
+    return computeArenaUserEvidence({
+      snapshot: snap,
+      progress: s.progress,
+      segments: s.segments,
+      sessions: s.sessions,
+      timeZone: s.prefs.timezone,
+      windowDates,
+    });
+  }, [snap, s.progress, s.segments, s.sessions, s.prefs.timezone, windowDatesKey]);
+
+  const observedDays = useMemo(() => {
+    if (!fixed) return effectiveCfg.windowDays;
+    const start = Date.parse(fixed.startedAt);
+    if (!Number.isFinite(start)) return effectiveCfg.windowDays;
+    return Math.min(effectiveCfg.windowDays, Math.max(0, Math.floor((Date.now() - start) / 86400_000) + 1));
+  }, [fixed, effectiveCfg.windowDays, todayTick]);
+
+  const problems = validateChallenge(effectiveCfg);
   const anchorDates = useMemo(() => windowDatesKey.split(',').filter(Boolean), [windowDatesKey]);
   const competitors = useMemo(
-    () => (problems.length || paused ? [] : generateCompetitors(cfg, playlistBasis, { anchorDates })),
+    () => (problems.length || paused || !playlistBasis.totalSec
+      ? []
+      : generateCompetitors(effectiveCfg, playlistBasis, { anchorDates })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cfg.seed, cfg.cohortSize, JSON.stringify(cfg.tierDist), cfg.windowDays, cfg.dailyCapHours, playlistBasis.n, playlistBasis.totalSec, paused, problems.length, windowDatesKey],
+    [effectiveCfg.seed, effectiveCfg.cohortSize, JSON.stringify(effectiveCfg.tierDist), effectiveCfg.windowDays, effectiveCfg.dailyCapHours, playlistBasis.totalSec, paused, problems.length, windowDatesKey],
   );
   const board = useMemo(
-    () => rankBoard(cfg, competitors, {
-      dailyEffs: userArena.dailyEffs,
-      uniqueContentSec: userArena.unique,
-      verifiedCount: userArena.verified,
-      focusSec: userArena.focus,
-      activeDays: userArena.days,
+    () => rankBoard(effectiveCfg, competitors, {
+      uniqueContentSec: userEvidence.uniqueContentSec,
+      playlistDurationSec: playlistBasis.totalSec ?? userEvidence.playlistDurationSec,
+      qualifyingDays: userEvidence.qualifyingDays,
+      observedDays,
+      focusSec: userEvidence.focusSec,
+      verifiedCount: userEvidence.verifiedCompleted,
+      activeDays: userEvidence.daily.filter((d) => d.focusSec > 0 || d.contentGainSec > 0).length,
     }),
-    [cfg, competitors, userArena],
+    [effectiveCfg, competitors, userEvidence, playlistBasis.totalSec, observedDays],
   );
+  const boardScoredCount = board.rows.filter((r) => r.value !== null).length;
   const me = board.rows.find((r) => r.isUser)!;
-  const above = board.rows.filter((r) => !r.isUser && r.value !== null && me.value !== null && r.value > me.value).sort((a, b) => (a.value as number) - (b.value as number))[0] ?? null;
+  const above = board.rows
+    .filter((r) => !r.isUser && r.value !== null && me.value !== null && r.value > me.value)
+    .sort((a, b) => (a.value as number) - (b.value as number))[0] ?? null;
   const gap = gapToNext(me.value, above?.value ?? null);
 
-  const setTier = (t: Tier, v: number) => s.setChallenge({ tierDist: { ...cfg.tierDist, [t]: v } });
-  const simById = useMemo(() => new Map(competitors.map((c) => [c.id, c])), [competitors]);
+  const setTier = (t: Tier, v: number) => s.setChallenge({ tierDist: { ...effectiveCfg.tierDist, [t]: v } });
+  const setIntensity = (k: keyof typeof INTENSITY) => s.setChallenge({ tierDist: { ...INTENSITY[k].dist } });
 
-  // Reset paging whenever the ranking basis changes
   useEffect(() => {
     setPage(0);
-  }, [cfg.cohortSize, cfg.seed, cfg.windowDays, cfg.dailyCapHours, pageSize, aliasQ, view]);
+  }, [effectiveCfg.cohortSize, effectiveCfg.seed, effectiveCfg.windowDays, effectiveCfg.dailyCapHours, pageSize, aliasQ, view]);
 
   const filtered = aliasQ.trim()
     ? board.rows.filter((r) => r.name.toLowerCase().includes(aliasQ.trim().toLowerCase()))
@@ -150,247 +163,352 @@ export function Competition() {
     setPage(Math.floor(idx / pageSize));
   };
 
-  if (!snap) return <Empty title="No active playlist" hint="Pick a playlist — the simulation uses its real entries and durations as the shared challenge basis." />;
+  const startFixed = () => {
+    if (!snap || !playlistBasis.totalSec) return;
+    const next = createFixedChallenge(cfg, {
+      playlistId: snap.playlistId,
+      playlistSnapshotVersion: snap.snapshotVersion,
+      playlistDurationSec: playlistBasis.totalSec,
+      windowDates,
+    });
+    s.setChallenge(next);
+  };
+
+  const endFixed = async () => {
+    const ok = await confirmDialog({
+      title: 'End fixed challenge?',
+      body: 'The completed run stays in rank history. Your real learning records are untouched. Practice settings become editable again.',
+      confirmLabel: 'End fixed run',
+      danger: true,
+    });
+    if (ok) s.setChallenge({ mode: 'practice', fixed: null });
+  };
+
+  if (!snap) return <Empty title="No active playlist" hint="Pick a playlist — Arena compares your real progress with simulated learners. It is a practice game, not a real leaderboard." />;
+
+  const unavailable = playlistBasis.totalSec === null;
 
   return (
     <div className="space-y-4">
       <Card>
         <p className="rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 p-2 text-center text-xs font-bold tracking-wide text-fuchsia-200">
-          FICTIONAL SIMULATION — all {cfg.cohortSize - 1} opponents are generated locally from seed {cfg.seed}. No real people, no real leaderboard.
+          FICTIONAL SIMULATION — all {effectiveCfg.cohortSize - 1} opponents are generated locally from seed {effectiveCfg.seed}. No real people, no real leaderboard.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <h2 className="mr-auto flex items-center gap-1.5 text-base font-bold"><Swords size={16} /> Study Arena</h2>
+          <h2 className="mr-auto flex items-center gap-1.5 text-base font-bold"><Swords size={16} /> Study Arena <span className="text-[10px] font-normal text-slate-500">{ARENA_MODEL_VERSION}</span></h2>
           <Btn variant={s.challengeEnabled ? 'primary' : 'ghost'} onClick={() => s.setChallengeEnabled(!s.challengeEnabled)}>
             {s.challengeEnabled ? 'Enabled' : 'Enable competition'}
           </Btn>
           {!paused ? <Btn onClick={() => setPaused(true)}><Pause size={13} /> Pause sim</Btn> : <Btn onClick={() => setPaused(false)}><Play size={13} /> Resume</Btn>}
-          <Btn variant="danger" onClick={async () => { const ok = await confirmDialog({ title: 'Reset fictional challenge?', body: 'Your real study history, goals and achievements are untouched.', confirmLabel: 'Reset sim', danger: true }); if (ok) s.resetChallenge(); }}><RotateCcw size={13} /> Reset sim</Btn>
+          <Btn variant="danger" onClick={async () => { const ok = await confirmDialog({ title: 'Reset fictional challenge?', body: 'Your real study history, goals and achievements are untouched. Practice settings and rank history are reset.', confirmLabel: 'Reset sim', danger: true }); if (ok) s.resetChallenge(); }}><RotateCcw size={13} /> Reset sim</Btn>
         </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Arena scores <b>sustainable completion</b>: 75% playlist progress + 25% consistency. It never uses hours, XP, streaks, tier, or a real-person leaderboard.
+        </p>
         {!s.challengeEnabled && <p className="mt-1 text-xs text-slate-500">Competition is optional and off by default. Enable it any time; disabling never deletes progress.</p>}
       </Card>
 
       {s.challengeEnabled && (
         <>
-          <Card>
-            <p className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-2 text-center text-xs text-violet-200">
-              Ranked by <b>average daily content efficiency</b> over {windowName} (last {cfg.windowDays} days, {s.prefs.timezone}) — total hours, videos, XP, and tier never affect rank.
-            </p>
-            <p className="mt-1 text-center text-[11px] text-slate-500">
-              Window: {anchorDates[0]} → {anchorDates[anchorDates.length - 1]} · each eligible day counts once · Efficiency page shows the aggregate ratio instead — same records, different question.
-            </p>
-            <div className="mt-2 grid gap-2 sm:grid-cols-4">
-              <NumberField
-                label="Cohort size incl. you (10–2000)"
-                value={cfg.cohortSize}
-                min={10}
-                max={2000}
-                live={false}
-                onCommit={(v) => { if (v !== null) s.setChallenge({ cohortSize: v }); }}
-              />
-              <NumberField
-                label="Max rival study per day (hours, 1–12)"
-                value={cfg.dailyCapHours}
-                min={1}
-                max={12}
-                integer={false}
-                live={false}
-                onCommit={(v) => { if (v !== null) s.setChallenge({ dailyCapHours: v }); }}
-              />
-              <NumberField
-                label="Seed (stable ranks)"
-                value={cfg.seed}
-                min={0}
-                max={1_000_000_000}
-                live={false}
-                onCommit={(v) => { if (v !== null) s.setChallenge({ seed: v }); }}
-              />
-              <NumberField
-                label="Window (days)"
-                value={cfg.windowDays}
-                min={1}
-                max={90}
-                live={false}
-                onCommit={(v) => { if (v !== null) s.setChallenge({ windowDays: v }); }}
-              />
-            </div>
-            <p className="mt-1 text-[11px] text-slate-500">
-              Daily cap = fictional activity ceiling only (default 6 h): an Ultra rival at 110% covers at most 6.6 h of
-              unique content per day, bounded by remaining playlist content. <b>Your genuine sessions are never capped.</b>
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <Btn onClick={() => s.setChallenge({ seed: Math.floor(Math.random() * 1_000_000_000) })}><Dices size={14} /> Generate new fictional cohort</Btn>
-              <p className="min-w-[220px] flex-1 text-[11px] text-slate-500">
-                The seed starts the deterministic generator: same seed + settings + window dates = same rivals and ranks across reloads.
-                Each rival day is seeded by its calendar date, so refreshing today reproduces today, while tomorrow's rolling window slides to new dates and recomputed ranks.
-                A new seed (or bigger cohort) creates different/additional rivals; changing the window re-simulates the period (ranks may move without new study — the window itself changed).
-                Nothing here ever touches your real learning records, and the seed measures nothing about you.
-              </p>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {TIERS.map((t) => (
-                <NumberField
-                  key={t}
-                  label={`${t} %`}
-                  value={cfg.tierDist[t]}
-                  min={0}
-                  max={100}
-                  integer={false}
-                  live={false}
-                  onCommit={(v) => { if (v !== null) setTier(t, v); }}
-                />
-              ))}
-            </div>
-            <p className="mt-1 text-[11px] text-slate-500">
-              Tier distribution = share of rivals per tier (must sum to 100). Separate from efficiency bands, the plausible
-              throughput each tier simulates — Ultra 100–110%, High 85–99.9%, Good 70–84.9%, Normal 55–69.9%,
-              Average 40–54.9%, Below Average 20–39.9% (design assumptions, not real-world benchmarks; your 33% can mean deep, careful study).
-            </p>
-            {problems.map((p) => <p key={p} className="mt-1 text-xs text-red-300">{p}</p>)}
-          </Card>
-
-          <div className="grid min-w-0 gap-4 md:grid-cols-3">
+          {unavailable ? (
             <Card>
-              <h3 className="text-sm font-bold">My rank (fictional cohort)</h3>
-              <p className="mt-0.5 text-[11px] text-slate-500">Window {windowName} · {s.prefs.timezone}</p>
-              {me.provisional ? (
-                <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-                  <p className="font-semibold text-amber-200">
-                    Provisional — complete {Math.max(0, board.required - board.userEligible)} more eligible study day{board.required - board.userEligible === 1 ? '' : 's'} to establish your rank.
+              <h3 className="text-sm font-bold">Arena unavailable</h3>
+              <p className="mt-1 text-xs text-slate-300" role="status">
+                Arena needs every video duration. {playlistBasis.resolved}/{playlistBasis.n} entries currently have a resolved duration.
+                Refresh the playlist or resolve the flagged entries. No average or estimated duration is substituted.
+              </p>
+            </Card>
+          ) : (
+            <>
+              <Card>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="mr-auto">
+                    <h3 className="text-sm font-bold">{fixed ? 'Fixed challenge run' : 'Practice simulation'}</h3>
+                    <p className="text-[11px] text-slate-500">
+                      {fixed
+                        ? `Started ${fixed.startedAt.slice(0, 10)} · ends ${fixed.endsAt.slice(0, 10)} · settings locked`
+                        : 'Change these settings to explore a different fictional cohort. Only the practice simulation changes — never your real learning data.'}
+                    </p>
+                  </div>
+                  {fixed ? (
+                    <Btn variant="danger" onClick={endFixed}><Flag size={13} /> End fixed run</Btn>
+                  ) : (
+                    <Btn variant="primary" onClick={startFixed}><Lock size={13} /> Start fixed challenge</Btn>
+                  )}
+                </div>
+                <p className="mt-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-2 text-center text-xs text-violet-200">
+                  Ranked by <b>75% progress + 25% consistency</b> over {windowName} ({effectiveCfg.windowDays} days, {s.prefs.timezone}).
+                  Progress is unique covered playlist content ÷ total playlist duration. Consistency is qualifying days ÷ window days.
+                </p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                  <NumberField
+                    label="Opponents + you (10–2000)"
+                    value={effectiveCfg.cohortSize}
+                    min={10}
+                    max={2000}
+                    live={false}
+                    allowEmpty
+                    disabled={Boolean(fixed)}
+                    onCommit={(v) => { if (v !== null) s.setChallenge({ cohortSize: v }); }}
+                  />
+                  <NumberField
+                    label="Window (days, 1–90)"
+                    value={effectiveCfg.windowDays}
+                    min={1}
+                    max={90}
+                    live={false}
+                    allowEmpty
+                    disabled={Boolean(fixed)}
+                    onCommit={(v) => { if (v !== null) s.setChallenge({ windowDays: v }); }}
+                  />
+                  <div>
+                    <Dropdown
+                      label="Intensity"
+                      value={intensityOf(effectiveCfg.tierDist)}
+                      options={(Object.keys(INTENSITY) as Array<keyof typeof INTENSITY>).map((k) => ({ value: k, label: INTENSITY[k].label }))}
+                      onChange={(v) => { if (!fixed) setIntensity(v as keyof typeof INTENSITY); }}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    {fixed ? (
+                      <p className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400">Seed {fixed.seed} · locked</p>
+                    ) : (
+                      <Btn onClick={() => s.setChallenge({ seed: Math.floor(Math.random() * 1_000_000_000) })}><Dices size={14} /> New cohort</Btn>
+                    )}
+                  </div>
+                </div>
+                {!fixed && (
+                  <details className="mt-2 rounded-xl bg-white/5 p-2 text-xs text-slate-300" open={advanced} onToggle={(e) => setAdvanced((e.target as HTMLDetailsElement).open)}>
+                    <summary className="cursor-pointer font-semibold text-slate-200">Advanced simulation settings</summary>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                      <NumberField
+                        label="Max rival study/day (hours, 1–12)"
+                        value={effectiveCfg.dailyCapHours}
+                        min={1}
+                        max={12}
+                        integer={false}
+                        live={false}
+                        onCommit={(v) => { if (v !== null) s.setChallenge({ dailyCapHours: v }); }}
+                      />
+                      {TIERS.map((t) => (
+                        <NumberField
+                          key={t}
+                          label={`${t} %`}
+                          value={effectiveCfg.tierDist[t]}
+                          min={0}
+                          max={100}
+                          integer={false}
+                          live={false}
+                          onCommit={(v) => { if (v !== null) setTier(t, v); }}
+                        />
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Tier distribution controls the fictional cohort mix (must sum to 100). It never changes your score.
+                      Target progress and consistency bands are design assumptions: Ultra 98–100% progress / 85–95% consistency;
+                      High 90–98 / 70–85; Good 75–90 / 55–72; Normal 55–75 / 40–58; Average 35–55 / 25–40; Below Average 15–35 / 15–25.
+                    </p>
+                  </details>
+                )}
+                {problems.map((p) => <p key={p} className="mt-1 text-xs text-red-300" role="alert">{p}</p>)}
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Fixed runs freeze the formula ({ARENA_MODEL_VERSION}), weights ({Math.round(ARENA_WEIGHTS.progress * 100)}/{Math.round(ARENA_WEIGHTS.consistency * 100)}),
+                  seed, cohort, window and playlist basis. Replaying the same snapshot reproduces the same score; old runs are not silently rescored.
+                </p>
+              </Card>
+
+              <div className="grid min-w-0 gap-4 md:grid-cols-3">
+                <Card>
+                  <h3 className="text-sm font-bold">My Arena score</h3>
+                  <p className="mt-0.5 text-[11px] text-slate-500">Window {windowName} · {s.prefs.timezone}</p>
+                  {!board.components.available ? (
+                    <p className="mt-2 text-xs text-amber-200" role="status">Score unavailable: the playlist duration is unresolved.</p>
+                  ) : me.provisional ? (
+                    <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+                      <p className="font-semibold text-amber-200">Calibrating — {board.userQualifyingDays}/{board.required} qualifying days, {board.userObservedDays}/{board.requiredObserved} observed days.</p>
+                      <p className="mt-1 text-xs text-slate-300">
+                        A qualifying day needs 5+ minutes of new content (or a completed video) and 10+ minutes of focus/active playback.
+                        Provisional learners are excluded from ranked percentiles, never shown as last place.
+                      </p>
+                      {board.userScore !== null && <p className="mt-1 text-xs text-slate-400">Current provisional score {board.userScore.toFixed(1)}% — not an official rank.</p>}
+                    </div>
+                  ) : (
+                    <>
+                      <p className="mt-1 flex items-baseline gap-2 text-3xl font-bold">
+                        <Trophy size={22} className="text-amber-300" /> #{board.userRank}
+                        <span className="text-sm font-normal text-slate-400">of {boardScoredCount} scored</span>
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {board.userScore !== null ? `${board.userScore.toFixed(1)}%` : '—'} · {board.userQualifyingDays}/{effectiveCfg.windowDays} qualifying days
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {board.percentile !== null ? `Above ${board.percentile.toFixed(1)}% of scored simulated rivals` : '—'}
+                        {gap && above ? ` · ${gap} behind ${above.name}` : ' · leading the scored cohort'}
+                      </p>
+                    </>
+                  )}
+                  <ScoreBreakdown components={board.components} />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Ties share a rank (1, 2, 2, 4). Percentile uses scored rivals only. Totals are context and never ranked.
+                    Manual completion counts as progress but is labelled self-reported.
                   </p>
-                  <p className="mt-1 text-xs text-slate-300">
-                    {board.userEligible}/{board.required} eligible days
-                    {board.userScore !== null ? ` · current average ${board.userScore.toFixed(1)}%` : ' · no measurable efficiency yet'}.
-                    An eligible day = focused study with real coverage in the last {cfg.windowDays} days.
-                  </p>
-                  {userArena.dailyEffs.length > 0 && (
-                    <p className="mt-1 font-mono text-[11px] text-slate-400">
-                      Recorded: {userArena.dailyEffs.map((e) => `${e.toFixed(0)}%`).join(' · ')}
+                  <Btn
+                    className="mt-2"
+                    onClick={() => {
+                      if (board.userRank !== null) s.pushRank({ at: new Date().toISOString(), rank: board.userRank, of: boardScoredCount, metric: ARENA_MODEL_VERSION });
+                    }}
+                    disabled={board.userRank === null}
+                  >
+                    Snapshot my rank
+                  </Btn>
+                  {s.rankHistory.length > 0 && (
+                    <p className="mt-1 font-mono text-[11px] text-slate-500">
+                      {s.rankHistory.slice(-6).map((r) => `#${r.rank}/${r.of}`).join(' → ')}
                     </p>
                   )}
-                  <p className="mt-1 text-xs text-slate-400">Next action: run one focused Player or timer session today — it counts as soon as it has real study time.</p>
-                </div>
-              ) : (
-                <>
-                  <p className="mt-1 text-3xl font-bold">#{board.userRank} <span className="text-sm font-normal text-slate-400">of {board.rows.length}</span></p>
-                  <p className="text-xs text-slate-400">
-                    Avg daily efficiency {board.userScore !== null ? `${board.userScore.toFixed(1)}%` : '—'} · {board.userEligible}/{board.required} eligible days
+                </Card>
+
+                <Card className="min-w-0 md:col-span-2">
+                  <h3 className="text-sm font-bold">
+                    Leaderboard — Arena v2 · {windowName}{paused && ' (paused)'}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    Exact window {anchorDates[0]} → {anchorDates[anchorDates.length - 1]} ({s.prefs.timezone}) · scored rivals ranked; calibrating rows follow.
                   </p>
-                  <p className="text-xs text-slate-400">
-                    {board.percentile !== null ? `Ranked above ${board.percentile.toFixed(1)}% of this simulated cohort` : '—'}
-                    {gap && above ? ` · ${gap} behind ${above.name}` : ' · leading the cohort'}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <div className="relative min-w-[150px] flex-1">
+                      <Search size={14} className="absolute left-2.5 top-2.5 text-slate-500" />
+                      <input
+                        value={aliasQ}
+                        onChange={(e) => setAliasQ(e.target.value)}
+                        placeholder="Search rival alias…"
+                        aria-label="Search rival alias"
+                        className={`${inputCls} pl-8`}
+                      />
+                    </div>
+                    <div className="inline-flex rounded-xl border border-white/10 bg-black/30 p-0.5" role="group" aria-label="Leaderboard view">
+                      {(['top', 'near'] as const).map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setView(v)}
+                          aria-pressed={view === v}
+                          className={`rounded-[10px] px-3 py-1.5 text-xs font-medium ${view === v ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                          {v === 'top' ? 'Top ranked' : 'Near me'}
+                        </button>
+                      ))}
+                    </div>
+                    <Dropdown
+                      label="Page size"
+                      value={String(pageSize)}
+                      options={['25', '50', '100'].map((n) => ({ value: n, label: `${n} / page` }))}
+                      onChange={(v) => setPageSize(Number(v))}
+                    />
+                    <Btn onClick={jumpToMe}><Crosshair size={13} /> My rank</Btn>
+                  </div>
+                  <ul className="mt-2 space-y-1 text-sm">
+                    {pageRows.map((r) => (
+                      <CompetitorRow key={r.id} r={r} />
+                    ))}
+                  </ul>
+                  {pageRows.length === 0 && <p className="mt-2 text-xs text-slate-500">No rivals match “{aliasQ}”. Clear the search to browse the cohort.</p>}
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <Btn onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}>Prev</Btn>
+                    <span>Page {safePage + 1} of {pages} · {filtered.length} shown (cohort {board.rows.length})</span>
+                    <Btn onClick={() => setPage((p) => Math.min(pages - 1, p + 1))} disabled={safePage >= pages - 1}>Next</Btn>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Fictional opponents only. Each rival uses the same 75/25 formula, qualifying-day rule and bounded playlist content.
+                    “Calibrating” means fewer than 3 qualifying days or 7 observed days — not zero performance.
                   </p>
-                </>
-              )}
-              <p className="mt-1 text-[11px] text-slate-500">Rank 1 is best. Ties share a rank (1, 2, 2, 4). Percentile = share of the cohort ranked strictly below you. Totals (hours, videos) are shown for context only and never ranked.</p>
-              <Btn
-                onClick={() => { if (board.userRank !== null) s.pushRank({ at: new Date().toISOString(), rank: board.userRank, of: board.rows.length, metric: 'efficiency' }); }}
-                disabled={board.userRank === null}
-              >
-                Snapshot my rank
-              </Btn>
-              {s.rankHistory.length > 0 && (
-                <p className="mt-1 font-mono text-[11px] text-slate-500">
-                  {s.rankHistory.slice(-6).map((r) => `#${r.rank}`).join(' → ')}
+                </Card>
+              </div>
+
+              <Card>
+                <details className="text-xs text-slate-300">
+                  <summary className="cursor-pointer font-semibold text-slate-200">How ranking works</summary>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <p><b>Progress P = U / L.</b> U is unique completed/covered content for current playlist occurrences; L is the total resolved playlist duration. A completed entry credits its full duration once; otherwise only verified timeline coverage counts, capped per entry. The sum is capped at L.</p>
+                      <p className="mt-1"><b>Consistency C = Q / W.</b> Q counts qualifying days; W is the fixed or practice window. A qualifying day requires at least 5 minutes of new content or a completed video, plus at least 10 minutes of focus or active playback evidence. A running timer without content gain does not qualify.</p>
+                      <p className="mt-1"><b>Score = 100 × (0.75 P + 0.25 C).</b> It is bounded 0–100. Weights are a product policy choice, not a scientific constant.</p>
+                    </div>
+                    <div>
+                      <p><b>Provisional:</b> fewer than 3 qualifying days or fewer than 7 observed calendar days. Provisional rows get no rank and are excluded from percentile denominators.</p>
+                      <p className="mt-1"><b>What it does not measure:</b> comprehension, retention, intelligence, real-world rank, or attention. Timer/playback evidence proves recorded activity, not understanding.</p>
+                      <p className="mt-1"><b>Anti-exploit:</b> timer-only days do not qualify; rewatches add no unique content; XP, streak, tier and hours are not inputs; manual completion is labelled and does not become verified evidence.</p>
+                    </div>
+                  </div>
+                </details>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Evidence in this window: {userEvidence.verifiedCompleted} verified completed · {userEvidence.manualCompleted} manual/self-reported completed ·
+                  {' '}{userEvidence.daily.filter((d) => d.focusSec === 0 && d.contentGainSec > 0).length} content-only day(s) excluded by the activity floor.
                 </p>
-              )}
-            </Card>
-            <Card className="min-w-0 md:col-span-2">
-              <h3 className="text-sm font-bold">
-                Leaderboard — average daily efficiency · {windowName} · last {cfg.windowDays} days
-                {paused && ' (paused)'}
-              </h3>
-              <p className="mt-0.5 text-[11px] text-slate-500">
-                Exact window {anchorDates[0]} → {anchorDates[anchorDates.length - 1]} ({s.prefs.timezone}) · eligible days shown per row · secondary totals labelled with period and unit, context only.
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <div className="relative min-w-[150px] flex-1">
-                  <Search size={14} className="absolute left-2.5 top-2.5 text-slate-500" />
-                  <input
-                    value={aliasQ}
-                    onChange={(e) => setAliasQ(e.target.value)}
-                    placeholder="Search rival alias…"
-                    aria-label="Search rival alias"
-                    className={`${inputCls} pl-8`}
-                  />
-                </div>
-                <div className="inline-flex rounded-xl border border-white/10 bg-black/30 p-0.5" role="group" aria-label="Leaderboard view">
-                  {(['top', 'near'] as const).map((v) => (
-                    <button
-                      key={v}
-                      onClick={() => setView(v)}
-                      aria-pressed={view === v}
-                      className={`rounded-[10px] px-3 py-1.5 text-xs font-medium ${view === v ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                      {v === 'top' ? 'Top ranked' : 'Near me'}
-                    </button>
-                  ))}
-                </div>
-                <Dropdown
-                  label="Page size"
-                  value={String(pageSize)}
-                  options={['25', '50', '100'].map((n) => ({ value: n, label: `${n} / page` }))}
-                  onChange={(v) => setPageSize(Number(v))}
-                />
-                <Btn onClick={jumpToMe}><Crosshair size={13} /> My rank</Btn>
-              </div>
-              <ul className="mt-2 space-y-1 text-sm">
-                {pageRows.map((r) => (
-                  <CompetitorRow key={r.id} r={r} sim={r.isUser ? null : simById.get(r.id)} userDetail={r.isUser ? { unique: userArena.unique, focus: userArena.focus, practice: 0 } : null} />
-                ))}
-              </ul>
-              {pageRows.length === 0 && <p className="mt-2 text-xs text-slate-500">No rivals match “{aliasQ}”. Clear the search to browse the cohort.</p>}
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                <Btn onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}>Prev</Btn>
-                <span>Page {safePage + 1} of {pages} · {filtered.length} shown (cohort {board.rows.length})</span>
-                <Btn onClick={() => setPage((p) => Math.min(pages - 1, p + 1))} disabled={safePage >= pages - 1}>Next</Btn>
-              </div>
-              <p className="mt-1 text-[11px] text-slate-500">Fictional opponents only. Totals below are context — rank uses average daily efficiency alone. Provisional = too few eligible days to rank.</p>
-            </Card>
-          </div>
+              </Card>
+            </>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function CompetitorRow({
-  r,
-  sim,
-  userDetail,
-}: {
-  r: { id: string; name: string; isUser: boolean; tier: string; display: string; provisional: boolean; rank: number | null; eligibleDays: number; windowDays: number };
-  sim: { uniqueContentSec: number; focusSec: number; practiceMin: number } | null | undefined;
-  userDetail: { unique: number; focus: number; practice: number } | null;
+function ScoreBreakdown({ components }: { components: ArenaComponents }) {
+  const p = components.progress;
+  const c = components.consistency;
+  if (p === null || c === null || components.score === null) {
+    return <p className="mt-2 text-xs text-slate-500">No score until the playlist duration is known and a window exists.</p>;
+  }
+  return (
+    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+      <div className="rounded-xl bg-white/5 p-2">
+        <p className="font-mono text-sm font-bold">{(p * 100).toFixed(1)}%</p>
+        <p className="text-[11px] text-slate-400">Progress · contributes {(p * components.progressWeight * 100).toFixed(1)} pts</p>
+      </div>
+      <div className="rounded-xl bg-white/5 p-2">
+        <p className="font-mono text-sm font-bold">{(c * 100).toFixed(1)}%</p>
+        <p className="text-[11px] text-slate-400">Consistency · contributes {(c * components.consistencyWeight * 100).toFixed(1)} pts</p>
+      </div>
+      <div className="col-span-2 rounded-xl bg-white/5 p-2">
+        <p className="font-mono text-sm font-bold">{components.score.toFixed(1)}% Arena score</p>
+        <p className="text-[11px] text-slate-400">
+          {formatHMS(components.uniqueContentSec)} of {formatHMS(components.playlistDurationSec ?? 0)} content · {components.qualifyingDays}/{components.windowDays} qualifying days
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CompetitorRow({ r }: {
+  r: {
+    id: string; name: string; isUser: boolean; tier: string; display: string; provisional: boolean;
+    rank: number | null; qualifyingDays: number; observedDays: number; windowDays: number;
+    progress: number | null; consistency: number | null;
+  };
 }) {
-  const detail = sim
-    ? { unique: sim.uniqueContentSec, focus: sim.focusSec, practice: sim.practiceMin }
-    : userDetail;
-  const ctx = detail
-    ? ` · ${fmtHMS(detail.unique)} unique · ${fmtHMS(detail.focus)} study${detail.practice ? ` · ${detail.practice}m practice` : ''}`
-    : '';
-  const sub = detail
-    ? `${fmtHMS(detail.unique)} unique · ${fmtHMS(detail.focus)} study, last ${r.windowDays}d`
-    : '';
   return (
     <li
       className={`flex items-center gap-2 rounded-xl px-2 py-1.5 ${r.isUser ? 'bg-violet-600/25 font-bold' : 'bg-white/5'}`}
-      title={r.isUser ? `You · ${r.display}${ctx}` : `${r.name} · tier ${r.tier} · ${r.display}${ctx}${r.provisional ? ' · provisional' : ''}`}
+      title={`${r.name}${r.isUser ? ' (you)' : ` · tier ${r.tier}`} · ${r.display}${r.provisional ? ' · calibrating' : ''}`}
     >
       <span className="w-10 shrink-0 font-mono text-slate-400">{r.rank !== null ? `#${r.rank}` : '–'}</span>
       <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-slate-600 to-slate-800 text-[11px] font-bold">{r.isUser ? 'YOU' : initialsOf(r.name)}</span>
       <span className="min-w-0 flex-1 truncate">
-        {r.name} <span className="text-[11px] font-normal text-slate-500">· {r.tier} · {r.eligibleDays}/{r.windowDays} eligible days{r.provisional ? ' · provisional' : ''}</span>
-        {sub && <span className="block truncate text-[11px] font-normal text-slate-500">{sub} · context only</span>}
+        {r.name} <span className="text-[11px] font-normal text-slate-500">· {r.tier} · {r.qualifyingDays}/{r.observedDays} qualifying / observed</span>
+        <span className="block truncate text-[11px] font-normal text-slate-500">
+          {r.progress !== null ? `P ${(r.progress * 100).toFixed(0)}%` : 'P —'} · {r.consistency !== null ? `C ${(r.consistency * 100).toFixed(0)}%` : 'C —'} · context only
+        </span>
       </span>
       <span className="shrink-0 text-right">
         <span className="block font-mono text-sm font-bold">{r.display}</span>
-        <span className="block text-[10px] font-normal text-slate-500">avg daily eff.</span>
+        <span className="block text-[10px] font-normal text-slate-500">Arena v2</span>
       </span>
     </li>
   );
 }
 
-function fmtHMS(sec: number): string {
+function formatHMS(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;

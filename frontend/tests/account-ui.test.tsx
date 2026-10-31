@@ -42,6 +42,7 @@ function makeStore() {
     requestEmailChange: vi.fn(async (email: string) => ({
       ok: true, email, expiresInMin: 30, message: `A verification link was sent to ${email}.`,
     })),
+    signInWithGoogle: vi.fn(async () => undefined),
     signOut: vi.fn(async () => undefined),
   };
 }
@@ -132,6 +133,14 @@ describe('account screen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
     await waitFor(() => expect(storeRef.current.updateAccountPreferences).toHaveBeenCalled());
     expect(storeRef.current.updateAccountPreferences.mock.calls[0][0]).toMatchObject({ timezone: 'UTC' });
+  });
+
+  it('changes email only through a fresh Google verification, never a typed address or link request', async () => {
+    render(<Account section="security" onSection={() => undefined} />);
+    expect(screen.queryByLabelText(/new email/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Verify a new email with Google/ }));
+    await waitFor(() => expect(storeRef.current.signInWithGoogle).toHaveBeenCalledWith('email_change'));
+    expect(storeRef.current.requestEmailChange).not.toHaveBeenCalled();
   });
 
   it('refreshes the authenticated profile and server-side account data', async () => {

@@ -88,13 +88,20 @@ export function Settings() {
       </Card>
 
       <Card>
-        <h2 className="text-base font-bold">Local data & privacy</h2>
+        <h2 className="text-base font-bold">Data & privacy</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Learning records, progress, notes, focus history, and preferences live in this browser's IndexedDB. The small
-          localStorage keys used here are UI preferences (`lq-nav-collapsed`) and an interrupted-focus recovery snapshot
-          (`lq-focus-timer-v1`); they never leave the device. CSV/JSON exports are created locally, and the backend proxy
-          receives only the playlist URL/ID you request.
+          {s.mode === 'cloud'
+            ? 'Your learning data is saved to your LearnQuest account.'
+            : 'Your learning data is stored in this browser. Export a backup before clearing browser data.'}
         </p>
+        <details className="mt-2 text-xs text-slate-400">
+          <summary className="cursor-pointer font-semibold text-slate-300">How saving works</summary>
+          <p className="mt-1">
+            {s.mode === 'cloud'
+              ? 'Account changes are saved to the server. CSV/JSON exports are created locally, and the backend proxy receives only the playlist URL/ID you request.'
+              : 'Local records live in this browser’s IndexedDB; a small interrupted-focus recovery snapshot stays on this device. CSV/JSON exports are created locally, and the backend proxy receives only the playlist URL/ID you request.'}
+          </p>
+        </details>
       </Card>
     </div>
   );

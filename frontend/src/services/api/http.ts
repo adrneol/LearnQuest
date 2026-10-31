@@ -123,6 +123,13 @@ export async function apiRequest<T = any>(path: string, opts: ApiRequestOptions 
       ) {
         window.dispatchEvent(new CustomEvent('lq:auth-expired'));
       }
+      // A rotated session makes an old CSRF token invalid without proving that
+      // the session ended. Ask the shell to revalidate identity and refresh the
+      // token, then retry; it clears only if the server says the session is gone
+      // or belongs to a different account.
+      if (res.status === 403 && code === 'CSRF_FAILED' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('lq:auth-revalidate'));
+      }
       throw new ApiError(
         parsed?.error ?? `Request failed (HTTP ${res.status}).`,
         res.status,

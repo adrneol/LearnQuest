@@ -40,6 +40,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   outline-offset: 2px;
 }
 
+/* Every actionable control advertises clickability; disabled controls do not.
+   This is intentionally global so custom buttons and summary elements do not
+   depend on each component remembering a cursor utility class. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+select:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+a[href] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"],
+select:disabled {
+  cursor: not-allowed;
+}
+
 /* Tasteful, compact scrollbars for the app's own scroll regions
    (sidebar nav, bounded lists). Page-level scrolling stays native. */
 * {

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   idleFocusState, startFocus, pauseFocus, resumeFocus, activeMs, wallMs, finishFocus,
   recoverFocusState, sanitizeFocusState, isRecordableFocusSession, FOCUS_MIN_RECORDED_SEC,
+  resolveFocusSegment, mergeFocusIntervals, qualifiedFocusMs, FOCUS_MAX_GAP_COUNT_MS,
 } from '../src/domain/focus/focus.js';
 import { focusSessionDaySlices } from '../src/domain/time/time.js';
 
@@ -115,5 +116,53 @@ describe('deterministic focus timer state machine', () => {
     expect(draft.activeSec).toBe(30);
     expect(draft.elapsedSec).toBe(90);
     expect(draft.intervals?.find((i) => i.kind === 'paused')).toMatchObject({ startMs: T0 + 30_000, endMs: T0 + 90_000 });
+  });
+
+  it('honours monotonic time instead of a forward wall-clock jump', () => {
+    const resolved = resolveFocusSegment({
+      wallDeltaMs: 60 * 60_000,
+      monoDeltaMs: 2 * 60_000,
+    });
+    expect(resolved.countedMs).toBe(2 * 60_000);
+    expect(resolved.excludedMs).toBe(58 * 60_000);
+    expect(resolved.review).toBe(true);
+    expect(resolved.reason).toBe('clock-jump');
+
+    let s = startFocus(idleFocusState(T0, 'timer-clock-forward'), T0, 0);
+    s = pauseFocus(s, T0 + 60 * 60_000, 2 * 60_000);
+    expect(s.activeAccumMs).toBe(2 * 60_000);
+    expect(s.gapExcludedMs).toBe(58 * 60_000);
+    expect(s.recoveredReview).toBe(true);
+  });
+
+  it('excludes a backward wall-clock jump and a long sleep gap', () => {
+    const backward = resolveFocusSegment({ wallDeltaMs: -30_000, monoDeltaMs: 5_000 });
+    expect(backward.countedMs).toBe(0);
+    expect(backward.review).toBe(true);
+    expect(backward.reason).toBe('clock-backward');
+
+    const sleep = resolveFocusSegment({
+      wallDeltaMs: 2 * 60 * 60_000,
+      monoDeltaMs: 2 * 60 * 60_000,
+      hidden: true,
+    });
+    expect(sleep.countedMs).toBe(FOCUS_MAX_GAP_COUNT_MS);
+    expect(sleep.excludedMs).toBe(2 * 60 * 60_000 - FOCUS_MAX_GAP_COUNT_MS);
+    expect(sleep.review).toBe(true);
+    expect(sleep.reason).toBe('hidden-gap');
+  });
+
+  it('merges duplicate intervals and subtracts paused union from qualified focus', () => {
+    const intervals = [
+      { startMs: 0, endMs: 60_000, kind: 'active' as const },
+      { startMs: 30_000, endMs: 120_000, kind: 'active' as const },
+      { startMs: 40_000, endMs: 50_000, kind: 'paused' as const },
+      { startMs: 45_000, endMs: 70_000, kind: 'paused' as const },
+    ];
+    expect(mergeFocusIntervals(intervals, 'active')).toEqual([
+      { startMs: 0, endMs: 120_000, kind: 'active' },
+    ]);
+    // 120s active minus the 40–70s paused union = 90s qualified.
+    expect(qualifiedFocusMs(intervals)).toBe(90_000);
   });
 });

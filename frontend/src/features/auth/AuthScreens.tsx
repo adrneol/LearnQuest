@@ -20,6 +20,10 @@ const AUTH_ERROR_COPY: Record<string, string> = {
   LINK_REQUIRED: 'An account already uses this email with a different sign-in method. Contact support if you need help linking it.',
   EMAIL_NOT_VERIFIED: 'Google did not confirm a verified email address for this identity. No account was created.',
   ACCOUNT_UNAVAILABLE: 'That account is unavailable or is being deleted. No session was created.',
+  GOOGLE_IDENTITY_MISMATCH: 'That Google account is not the identity linked to this LearnQuest account. Use the same Google account, or sign in with your password.',
+  EMAIL_TAKEN: 'That email address is already used by another account. No change was made.',
+  RECENT_AUTH_REQUIRED: 'Sign in again with your password or Google before changing your email or linking an identity.',
+  AUTH_REQUIRED: 'Sign in before changing your email address.',
   INVALID_OAUTH_STATE: 'That Google sign-in request expired or was already used. Start again.',
   INVALID_OAUTH_INTENT: 'Choose whether you want to sign in or create an account.',
   GOOGLE_EXCHANGE_FAILED: 'Google rejected the sign-in exchange. Start again.',
@@ -38,6 +42,23 @@ function authRedirectCode(): string | null {
   const [path, query = ''] = raw.split('?');
   if (path !== 'auth') return null;
   return new URLSearchParams(query).get('error');
+}
+
+/** One-shot success notice after a Google email-change redirect. */
+function authRedirectNotice(): string | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  const [path, query = ''] = raw.split('?');
+  if (path !== 'auth') return null;
+  return new URLSearchParams(query).get('notice');
+}
+
+function clearOAuthNoticeFromHash(): void {
+  if (typeof window === 'undefined') return;
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  const [path, query = ''] = raw.split('?');
+  if (path !== 'auth' || !new URLSearchParams(query).has('notice')) return;
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/auth`);
 }
 
 function clearOAuthErrorFromHash(): void {
@@ -70,10 +91,10 @@ export function SetupRequiredScreen({ setup: _setup, onRetry }: { setup: AuthCon
           <p>No account, session, email, or learning record was created while this page was shown.</p>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          If this persists, contact the LearnQuest administrator or retry after the next deployment.
+          If this keeps happening, contact the LearnQuest administrator.
         </p>
         <div className="mt-4 flex gap-2">
-          <Btn variant="primary" onClick={onRetry}>Retry configuration check</Btn>
+          <Btn variant="primary" onClick={onRetry}>Try again</Btn>
         </div>
       </Card>
     </main>
@@ -122,6 +143,11 @@ export function AuthScreens({
     const code = authRedirectCode();
     return code ? (AUTH_ERROR_COPY[code] ?? 'Google sign-in did not complete. Nothing was changed; try again.') : null;
   });
+  const [notice] = useState<string | null>(() => (
+    authRedirectNotice() === 'email-changed'
+      ? 'Your email address was updated with Google. All sessions were signed out; sign in again with the new address.'
+      : null
+  ));
   const [cooldown, setCooldown] = useState(0);
   const googleReady = Boolean(setup?.configured?.google);
   const emailReady = Boolean(setup?.configured?.brevo);
@@ -130,6 +156,7 @@ export function AuthScreens({
 
   useEffect(() => {
     clearOAuthErrorFromHash();
+    clearOAuthNoticeFromHash();
   }, []);
 
   useEffect(() => {
@@ -213,6 +240,7 @@ export function AuthScreens({
             </div>
           </div>
 
+          {notice && <p role="status" className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-sm text-emerald-200">{notice}</p>}
           {(visibleAuthError || error) && <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error ?? visibleAuthError}</p>}
 
           {mode === 'signin' && (

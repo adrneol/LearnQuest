@@ -8,7 +8,7 @@ import type { GoogleOAuthService, GoogleAuthIntent } from '../auth/google.js';
 import {
   boundedInt, completeOnboarding, createAccountFromGoogle, findAccountByGoogleSub,
   findAccountById, findAccountByIdentifier, isPasswordResetEligible, safeAccount,
-  setAccountPassword, updateAccountPreferences, validatePassword, validateTimezone,
+  setAccountEmail, setAccountPassword, updateAccountPreferences, validatePassword, validateTimezone,
   http, type Account, type SafeAccount,
 } from '../auth/accounts.js';
 import {
@@ -199,7 +199,7 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
     try {
       await requireSetup(store);
       const rawIntent = typeof req.query.intent === 'string' ? req.query.intent : 'login';
-      if (rawIntent !== 'login' && rawIntent !== 'register') {
+      if (rawIntent !== 'login' && rawIntent !== 'register' && rawIntent !== 'email_change') {
         throw http(400, 'Choose whether to sign in or create an account.', 'INVALID_OAUTH_INTENT');
       }
       const intent: GoogleAuthIntent = rawIntent;
@@ -207,15 +207,34 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       // OAuth state with that account so account deletion can remove it. The
       // state still contains no profile or learning data.
       let ownerUserId: string | null = null;
+      let ownerSession = null as Awaited<ReturnType<typeof findSessionByToken>>;
       try {
         const token = readSessionToken(req);
         const session = token ? await findSessionByToken(store, token) : null;
         if (session) {
           const owner = await findAccountById(store, session.userId);
-          if (owner?.status === 'active') ownerUserId = owner.userId;
+          if (owner?.status === 'active') {
+            ownerUserId = owner.userId;
+            ownerSession = session;
+          }
         }
       } catch {
         // An optional owner link must not make the public sign-in start fail.
+      }
+      if (intent === 'email_change') {
+        if (!ownerUserId || !ownerSession) {
+          throw http(401, 'Sign in before changing your email address.', 'AUTH_REQUIRED');
+        }
+        const account = await findAccountById(store, ownerUserId);
+        if (!account || account.status !== 'active' || !account.onboardingComplete) {
+          throw http(401, 'This account is not available for an email change.', 'ACCOUNT_UNAVAILABLE');
+        }
+        // A linked Google identity proves control by matching the stable
+        // subject at callback time. Linking Google for the first time is only
+        // allowed inside the server's recent-authentication window.
+        if (!account.googleSub && !isRecentAuth(ownerSession)) {
+          throw http(403, 'Sign in again with your password or Google before linking an identity to change your email.', 'RECENT_AUTH_REQUIRED');
+        }
       }
       // Bind this authorization flow to this browser with a short-lived
       // HttpOnly cookie. The server stores only the digest alongside the state.
@@ -259,12 +278,69 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       const state = typeof req.query.state === 'string' ? req.query.state : '';
       const browserBinding = readOAuthBindingCookie(req);
       if (!browserBinding) return fail('invalid_oauth_state');
-      const { identity, intent } = await google.complete(code, state, browserBinding);
+      const { identity, intent, userId } = await google.complete(code, state, browserBinding);
       if (!identity.emailVerified) return fail('EMAIL_NOT_VERIFIED');
 
       const account = await findAccountByGoogleSub(store, identity.sub);
       const oldToken = readSessionToken(req);
       const info = clientInfo(req);
+
+      /**
+       * Email change is Google-only in the product UI. The flow is bound to an
+       * authenticated account, the initiating browser cookie, and (when one is
+       * linked) the stable Google subject. It never emails a verification link.
+       */
+      if (intent === 'email_change') {
+        const owner = userId ? await findAccountById(store, userId) : null;
+        if (!owner || owner.status !== 'active' || !owner.onboardingComplete) {
+          return fail('ACCOUNT_UNAVAILABLE');
+        }
+        if (owner.googleSub && owner.googleSub !== identity.sub) {
+          return fail('GOOGLE_IDENTITY_MISMATCH');
+        }
+        if (!owner.googleSub) {
+          // Linking a Google identity for the first time is a security-
+          // sensitive act: it must happen inside the recent-auth window.
+          const current = oldToken ? await findSessionByToken(store, oldToken) : null;
+          if (!current || current.userId !== owner.userId || !isRecentAuth(current)) {
+            return fail('RECENT_AUTH_REQUIRED');
+          }
+        }
+        const emailOwner = await store.accounts.findOne({ emailNormalized: normalizeEmail(identity.email) });
+        if (emailOwner && emailOwner.userId !== owner.userId) return fail('EMAIL_TAKEN');
+        let changed: Account;
+        try {
+          changed = await withAccountWriteLease(store, owner.userId, async () => {
+            const current = await findAccountById(store, owner.userId);
+            if (!current || current.status !== 'active') {
+              throw Object.assign(new Error('Account unavailable.'), { status: 409, code: 'ACCOUNT_UNAVAILABLE' });
+            }
+            if (current.googleSub && current.googleSub !== identity.sub) {
+              throw Object.assign(new Error('Google identity mismatch.'), { status: 403, code: 'GOOGLE_IDENTITY_MISMATCH' });
+            }
+            const next = await setAccountEmail(store, current, identity.email);
+            if (!current.googleSub) {
+              await store.accounts.updateOne(
+                { userId: current.userId },
+                { $set: { googleSub: identity.sub, updatedAt: new Date().toISOString() } },
+              );
+            }
+            await revokeAllSessions(store, current.userId);
+            await invalidateAllEmailActions(store, current.userId, ['email_change']);
+            return next;
+          });
+        } catch (e: any) {
+          return fail(typeof e?.code === 'string' ? e.code : 'EMAIL_TAKEN');
+        }
+        await safeNotice(email, {
+          to: owner.email,
+          subject: 'Your LearnQuest account email was changed',
+          message: `The account email was changed to ${changed.email} on ${new Date().toUTCString()}. All sessions were signed out. If this was not you, reset your password and contact the LearnQuest administrator.`,
+        });
+        clearOAuthBindingCookie(res);
+        clearSessionCookie(res);
+        return res.redirect(303, `${env.appOrigin}/#/auth?notice=email-changed`);
+      }
 
       if (intent === 'login') {
         if (!account) return fail('google_account_not_found');

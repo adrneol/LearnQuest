@@ -1,0 +1,387 @@
+# LEARNQUEST PHASE 24 — ACCOUNT IDENTITY, UNIFIED STORAGE MIGRATION, ARENA DOCUMENTATION, AND RESPONSIVE FIXES
+
+**Repository:** `E:\progressGameTracker`  
+**Branch:** `main`  
+**Starting point:** Phase 23 implementation and Report 23, after the owner has reviewed and committed the intended Phase 23 work.  
+**Runtime target:** Node.js `24.22.2` (project requirement: `>=24.22.1 <25`).  
+**Mode:** Inspect, implement, test, stage and rehearse migration safely. No production cutover without the explicit final approval gate in this prompt.
+
+---
+
+# 0. ROLE AND OBJECTIVE
+
+Act as a senior full-stack engineer, identity/authentication engineer, MongoDB migration architect, frontend responsive-design engineer, QA engineer, and technical writer.
+
+This phase addresses four owner priorities:
+
+1. Determine why a Gmail identity that already exists in production was accepted during local sign-up, and implement a safe, intuitive sign-in/sign-up identity flow that never creates duplicate accounts or enables account takeover.
+2. Prepare a complete, no-data-loss Legacy-to-Unified migration, including implementation, backup/restore proof, write-freeze or equivalent change capture, reverse migration, staging parity and interruption recovery. The owner's goal is to migrate production to Unified after all gates pass.
+3. Fix text and content overflowing their containers in Library and Player on responsive layouts, plus other directly related responsive defects discovered during verification.
+4. Create a standalone, complete Arena guide/specification explaining exactly how Arena scoring, eligibility, competitors, ranking, season behavior and every user-facing setting work.
+
+Also inspect the remaining Report 23 limitations and identify high-priority follow-up fixes. Do not turn this into an uncontrolled full redesign or unrelated refactor.
+
+**Important:** The owner wants to move to Unified after implementation. You are authorized to build and validate the migration system and run isolated staging rehearsals. You are NOT authorized to run a live production migration or alter production configuration in this phase. Complete the staging gates, prepare the exact production runbook, then stop for explicit final cutover approval.
+
+# 1. LOAD PROJECT SKILLS AND SOURCE DOCUMENTS
+
+Load `@learnquest-engineering` first. Load the specialist skills selectively when the relevant workstream begins:
+
+- `@security-best-practices` for account identity, OAuth and authentication security.
+- `@mongodb-schema-design` for repository schema and migration design.
+- `@vercel-react-best-practices` for React 18/Vite responsive and rendering work only.
+- `@playwright-best-practices-for-agents` for browser tests, subject to the project's compatibility restrictions.
+
+Read these source documents completely:
+
+- `docs/user-doc/audit2/22_LEARNQUEST_COMPLETE_PRODUCT_SECURITY_QUALITY_AUDIT_2026-10-30.md`
+- `docs/user-doc/audit2/23_LEARNQUEST_COMPLETE_IMPLEMENTATION_AND_REGRESSION_REPORT_2026-10-30.md`
+- `docs/user-doc/audit2/README.md`
+- `.agents/skills/learnquest-engineering/SKILL.md`
+
+Inspect actual current source before trusting historical reports. The source and tests outrank audit prose.
+
+Compatibility restrictions:
+
+- React 18 + Vite; no Next.js, RSC, server actions, or React 19-only APIs.
+- Express 4.21 and MongoDB driver 7 (verify current manifests).
+- Preserve TypeScript strictness and the established dark-first glassmorphism design.
+- Do not assume Playwright exists. Inspect package manifests/config first. Before adding any dependency or browser binary, explain why it is needed and obtain approval unless the owner has explicitly approved that exact install in the current conversation.
+- Do not install the optional `playwright-cli` just because the Playwright skill mentions it.
+
+# 2. BASELINE AND CHANGE CONTROL
+
+Before editing:
+
+1. Confirm repository root, branch and `git rev-parse HEAD`.
+2. Record complete `git status --short --branch` and all untracked paths.
+3. Inspect staged, unstaged and untracked changes.
+4. Confirm the Phase 23 commit exists in history if the owner has committed it. If it is not committed, stop before editing and report the discrepancy; do not assume a clean baseline.
+5. Read the Phase 23 final report and compare its claims with current source.
+6. Verify `node --version`, `npm --version`, `where.exe node`, and each package's declared Node engine. The required runtime is `>=24.22.1 <25`; prefer v24.22.2 if installed.
+7. Preserve all existing changes, historical deletions and untracked files. Never run `git reset --hard`, `git clean`, destructive restore/checkout, rebase, or stash/pop that could discard work.
+
+Do not commit, push or deploy in this phase. Do not modify `.env`, secrets, production dashboard settings or package versions without explicit approval.
+
+# 3. P0 — DIAGNOSE LOCAL VS PRODUCTION GOOGLE ACCOUNT DUPLICATE
+
+## 3.1 Establish whether the local and production databases are actually the same
+
+The fact that a Gmail address exists in production but can be used in local development does NOT by itself prove duplicate-email validation is broken. Local and production commonly use different MongoDB databases or clusters; unique indexes are scoped to a database/collection, not shared between separate deployments.
+
+Prove the topology without exposing secrets:
+
+- Inspect the backend's configuration-loading code and actual runtime Mongo client/database selection.
+- Never print, read into logs, copy, or expose `.env`, MongoDB URI, passwords, hostnames, credentials, or private account data.
+- If a safe diagnostic is needed, report only a non-sensitive database name or an irreversible short fingerprint generated in memory; do not print the connection URI or cluster hostname.
+- Do not query production for this Gmail address and do not use production credentials. Do not attempt a live production sign-up.
+- State clearly whether the local app points to a separate local database, a separate database on the same cluster, or the same database. If production topology cannot be verified from authorized evidence, say so.
+
+Interpretation:
+
+- If local and production use different databases, accepting the same email locally can be expected and does not imply a production duplicate bug.
+- If both use the same database, investigate the normalization, lookup, unique index, race handling and Google subject matching as a real defect.
+- Never modify production records to test this.
+
+## 3.2 Audit uniqueness and account identity
+
+Inspect current account creation, Google OAuth registration/login intents, account lookup, database indexes, email normalization, and unique-key handling.
+
+Verify:
+
+- All account creation paths use one canonical email normalization function.
+- The intended normalized email has a database-enforced unique index, not only an application pre-check.
+- Google `sub` has the correct uniqueness guarantee (sparse/partial semantics appropriate to the current account model).
+- Concurrent registrations with the same normalized email cannot create two accounts.
+- Mongo duplicate-key errors are handled safely and consistently.
+- Lookup uses the stable Google `sub` as the primary identity when linked; email is a secondary uniqueness/association signal.
+- Case/whitespace variants cannot bypass uniqueness.
+- Do not strip Gmail dots or plus-tags or apply provider-specific alias rewriting unless the product has explicitly adopted and tested that identity policy. Do not merge addresses based on assumptions.
+- Keep account scoping and existing session, CSRF, OAuth state, browser binding, rate limiting and non-enumeration protections.
+
+Add unit, backend integration and concurrency tests for uniqueness, existing identities, normalized variants, duplicate-key races and account isolation.
+
+## 3.3 Desired sign-in/sign-up experience
+
+The owner wants a simple experience:
+
+- If a user starts from Sign Up with a Google identity that is already linked to a LearnQuest account, authenticate/sign in to that existing account rather than creating another account or showing a blunt “email already exists” error.
+- If a user starts from Sign In and the authenticated Google identity is not linked to any LearnQuest account, offer a clear “Create your LearnQuest account” / sign-up path.
+- If there is no existing account and the user confirms account creation, proceed through the existing Google onboarding flow.
+- If the verified Google email matches an existing account but its Google `sub` is different or not linked, DO NOT silently attach it or log the user into that account based only on matching email. Require proof of control through that account's existing sign-in method and an explicit secure linking flow with recent authentication, or block linking with clear next steps.
+- Never automatically merge two accounts or move learning data because email strings match.
+- If a stable Google `sub` is already linked, use that identity to sign the user into the existing account, irrespective of which screen they started from.
+- Avoid disclosing account existence to unauthenticated callers through an unprotected email lookup/preflight endpoint. Rate-limit identity operations and use generic responses where needed. After a verified Google identity is established, give the legitimate user actionable next steps.
+
+Implement a cohesive Google-first identity resolution flow rather than two registration/login paths that can disagree. Keep account creation explicit. Preserve existing account data and OTP functionality unrelated to this flow.
+
+Required tests:
+
+1. Existing linked Google `sub` from Sign Up -> signs in existing account; no new account.
+2. Existing linked Google `sub` from Sign In -> signs in existing account.
+3. New verified Google identity with no matching account -> offers/starts onboarding only after explicit user action.
+4. Email matching an existing account but different/unlinked `sub` -> no auto-link, no login takeover, safe proof/link path required.
+5. Same normalized email concurrent requests -> at most one account.
+6. Case/whitespace normalization cannot bypass uniqueness.
+7. Duplicate-key race is handled without a second account.
+8. Existing OTP and password flows remain functional.
+9. No account enumeration regression, no secret or email-token leakage.
+10. Local and production database separation is documented accurately.
+
+# 4. P0 — LEGACY TO UNIFIED ZERO-LOSS MIGRATION
+
+The owner intends to migrate to Unified after the engineering and staging work is complete. Treat data preservation as the highest priority. No collection/domain or record may be silently lost.
+
+## 4.1 Inventory and contract proof
+
+Inspect the actual Legacy and Unified adapters, migration scripts, indexes, collection names, key schemas, account deletion behavior and import/export paths.
+
+The current logical domains are expected to include these 20 entries; verify the source of truth and do not omit or rename any:
+
+`playlists`, `meta`, `progress`, `ranges`, `checkpoints`, `modules`, `sessions`, `goals`, `xp`, `achievements`, `segments`, `playSessions`, `queue`, `flexGoals`, `challenge`, `challengeEnabled`, `rankHistory`, `settings`, `prefs`, `activeId`.
+
+For each domain document:
+
+- Legacy physical collection and logical key mapping.
+- Unified record shape and indexes.
+- Stable identity and ordering semantics.
+- Empty-domain behavior.
+- Validation and size limits.
+- User ownership and deletion scope.
+- Import/export/restore behavior.
+- Whether append operations and optimistic versions behave identically.
+
+Prove both adapters satisfy the same repository contract for every domain. A successful migration must preserve every logical record, its stable identity, ordering where meaningful, timestamps/versions where meaningful, user ownership, and all required metadata. Empty domains must remain represented as empty logical domains after the switch.
+
+Do not interpret “Unified uses one physical collection” as permission to drop logical domain coverage. The user explicitly requires no collection/domain loss and no record loss.
+
+## 4.2 Migration protocol — no moving target snapshot
+
+Design a cross-process, server-authoritative write-freeze or an equivalently strong change-capture protocol. An in-memory flag is not sufficient for multi-instance Render deployments.
+
+The protocol must:
+
+1. Acquire a durable migration fence visible to every backend process.
+2. Prevent new learning-data mutations during the final snapshot window (including PUT, append, import, local-data migration, playlist/learning mutations, Focus/XP writes, and any other write path identified by source inspection).
+3. Drain or safely account for in-flight writes before taking the final source snapshot.
+4. Make clients show an explicit maintenance/read-only state while preserving pending local edits; do not discard queued user changes.
+5. Record a migration ID, schema version, fence generation, start/end times, source version and domain inventory.
+6. Copy all users and all 20 logical domains to Unified using stable identities and idempotent operations.
+7. Compute canonical per-user/per-domain counts and checksums before and after copy.
+8. Re-read/verify the source snapshot while the fence remains active. Any source mutation, missing record, extra unexpected record, checksum mismatch, duplicate, invalid record or unresolved conflict must fail the migration closed.
+9. Reconcile destination-only records explicitly. Never silently delete or overwrite them.
+10. Make interrupted runs resumable and idempotent, with a durable per-account/per-domain progress journal.
+11. Keep Legacy data unchanged throughout migration and cutover.
+12. Switch the application to Unified only after every required parity gate succeeds and an explicit owner-approved cutover operation is issued.
+13. Release the write fence only after the selected storage mode is confirmed and a read/write smoke test passes.
+
+No silent fallback from Unified to Legacy. A mode mismatch or missing Unified state must fail clearly rather than show an empty account or mix two sources of truth.
+
+## 4.3 Reverse migration and rollback
+
+Implement a tested reverse path before production cutover.
+
+A rollback must preserve every write accepted after Unified becomes active. It is not enough to leave old Legacy collections untouched and switch the environment variable back.
+
+Use a controlled freeze again, copy/reconcile all Unified-era writes into Legacy, verify all domains and checksums, confirm no conflicts or missing records, and only then permit switching the active mode back. If a reverse copy cannot prove parity, keep the system fenced/read-only and block rollback rather than lose data.
+
+Do not permanently dual-write both adapters as an unreviewed shortcut or introduce two authoritative sources. If a temporary change log/outbox is selected, document why and prove replay/idempotency.
+
+## 4.4 Backup and restore proof
+
+Write a documented operator runbook for a full database backup and restore rehearsal.
+
+- Use an isolated staging/test database only.
+- Never print credentials or URIs.
+- Restore the backup into a separate empty database.
+- Verify logical domain counts and canonical checksums for all 20 domains.
+- Include accounts and required account metadata in the backup plan, while ensuring no real production PII is copied to staging without explicit authorization and a privacy-safe plan.
+- A CLI flag or operator checkbox saying “backup confirmed” is not proof. Require a recorded restore-verification artifact.
+
+## 4.5 Staging rehearsal and migration gates
+
+Create representative synthetic fixtures including empty domains, large histories, duplicate identities, conflicting destination data, destination-only data, malformed records, account deletion races, concurrent writes, and partial interruption.
+
+Test at least:
+
+- Legacy repository contract for all 20 domains.
+- Unified repository contract for all 20 domains.
+- Cross-adapter read/write parity.
+- Exact count and checksum parity.
+- No fallback when Unified is selected and empty.
+- Dry run produces zero writes.
+- Apply copies all domains.
+- Re-run is idempotent.
+- Source and destination conflicts block safely.
+- Duplicate source/destination records block safely.
+- Destination-only records are preserved pending explicit reconciliation.
+- Source mutation during copy is detected and blocks completion.
+- Interrupted copy resumes without loss or duplication.
+- Account deletion cannot resurrect records.
+- Import/export and restore work in both modes.
+- Large account/transaction/payload limits are measured.
+- Freeze blocks every identified mutation route and drains in-flight writes.
+- Reverse migration preserves Unified-era writes.
+- Backup restore reproduces counts/checksums.
+
+Use an actual isolated MongoDB replica set for transaction/migration integration tests if required. In-memory tests alone are not evidence of production transaction behavior. Do not use production credentials.
+
+## 4.6 Cutover decision gate
+
+The owner intends to migrate production after the implementation is complete. Therefore, do not stop at vague “migration not ready” notes: implement the missing code, tests, runbooks and staging rehearsal as far as possible.
+
+However, do NOT switch production storage or run production migration automatically. Before the live operation, produce a separate cutover checklist that names:
+
+- Exact target database and environment, described without exposing secrets.
+- The exact 20-domain source/destination inventory.
+- Backup and restore proof.
+- Staging parity artifact.
+- Freeze/drain proof.
+- Destination-only/conflict reconciliation approvals.
+- Reverse-migration rehearsal result.
+- Rollback decision and expected maintenance window.
+- Final source/target counts and checksums.
+- The exact operator command/environment change to be used.
+
+Stop and request the owner's explicit final authorization for the production cutover. Do not infer production authorization from permission to implement or test the migration system.
+
+Keep `LQ_USER_DATA_STORE=legacy` as production default until that approval and all gates pass. Never drop or retire Legacy collections in this phase. Retention/retirement needs a separate post-cutover observation period and explicit approval.
+
+# 5. P1 — RESPONSIVE LIBRARY AND PLAYER TEXT OVERFLOW
+
+The owner observed text escaping or overflowing its containers on Library and Player, especially at narrow viewports.
+
+Inspect the exact components, actual DOM structure, flex/grid parents, widths, long titles/playlist names, badges, metadata, controls and responsive CSS. Identify root causes rather than applying a global font-size reduction.
+
+Fix as appropriate:
+
+- `min-w-0` on flex/grid children that must shrink.
+- `minmax(0, 1fr)` on grid columns where needed.
+- `max-width: 100%` and `overflow-wrap: anywhere` for genuinely unbreakable text.
+- Correct `flex-shrink`, `flex-wrap`, and min-width constraints.
+- Ellipsis only where truncation is intentional and full text remains accessible (title/tooltip or detail view).
+- Keep buttons and controls usable; do not hide essential text or clip focus outlines.
+- Check chart labels, playlist titles, video titles, badges, metadata and action groups.
+
+Do not solve the issue by globally shrinking all typography or using page-level `overflow-x: hidden` to mask a broken layout.
+
+Verify Library and Player at: 320, 360, 375, 390, 430, 768, 1024, 1280, 1440 and 1920 px. Also inspect keyboard focus, touch target sizing, drawer interactions, and both short and extremely long titles. Add regression tests where meaningful. Capture actual browser screenshots if an approved browser-testing setup is available; otherwise state the limitation honestly.
+
+# 6. P1 — COMPLETE, INDEPENDENT ARENA SYSTEM GUIDE
+
+Create one canonical standalone document, preferably:
+
+`docs/user-doc/ARENA_COMPLETE_GUIDE.md`
+
+Check for an existing equivalent first; do not create duplicates.
+
+The document must explain the actual implemented Arena system, not merely repeat a proposal. Inspect current `competition.ts`, `Competition.tsx`, types, settings, season/snapshot logic and tests. Clearly mark any feature that Report 22 proposed but Phase 23 did not actually implement.
+
+Include:
+
+1. What Arena is and is not (fictional simulation; not a real-person leaderboard or a comprehension/retention score).
+2. Current model version and why versioning exists.
+3. Exact score formula with every variable, unit, cap, missing-data rule and worked examples.
+4. Exact playlist duration denominator behavior, unresolved-duration behavior and duplicate occurrence identity.
+5. How completed/manual/self-reported/verified content contributes and how evidence is labelled.
+6. Exact qualifying-day definition and examples of qualifying/non-qualifying days.
+7. Observation window, fixed season dates, timezone/calendar attribution and provisional eligibility.
+8. Competitor generation, tiers/ability profiles, active days/rest days, deterministic seed, stable identities, daily caps and what is display-only versus scored.
+9. Rank and tie calculation, percentile denominator, provisional rows, ordering and rank history.
+10. Every current Arena setting: label, default, allowed range/options, effect on simulation, whether it affects score, and whether it changes the official season or practice only. If a setting exists only in code or only in UI, say so.
+11. Official season versus private practice simulation. Settings must not manipulate the official score after season start. If Phase 23 did not implement this separation fully, document the current reality and implement the missing safe UI/logic in this phase if feasible.
+12. Reset/new-season behavior, playlist changes, seed changes and replay determinism.
+13. Empty, incomplete, imported, zero-duration and new-user states.
+14. Anti-manipulation protections and known limitations of client-authored score computation.
+15. Worked examples covering consistent learner, burst learner, one-minute exploit, completed playlist, unresolved duration and ties.
+16. UI screenshots/locations or a section-by-section map of the Arena interface; document every control visible to the user.
+17. FAQ and plain-language explanation suitable for an ordinary LearnQuest user.
+18. Developer reference: source files, types, test files, model constants and migration/version rules.
+
+The guide must distinguish **implemented and verified**, **implemented but not browser-verified**, **proposed/not implemented**, and **known limitation**. Never present proposed settings as existing controls.
+
+The formula in Report 22 is the approved baseline unless code inspection reveals an important correctness contradiction. Do not silently change the 75/25 weights; if you believe a change is necessary, present evidence and obtain owner approval.
+
+# 7. P2 — REVIEW OTHER REMAINING REPORT 23 ITEMS
+
+Read Report 23's limitations and produce a small prioritized list of remaining items. Consider:
+
+- Initial full-state account-data read and History/Analytics pagination.
+- Remote-device session freshness and cross-account identity behavior.
+- Real-browser authentication and cloud conflict verification.
+- Responsive verification for Account, Focus, Arena, Library and Player.
+- Automated accessibility and keyboard checks.
+- Production-like migration/transaction limits.
+- Node 24.22.2 baseline reruns.
+
+Implement only directly relevant, safe fixes that fit the four owner priorities above. Do not introduce a major pagination or domain rewrite without defining API compatibility, consistency and rollback. Record any deferred work in the report with a reason and acceptance criteria.
+
+# 8. TESTING AND QUALITY GATES
+
+Use Node 24.22.2 where installed. If the active shell resolves another Node binary, identify the exact `where.exe node` order and fix the PATH/install issue before running release-grade QA. Do not change `engines` to make an unsupported runtime pass.
+
+Run targeted tests for each change, then both full suites, typechecks, builds and lint. Add:
+
+- Google identity resolution and uniqueness race tests.
+- Existing-account sign-up -> sign-in tests.
+- New-account sign-in -> sign-up offer tests.
+- Local/prod topology diagnostic with secrets redacted.
+- Legacy/Unified parity and 20-domain migration tests.
+- Migration freeze, interruption/resume, rollback, backup restore and large-account tests.
+- Arena formula/property tests and exact settings-contract tests.
+- Responsive Library/Player tests and real-browser screenshots if browser setup is approved.
+
+Do not claim a real-browser result from jsdom. Do not claim a migration is no-loss based solely on a dry run or in-memory adapter. Do not claim production cutover readiness without all gates in §4.6.
+
+# 9. REQUIRED DELIVERABLES
+
+Create/update:
+
+1. `docs/user-doc/ARENA_COMPLETE_GUIDE.md` — standalone complete explanation of Arena.
+2. `docs/user-doc/audit2/24_LEARNQUEST_ACCOUNT_IDENTITY_UNIFIED_MIGRATION_AND_RESPONSIVE_REPORT_2026-10-31.md` — implementation and verification report.
+3. `docs/user-doc/audit2/README.md` — one accurate Report 24 archive entry.
+4. Migration runbook and rollback procedure in an appropriate existing docs location, without duplicating documentation.
+
+The Report 24 must include:
+
+- Local-versus-production database diagnosis and evidence (no secrets).
+- Account identity resolution rules and UX changes.
+- Unique indexes and concurrency handling.
+- Responsive root causes and before/after verification.
+- Arena formula, settings, guide path and implemented/proposed distinctions.
+- Complete 20-domain Legacy/Unified mapping.
+- Migration architecture, freeze protocol, checksum/count evidence and recovery behavior.
+- Backup restore evidence.
+- Reverse-migration/rollback evidence.
+- Staging rehearsal result and cutover readiness gate table.
+- Exact tests, commands, versions and actual results.
+- Exact files changed and final Git status.
+- Remaining limitations and next owner decisions.
+
+# 10. HARD SAFETY BOUNDARIES
+
+- No production database migration or write.
+- No production collection/index change.
+- No production data/account lookup by personal email.
+- No real account creation, deletion, password reset, email send or session revocation.
+- No live Google or Brevo operation unless separately authorized and performed only as a controlled verification.
+- No production environment/dashboard changes.
+- No committing, pushing or deploying.
+- No deleting Legacy collections. No retiring Legacy in this phase.
+- No printing environment variables, MongoDB URIs, passwords, cookies, OAuth secrets, tokens or private user data.
+- No weakening CSRF, origin checks, cookies, OAuth state/browser binding, session checks, rate limits, validators or TypeScript strictness.
+- No automatic account linking or account merging based only on email equality.
+- Preserve all existing work and all 20 logical learning domains.
+
+# 11. EXECUTION INSTRUCTIONS
+
+Start by establishing the baseline and actual runtime. Then execute the four workstreams in this order:
+
+1. Diagnose and fix Google account identity/duplicate resolution.
+2. Fix Library and Player responsive text overflow.
+3. Validate/complete Arena settings and publish the independent complete guide.
+4. Implement and rehearse the full Legacy-to-Unified no-loss migration protocol, including rollback and backup restore, using isolated staging only.
+
+Work incrementally. Before each stage, state the root cause and acceptance criteria; after each stage, report files changed and tests run. Do not stop at a plan. Do not treat a successful code build as proof of migration safety.
+
+At the end, provide an evidence-backed status for each workstream. If all staging cutover gates pass, prepare the production cutover runbook and STOP for the owner's explicit authorization. The ultimate target is a controlled migration to Unified with every logical domain and every record preserved, with Legacy retained intact until the post-cutover rollback/observation period is explicitly completed.

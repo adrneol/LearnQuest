@@ -123,23 +123,23 @@ async function evidence(option: RegExp) {
 describe('Efficiency screen evidence selector and explanations', () => {
   it('filters both the numerator and the focus denominator and updates after new sessions', async () => {
     render(<StoreProvider><Harness /></StoreProvider>);
-    await screen.findByText(/Learning efficiency/);
+    await screen.findByRole('heading', { name: 'Learning throughput' });
     await waitFor(() => expect(valueFor('Unique content / focused study')).toBe('15m / 20m'));
-    expect(valueFor('Content efficiency')).toBe('75.0%');
+    expect(valueFor('Learning throughput')).toBe('75.0%');
     expect(valueFor('Playback utilization')).toBe('75.0%');
 
     fireEvent.click(screen.getByRole('button', { name: 'add observed focus' }));
     await waitFor(() => expect(valueFor('Unique content / focused study')).toBe('15m / 21m'));
-    expect(valueFor('Content efficiency')).toBe('71.4%');
+    expect(valueFor('Learning throughput')).toBe('71.4%');
 
     await evidence(/Verified only/);
     await waitFor(() => expect(valueFor('Unique content / focused study')).toBe('10m / 11m'));
-    expect(valueFor('Content efficiency')).toBe('90.9%');
+    expect(valueFor('Learning throughput')).toBe('90.9%');
     expect(valueFor('Playback utilization')).toBe('90.9%');
 
     await evidence(/Self-reported only/);
     await waitFor(() => expect(valueFor('Unique content / focused study')).toBe('5m / 10m'));
-    expect(valueFor('Content efficiency')).toBe('50.0%');
+    expect(valueFor('Learning throughput')).toBe('50.0%');
     expect(valueFor('Playback utilization')).toBe('50.0%');
 
     // Scope changes recompute every statistic and explain an empty selection.
@@ -147,18 +147,18 @@ describe('Efficiency screen evidence selector and explanations', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Scope' }));
     fireEvent.click(await screen.findByRole('option', { name: /Second Course/ }));
     await waitFor(() => expect(valueFor('Unique content / focused study')).toBe('0m / 0m'));
-    expect(valueFor('Content efficiency')).toBe('n/a');
-    expect(screen.getByText(/No focused study and no unique content/)).toBeTruthy();
+    expect(valueFor('Learning throughput')).toBe('n/a');
+    expect(screen.getByText(/No timer-active study and no unique content/)).toBeTruthy();
   });
 
   it('explains unique content without a Focus denominator instead of suggesting the content is invalid', async () => {
     await seed(false);
     render(<StoreProvider><Harness /></StoreProvider>);
-    await screen.findByText(/Learning efficiency/);
+    await screen.findByRole('heading', { name: 'Learning throughput' });
     await waitFor(() => expect(valueFor('Unique content / focused study')).toBe('15m / 0m'));
-    expect(valueFor('Content efficiency')).toBe('n/a');
+    expect(valueFor('Learning throughput')).toBe('n/a');
     expect(valueFor('Playback utilization')).toBe('n/a');
-    expect(screen.getByText(/no matching focused study/i)).toBeTruthy();
+    expect(screen.getByText(/no matching timer-active study/i)).toBeTruthy();
     expect(screen.getByText(/content measurement itself is\s+still valid/i)).toBeTruthy();
     expect(screen.queryByText(/play a lesson to unlock efficiency/i)).toBeNull();
   });

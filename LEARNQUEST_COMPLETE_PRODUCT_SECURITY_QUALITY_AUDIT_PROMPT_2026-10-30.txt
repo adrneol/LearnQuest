@@ -1,0 +1,1680 @@
+# LEARNQUEST — COMPLETE PRODUCT, SECURITY, AUTHENTICATION, SIMULATION, AND QUALITY AUDIT
+
+**Audit number:** 22  
+**Date:** 2026-10-30  
+**Repository:** `E:\progressGameTracker`  
+**Branch:** `main`  
+**Latest audit:** `docs/user-doc/audit2/21_LEARNQUEST_CSP_API_CONNECTIVITY_REPAIR_2026-10-28.md`  
+**Audit archive:** `docs/user-doc/audit2/README.md`
+
+## 0. ABSOLUTE EXECUTION POLICY
+
+This is a comprehensive investigation and improvement-planning task.
+
+**REPORT ONLY. NO APPLICATION CODE CHANGES.**
+
+Use the strongest available DeepSeek model and `#max` reasoning wherever supported. Do not claim maximum effort was active unless confirmed by the CLI or model metadata.
+
+### Strict restrictions
+
+DO NOT:
+- Modify frontend source code.
+- Modify backend source code.
+- Modify shared/core logic.
+- Modify package manifests or lockfiles.
+- Modify `.env`, `.env.example`, or any environment configuration.
+- Modify Render, Vercel, MongoDB Atlas, Google Cloud, or Brevo configuration.
+- Change application logic, algorithms, formulas, database schemas, or indexes.
+- Create new features or implement recommendations.
+- Run database migrations or migration/retirement commands.
+- Perform account deletion, reset passwords, revoke live sessions, or modify live user data.
+- Send real emails.
+- Commit, push, deploy, reset, clean, stash, or switch branches.
+- Delete, overwrite, or discard any existing work.
+
+You may inspect code, tests, configuration, documentation, Git history, and safe read-only diagnostics.
+
+Existing test suites may be run if they do not modify live services or user data. Do not install or upgrade dependencies. Do not run production mutations as tests.
+
+Never reveal passwords, database URIs, API keys, cookies, session tokens, reset tokens, OAuth secrets, HMAC keys, or private user data. All environment inspection must be redacted.
+
+### Permitted file changes
+
+Only two documentation changes are permitted:
+
+1. Create the new Report 22.
+2. Update the existing audit archive index `docs/user-doc/audit2/README.md`.
+
+If Report 22 already exists from an interrupted run, inspect and continue it.
+
+Do not create additional summary reports, implementation reports, progress reports, or duplicated indexes.
+
+At the end, verify that no application source, environment, dependency, or test file was modified.
+
+---
+
+# PART I — COMPLETE PROJECT UNDERSTANDING
+
+## 1. Establish the baseline
+
+Before analysis:
+
+- Inspect `git status --short --branch`.
+- Identify current HEAD, branch, ahead/behind status, and uncommitted changes.
+- Inspect the complete working-tree diff.
+- Read Reports 13–21 and the existing archive index.
+- Inspect the project README, architecture documentation, implementation guides, and technical specifications.
+- Identify the actual current production and development architecture from the source.
+- Identify the current versions and actual responsibilities of frontend, backend, and shared/core modules.
+
+Do not assume historical audit findings are still true. Verify each relevant issue against the present source.
+
+## 2. Map the entire application
+
+Build a complete feature and dependency map.
+
+Inspect:
+
+### Frontend
+- Application initialization and routing.
+- Global state and authentication context.
+- Navigation, shell, and layout.
+- Sign-in, sign-up, Google onboarding, recovery, profile, and account settings.
+- Playlist import and management.
+- Player and playback tracking.
+- Learning progress.
+- Checkpoints and modules.
+- Goals and flexible goals.
+- Focus sessions and focus history.
+- Efficiency calculation and presentation.
+- Arena and simulation.
+- XP, achievements, and rank history.
+- Analytics and charts.
+- Notes and learning history.
+- Import/export and restoration.
+- Data synchronization and offline/retry behavior.
+- Error states, loading states, and empty states.
+
+### Backend
+- HTTP startup and shutdown.
+- Database connection and readiness.
+- Authentication and authorization.
+- Google OAuth.
+- Sessions, cookies, CSRF, and CORS.
+- Password reset and email changes.
+- Account data APIs.
+- Playlist and progress APIs.
+- Focus and efficiency persistence.
+- Arena and simulation data paths, if any.
+- Import/export and migration.
+- Account deletion.
+- Rate limiting.
+- Cache and background maintenance.
+- Email and YouTube integrations.
+- Error handling and logging.
+
+### Shared/core logic
+Inspect all shared calculation modules, schemas, domain services, and utility functions.
+
+Map which calculations are performed in the browser, which are performed on the server, and which are duplicated.
+
+Identify potential sources of inconsistent calculation results between devices.
+
+---
+
+# PART II — CRITICAL AUTHENTICATION AND SESSION AUDIT
+
+## 3. Investigate the actual logout synchronization bug
+
+The user reports two reproducible behaviors:
+
+**Case A — Sign out from one browser**
+
+The user clicks Sign Out in one tab. Another tab belonging to the same browser profile continues displaying the authenticated application until manually refreshed.
+
+**Case B — Sign out from all devices**
+
+The user selects the all-devices logout option. Another browser/device continues displaying the authenticated application until that device is refreshed.
+
+Treat these as two separate synchronization problems. Investigate both independently.
+
+Do not confuse:
+- Cookie deletion.
+- Server-side session revocation.
+- Frontend authentication-state clearing.
+- Cross-tab synchronization.
+- Cross-device revocation propagation.
+
+### 3.1 Single-browser, multi-tab investigation
+
+Trace the entire logout lifecycle:
+
+1. User clicks Sign Out.
+2. Frontend sends the sign-out request.
+3. Backend validates the session.
+4. Backend revokes the correct server-side session.
+5. Backend clears the session cookie.
+6. Frontend clears its authentication state.
+7. Other same-origin tabs receive or fail to receive the logout event.
+8. Other tabs discard authenticated screens, cached user data, pending requests, and stale in-memory state.
+
+Investigate:
+- Is `BroadcastChannel` implemented?
+- Is a `storage` event used?
+- Is localStorage used as a cross-tab signal?
+- Is the event sent before or after server revocation?
+- Does another tab actually subscribe to it?
+- Does a tab only check authentication during initialization?
+- Can cached React state continue displaying private content after revocation?
+- Can an unfinished API request rehydrate the old account?
+- Can an old session-status request overwrite the signed-out state?
+- Does an inactive/background tab process the event correctly when reactivated?
+- Does the sign-out event contain a token, cookie, session ID, or other sensitive data?
+
+Evaluate the actual implementation, not just the presence of a BroadcastChannel or storage event.
+
+### Required desired behavior
+
+For logout from one browser:
+
+- All tabs sharing that browser profile must transition to signed-out UI promptly.
+- The current session must be revoked on the server.
+- All tabs must clear stale private UI and pending user-data state.
+- New protected API operations must fail.
+- Late asynchronous responses must not restore authentication.
+- The user must be able to sign in again normally.
+
+Make it clear whether the implementation provides immediate visual synchronization, authoritative server revocation, or both.
+
+### 3.2 All-devices logout investigation
+
+Trace the server-side implementation.
+
+Determine:
+- Does logout-all revoke every active session belonging to the account?
+- Does it exclude the current session accidentally?
+- Does it delete sessions or mark them revoked?
+- Does the session validator check revocation on every protected request?
+- Are password-version changes used?
+- Is session status cached in the backend or frontend?
+- Are session revocations immediately visible across multiple Render processes?
+- Can an old session be recreated because of a refresh or race?
+- Do cookies get cleared on the initiating device?
+- Do all other devices eventually receive a server rejection?
+- Are long-lived pages or players still allowed to display private account data after revocation?
+- Do background data synchronization operations stop?
+- Is there a session-status endpoint or heartbeat?
+- Is there an existing cross-device event channel?
+
+### Required desired behavior
+
+When the user chooses logout from all devices:
+
+1. The backend revokes all active sessions for that account.
+2. The initiating browser signs out.
+3. Other devices stop being authorized immediately at the server level.
+4. Other devices display a signed-out state promptly, without requiring a manual page refresh.
+5. In-flight API operations cannot silently restore the old account.
+6. Re-authentication requires fresh login.
+7. The user's learning data remains in MongoDB; logout must never delete learning data.
+
+### Important technical distinction
+
+A remote browser cannot always receive an instantaneous visual logout if it is idle, disconnected, or its device is asleep.
+
+Evaluate suitable mechanisms, such as:
+- Cross-tab `BroadcastChannel` synchronization.
+- Server-authoritative session validation.
+- Periodic lightweight session-status checks.
+- Server-sent events or WebSocket notifications where justified.
+- Visibility/focus-triggered revalidation.
+- Revocation/version checks on every protected request.
+
+Compare options on reliability, cost, battery/network use, implementation complexity, Render infrastructure constraints, and security.
+
+Recommend a practical architecture for LearnQuest. Do not implement it.
+
+## 4. Complete session and cookie leakage assessment
+
+Perform a threat-oriented audit of the entire session lifecycle.
+
+### Cookie inspection
+
+Identify every cookie and its purpose.
+
+Inspect:
+- `__Host-` prefixes.
+- `HttpOnly`.
+- `Secure`.
+- `SameSite`.
+- `Path`.
+- `Domain`.
+- `Max-Age` and `Expires`.
+- Cookie creation, rotation, and deletion.
+- Cookie clearing attribute consistency.
+- Local versus production cookie names.
+- Host and proxy boundaries.
+
+Check whether cookie values can leak through:
+- Browser JavaScript.
+- `document.cookie`.
+- localStorage/sessionStorage.
+- IndexedDB.
+- URLs and URL fragments.
+- Console output.
+- Analytics.
+- Error reporting.
+- Network request logs.
+- Third-party scripts.
+- Test snapshots.
+- Browser history.
+- Screenshots or debug overlays.
+
+Do not reproduce any actual value.
+
+### Session lifecycle
+
+Review:
+- Session token generation.
+- Session storage representation.
+- Hashing/HMAC strategy.
+- Session entropy.
+- Expiration.
+- Idle and absolute timeouts.
+- Rotation.
+- Reuse and replay.
+- Revocation.
+- Password-version enforcement.
+- Multiple active sessions.
+- Account ownership binding.
+- Session cleanup and TTL.
+- Session enumeration exposure.
+- Concurrent login/logout/reset races.
+
+### Browser security
+
+Audit:
+- CSRF token generation and validation.
+- CORS.
+- Trusted origins.
+- Reverse-proxy trust.
+- Session fixation.
+- XSS implications for session security.
+- CSP.
+- Browser caches.
+- Referrer policy.
+- API credentials mode.
+- Error responses and information disclosure.
+
+### Authentication edge cases
+
+Review:
+- Wrong-password errors.
+- Expired sessions.
+- Invalid/expired cookies.
+- Password change.
+- Password reset.
+- Google sign-in.
+- Email change.
+- Account deletion.
+- Account ban/suspension if supported.
+- Logout during a pending write.
+- Two tabs signing in as different users.
+- Account switching.
+- Concurrent session renewal and revocation.
+
+### Deliverable
+
+For each finding, document:
+- Exact file/module and relevant function.
+- Existing behavior.
+- Reproduction steps or code evidence.
+- Threat/scenario.
+- Severity.
+- Actual user impact.
+- Whether the issue is confirmed, suspected, or not found.
+- Recommended design correction.
+- Regression tests that should be added in a future implementation.
+
+Do not label an unverified risk as a confirmed vulnerability.
+
+---
+
+# PART III — COMPLETE ARENA RANK AND SIMULATION REDESIGN STUDY
+
+## 5. Deeply investigate the existing Arena implementation
+
+The user reports that Arena's simulated ranking logic is poor and produces unreliable or nonsensical ranks.
+
+This requires a complete mathematical and product-level reassessment, not a cosmetic adjustment.
+
+Inspect:
+- All Arena frontend components.
+- Competitor generation and seeding.
+- Simulation configuration.
+- Rank and score calculation.
+- Efficiency inputs.
+- Historical records.
+- Anchor dates.
+- Playlist duration and completion state.
+- Eligibility rules.
+- Ranking and tie-breaking.
+- Randomness and determinism.
+- The relationship between real user performance and simulated competitors.
+- All settings available to the user.
+- Arena charts, tables, cards, ranking indicators, and explanations.
+- Every test of the simulation.
+
+Historical implementation notes suggest that earlier versions used:
+- `arenaScore = mean(eligibleDailyEfficiencyPercentages)`.
+- Competitors generated through a seeded `generateCompetitors(cfg, playlist, { anchorDates })`.
+- Efficiency normalization against a 120-point simulation scale.
+
+These are investigation clues only. Verify the current code before describing the actual current model.
+
+Do not assume those formulas remain correct, fair, or suitable.
+
+## 6. Identify why the current rank simulation is bad
+
+Evaluate the present system mathematically.
+
+Investigate:
+
+### A. Score construction
+
+- What exactly contributes to a player's score?
+- Does raw efficiency overpower consistency?
+- Are days with missing observations interpreted incorrectly?
+- Are zero-focus days included or excluded appropriately?
+- Can one extremely high-efficiency day dominate the result?
+- Is scoring comparable across playlists with different durations?
+- Is the score normalized correctly?
+- Are short playlists and long playlists treated fairly?
+- Are incomplete users compared with completed users?
+- Can irregular learning schedules gain an unfair advantage?
+- Is there a double counting problem?
+- Are scores based on focused time, unique learning time, content completed, or a mixture?
+- Do the inputs represent actual progress?
+
+### B. Rank stability
+
+- Can one small change produce a dramatic rank jump?
+- Does rank fluctuate excessively from day to day?
+- Are ties handled consistently?
+- Are competitor trajectories coherent?
+- Does the rank represent meaningful relative performance?
+- Can the simulation be reproduced after refresh?
+- Does changing the current date unexpectedly regenerate competitors?
+- Is historical performance respected?
+- Are competitors artificially synchronized?
+
+### C. Simulated competitor realism
+
+Investigate whether competitors:
+- Have consistent ability profiles.
+- Show natural day-to-day variability.
+- Behave differently over short and long playlists.
+- Have varying learning frequency and consistency.
+- Have realistic absences or rest days.
+- Progress without impossible jumps.
+- Maintain stable skill characteristics.
+- Have defensible learning patterns rather than randomly assigned daily scores.
+
+Investigate whether the existing random seed creates useful deterministic competitors or merely hides arbitrary scores behind reproducibility.
+
+### D. Fairness
+
+Evaluate fairness across:
+- Beginner and advanced learners.
+- Users with short and long playlists.
+- Different daily learning schedules.
+- Users with varying total available time.
+- Users with high and moderate efficiency.
+- Users with consistent and irregular learning.
+- New accounts with limited history.
+- Accounts with partial or incomplete data.
+
+Identify score exploits and ways users might manipulate ranks without genuine learning.
+
+## 7. Propose an entirely new Arena simulation model
+
+Do not merely repair the existing formula.
+
+Design a new simulation model from first principles, using the actual LearnQuest data model and available learning signals.
+
+The proposed model must be technically detailed enough that another engineer could implement it without inventing the missing mathematics.
+
+Consider the following possible signals, but only use those supported by trustworthy application data:
+
+- Unique learning time.
+- Valid focused time.
+- Learning consistency.
+- Completed content.
+- Playlist-normalized progress.
+- Daily/weekly performance.
+- Sustainable performance.
+- Historical trends.
+- Rest/recovery days.
+- Learning-session distribution.
+- Efficiency stability.
+- Available observation completeness.
+
+Do not reward raw hours twice through correlated score components.
+
+### Required model specification
+
+Define:
+
+1. Exact score inputs.
+2. Eligibility requirements.
+3. Missing-data handling.
+4. Daily score calculation.
+5. Longitudinal performance aggregation.
+6. Competitor ability profiles.
+7. Competitor behavior generation.
+8. Simulated daily performance.
+9. Score normalization.
+10. Time-window selection.
+11. Rank computation.
+12. Tie-breaking.
+13. Ranking stability.
+14. Score caps/floors where justified.
+15. New-user onboarding behavior.
+16. Handling of incomplete playlists.
+17. Historical simulation reproduction.
+18. Deterministic seeding and versioning.
+19. Anti-manipulation safeguards.
+20. Performance constraints.
+
+Provide complete formulas, variable definitions, units, example calculations, and worked examples.
+
+If several candidate models are viable, compare them and identify the preferred architecture with reasoning.
+
+### Do not confuse performance ranking with productivity competition
+
+Assess whether Arena should primarily represent:
+- Daily performance.
+- Consistency.
+- Overall learning progression.
+- Relative pace.
+- Sustainable learning habits.
+- A composite of multiple dimensions.
+
+Explain which objective creates the fairest and most meaningful competition.
+
+Don't automatically reward spending more hours studying. The model must represent meaningful learning and avoid unhealthy incentives.
+
+## 8. New Arena user-facing simulation controls
+
+The user explicitly requests better frontend options for controlling the simulated competition.
+
+Design the entire user-facing configuration experience.
+
+Investigate and recommend controls such as:
+- Simulation difficulty.
+- Competitor population.
+- Competitor ability distribution.
+- Learning consistency profiles.
+- Simulation timeframe.
+- Competition intensity.
+- Score-composition explanation.
+- Ranking detail level.
+- Stable versus varied simulation behavior.
+- Beginner-friendly presentation.
+
+These are possible design directions, not mandatory controls. Evaluate whether each changes the actual competitive model, only changes the practice simulation, or changes presentation.
+
+### Important product integrity question
+
+Determine whether user-selected options should affect:
+1. Only a private practice simulation.
+2. The official simulated Arena rank.
+3. The competitor population but not the user's own score.
+4. The score objective itself.
+
+Recommend a design that prevents users from manipulating their own rank through settings.
+
+Clearly separate:
+- Personal practice simulations.
+- Official progression/ranking views.
+- Actual achievement/progress data.
+
+### UX deliverable
+
+Provide:
+- Proposed Arena page layout.
+- Settings panel structure.
+- Appropriate defaults.
+- Advanced settings.
+- Beginner-friendly controls.
+- Tooltips and explanations.
+- Loading/empty/error behavior.
+- Comparison view.
+- Rank movement visualization.
+- Score decomposition.
+- Rank confidence/uncertainty where mathematically meaningful.
+- Accessibility and mobile layout considerations.
+
+Do not design misleading numerical certainty or fabricated competitor statistics.
+
+---
+
+# PART IV — FOCUS SYSTEM REVIEW AND IMPROVEMENT BLUEPRINT
+
+## 9. Complete Focus feature audit
+
+The user considers Focus a promising feature but wants a thorough investigation of its improvement potential.
+
+Inspect the complete Focus implementation across frontend, backend, core logic, and persistence.
+
+Investigate:
+- Focus-session initiation.
+- Pause/resume.
+- Session completion.
+- Cancellation.
+- Interruption tracking.
+- Actual elapsed time.
+- Background tabs and browser sleep.
+- Clock changes.
+- Duplicate submissions.
+- Crash/reload recovery.
+- Multi-tab behavior.
+- Cross-device synchronization.
+- Focus session persistence.
+- Notes and recovery snapshots.
+- Association with playlists/videos.
+- Unique learning time.
+- Focused time.
+- Session segmentation.
+- Efficiency input.
+- XP/progress integration.
+- Analytics and historical records.
+- Offline conditions and failed writes.
+
+### Mathematical correctness
+
+Determine whether focus time actually represents intentional, valid learning rather than simply time that a browser timer was running.
+
+Investigate:
+- Whether paused intervals are excluded.
+- Whether idle periods are included incorrectly.
+- Whether browser backgrounding causes inaccurate time.
+- Whether overlapping sessions double-count time.
+- Whether session duration can exceed real elapsed time.
+- Whether recovery after interrupted sessions creates duplicate records.
+- Whether session clocks are timezone-safe.
+- Whether client-provided timestamps are trusted without validation.
+
+### Scope of improvement
+
+Create a detailed proposal covering:
+- Focus session reliability.
+- Improved interruption handling.
+- Better session recovery.
+- Session analytics.
+- Personal patterns and weekly summaries.
+- Playlist-linked focus history.
+- Time distribution.
+- Focus goals and targets.
+- Rest/break recommendations, if appropriate.
+- Better feedback after sessions.
+- Personalized but non-intrusive insights.
+- Data export and history.
+- Mobile and desktop behavior.
+- Accessibility.
+- Privacy controls.
+
+Do not introduce features that turn normal learning into compulsive tracking or pressure users to maximize study hours.
+
+### Focus UX redesign
+
+Recommend an improved Focus experience with:
+- Pre-session context.
+- Active focus view.
+- Pause/interruption states.
+- Session completion.
+- Recovery after reload/crash.
+- Historical overview.
+- Analytics.
+- Goal integration.
+
+Explain which data already exists and which new data would require a future implementation or migration.
+
+---
+
+# PART V — EFFICIENCY SYSTEM MATHEMATICAL AUDIT
+
+## 10. Investigate the current efficiency methodology
+
+Previous project history describes an earlier efficiency calculation using:
+
+`unique learning time / focused time × 100`
+
+and a simulation-side normalization against 120.
+
+These are historical clues, not assumed current truth.
+
+Inspect the actual current implementation and determine the authoritative methodology.
+
+Analyze:
+- Definition of numerator and denominator.
+- What constitutes unique learning time.
+- How duplicate or overlapping sessions are handled.
+- Whether pause/break time is included.
+- Whether playlist completion and playback progress are involved.
+- What happens if focused time is zero.
+- Whether scores can exceed 100%.
+- Whether scores are capped, normalized, or unbounded.
+- Whether data completeness is considered.
+- How daily, weekly, and aggregate efficiency differ.
+- Whether missing days distort averages.
+- Whether high efficiency can come from recording errors.
+- Whether the measure is comparable across users.
+- Whether it measures learning efficiency or merely time-accounting efficiency.
+
+### Mathematical deliverables
+
+Provide:
+- The exact current formula.
+- Every component and data source.
+- Unit analysis.
+- Worked examples.
+- Edge cases.
+- Invalid/impossible values.
+- Biases and gaming opportunities.
+- Correctness assessment.
+
+Then propose a better efficiency model if the existing one is flawed.
+
+Compare possible approaches:
+- Raw ratio.
+- Bounded score.
+- Robust aggregation.
+- Consistency-adjusted score.
+- Confidence-adjusted score for insufficient observations.
+- Playlist-normalized efficiency.
+- Separate efficiency and consistency indicators.
+
+Don't combine dimensions unless the mathematical reason is defensible.
+
+Do not let one efficiency percentage falsely represent all aspects of a learner's performance.
+
+## 11. Efficiency UX and analytics recommendations
+
+Evaluate:
+- Score explanation.
+- Daily/weekly/monthly view.
+- Trend analysis.
+- Valid-data coverage.
+- Comparison with personal baseline.
+- Outlier detection.
+- Distribution rather than only averages.
+- Contextual feedback.
+- Low-sample warnings.
+- Visualization clarity.
+- User privacy.
+
+Recommend a better presentation that makes clear what the score measures and does not measure.
+
+---
+
+# PART VI — COMPLETE FEATURE QUALITY AUDIT
+
+## 12. Playlist acquisition and data integrity
+
+Audit:
+- YouTube playlist URL parsing.
+- Playlist IDs.
+- API batching.
+- Missing/unavailable videos.
+- Deleted/private videos.
+- Duration parsing.
+- ISO-8601 duration correctness.
+- Playlist position and ordering.
+- Duplicate videos.
+- Repeated video IDs.
+- Missing items and partial metadata.
+- Caching and TTL.
+- Retry and quota handling.
+- Playlist updates and refresh.
+- Import consistency.
+- Playlist archive/deletion.
+- Different YouTube playlist formats.
+
+Identify whether incomplete playlist data can produce inaccurate progress, efficiency, or Arena ranking.
+
+## 13. Progress and learning calculations
+
+Audit:
+- Watched duration.
+- Unique watched ranges.
+- Completion percentages.
+- Seeking and overlapping intervals.
+- Rewatching.
+- Checkpoint completion.
+- Module progress.
+- Playlist progress.
+- Learning-time aggregation.
+- Historical snapshots.
+- Progress rollback or reset behavior.
+- Concurrent updates from different devices.
+- Progress after playlist refresh.
+- Missing/deleted videos.
+
+Verify calculations with mathematical examples and boundary cases.
+
+## 14. Goals, achievements, XP, and challenges
+
+Audit:
+- Goal creation and editing.
+- Goal completion.
+- Daily and weekly targets.
+- Flexible goals.
+- XP awards.
+- Duplicate XP prevention.
+- Achievement eligibility.
+- Challenge activation and progress.
+- Rank history.
+- Award rollback on data correction.
+- Timezone-safe daily boundaries.
+- Multi-device consistency.
+- Data loss and race conditions.
+
+Evaluate whether XP or achievements can be manipulated by replaying requests or duplicating events.
+
+Recommend improvements without introducing reward inflation.
+
+## 15. Analytics and charts
+
+Audit:
+- Aggregation correctness.
+- Date ranges.
+- Time zones.
+- Missing days.
+- Incomplete data.
+- Daily versus weekly aggregation.
+- Average versus weighted average.
+- Percentages and units.
+- Chart interaction.
+- Responsive behavior.
+- Performance with large histories.
+- Misleading trend lines.
+- Zero/empty states.
+- Comparisons between historical and current data.
+
+Verify that frontend analytics agree with authoritative backend/core calculations.
+
+## 16. Cloud persistence and multi-device behavior
+
+Investigate whether all intended account data is persisted in MongoDB and restored across devices.
+
+Cover:
+- Playlists.
+- Playback progress.
+- Notes.
+- Focus sessions.
+- Goals.
+- Checkpoints.
+- Efficiency history.
+- XP.
+- Achievements.
+- Arena settings/results.
+- Preferences.
+- Learning history.
+- Account/profile metadata.
+
+Review:
+- Autosave.
+- Save confirmation.
+- Request overlap.
+- Concurrent updates.
+- Version conflicts.
+- Stale reads.
+- Retry.
+- Failed network requests.
+- Browser-local recovery.
+- Restore/import/export.
+- Account switching.
+- Logout behavior.
+
+Distinguish server-authoritative data from temporary local recovery state. Explain what intentionally remains browser-local and the privacy/convenience trade-off.
+
+## 17. Overall frontend product-quality assessment
+
+Evaluate:
+- Design consistency.
+- Navigation clarity.
+- Information hierarchy.
+- Interaction predictability.
+- Responsive layouts.
+- Mobile and desktop behavior.
+- Form validation.
+- Loading and error states.
+- Accessibility.
+- Keyboard navigation.
+- Semantic controls.
+- Contrast.
+- Tooltip quality.
+- Empty states.
+- Unnecessary wording.
+- Modal placement.
+- Browser history.
+- Performance.
+- Perceived responsiveness.
+- Visual consistency across modules.
+
+Identify repeated UI patterns that should use a consistent design system.
+
+Do not propose gratuitous redesigns where the current UI is already effective.
+
+## 18. Overall backend and architectural quality
+
+Assess:
+- Separation of concerns.
+- API contracts.
+- Shared logic ownership.
+- Validation.
+- Authorization.
+- Persistence boundaries.
+- Error propagation.
+- Concurrency.
+- Idempotency.
+- Transactions.
+- Caching.
+- Pagination.
+- Resource limits.
+- Rate limiting.
+- Observability.
+- Graceful failure.
+- Startup/shutdown.
+- Scheduled maintenance.
+- Scalability.
+- Testability.
+- Technical debt.
+
+Identify duplicate business logic between frontend, backend, and core.
+
+Identify calculations that should have one authoritative implementation.
+
+---
+
+# PART VII — PERFORMANCE, SECURITY, AND QUALITY ASSURANCE
+
+## 19. Security threat model
+
+Review the complete application against realistic threats:
+
+- Account takeover.
+- Session theft/replay.
+- Session fixation.
+- Cross-tab and cross-device stale authentication.
+- CSRF.
+- XSS.
+- OAuth login CSRF.
+- IDOR/cross-account access.
+- Password-reset abuse.
+- Email enumeration.
+- Rate-limit evasion.
+- API key exposure.
+- MongoDB credential exposure.
+- Injection.
+- Unsafe redirects.
+- File/import abuse.
+- Resource exhaustion.
+- Data corruption.
+- Race conditions.
+- Failed account deletion.
+- Browser storage leakage.
+- Sensitive logging.
+- Cross-user cache leakage.
+
+For each threat, record:
+- Existing mitigation.
+- Whether it is effective in the actual code.
+- Remaining gap.
+- Evidence.
+- Severity.
+- Recommended improvement.
+
+Check whether recent Node.js runtime/security baseline changes are applied in source/deployment configuration. Do not attribute unrelated PHP CVEs to this Node.js application.
+
+Do not attempt exploits against production.
+
+## 20. Performance and scalability
+
+Evaluate:
+- Initial load.
+- API latency.
+- Database query patterns.
+- Index coverage.
+- Duplicate fetches.
+- Polling.
+- Request waterfalls.
+- Frontend rendering.
+- Large playlist handling.
+- Large account histories.
+- Chart computation.
+- Client memory use.
+- Caching.
+- Rate-limiter storage.
+- Session revalidation frequency.
+- Cross-device synchronization overhead.
+- Render cold starts.
+- Retry storms.
+- Background jobs.
+- MongoDB connection pool behavior.
+
+Identify the most important performance improvements and their expected trade-offs.
+
+Do not fabricate measured latency values. Distinguish measured results from architectural estimates.
+
+## 21. QA maturity review
+
+Inspect:
+- Unit tests.
+- Integration tests.
+- Component tests.
+- API contract tests.
+- Multi-user tests.
+- Authentication/session tests.
+- Concurrency tests.
+- Data-integrity tests.
+- Import/export tests.
+- Focus timer tests.
+- Efficiency formula tests.
+- Arena mathematical tests.
+- Cross-tab tests.
+- Cross-device tests.
+- Real-browser E2E coverage.
+- Accessibility tests.
+- Performance/load tests.
+- Security tests.
+
+Determine exactly what is missing.
+
+Recommend a future QA matrix that covers:
+- Chrome desktop.
+- Firefox desktop.
+- Safari where available.
+- Android/mobile browser.
+- Multiple tabs.
+- Two separate browser profiles.
+- Two separate devices.
+- Disconnected/reconnected network.
+- Background/suspended tabs.
+- Expired/revoked sessions.
+- Concurrent learning-data writes.
+
+Do not run tests that mutate real accounts or live MongoDB data.
+
+---
+
+# PART VIII — IMPROVEMENT ROADMAP AND PRIORITIZATION
+
+## 22. Produce a complete improvement backlog
+
+For every confirmed finding or worthwhile improvement, provide:
+
+| Field | Required detail |
+|---|---|
+| ID | Unique finding number |
+| Feature/module | Exact area |
+| Current behavior | Evidence from existing implementation |
+| Problem | What is wrong or missing |
+| Severity | Critical / High / Medium / Low |
+| Type | Security / correctness / UX / performance / reliability / architecture |
+| User impact | Specific consequence |
+| Root cause | Exact code or design weakness |
+| Proposed improvement | Concrete future work |
+| Technical scope | Frontend/backend/core/database/tests |
+| Dependencies | Prerequisite work |
+| Risk | Regression, data migration, compatibility concerns |
+| Acceptance criteria | Measurable completion condition |
+| Test requirements | Tests required before release |
+| Priority | P0 / P1 / P2 / P3 |
+
+Avoid generic recommendations such as "improve UX" or "enhance security." Every recommendation must be actionable and tied to observed evidence or a clearly labeled opportunity.
+
+## 23. Prioritize the roadmap
+
+Produce these release tracks:
+
+### P0 — Security and data integrity
+Issues that could cause unauthorized access, incorrect account revocation, leaked user data, corrupted learning data, or false security guarantees.
+
+### P1 — Core learning correctness
+Progress, focus tracking, efficiency, Arena scoring, data persistence, and analytics correctness.
+
+### P2 — Product experience
+Navigation, information architecture, usability, accessibility, onboarding, visualization, and feature discoverability.
+
+### P3 — Advanced capability and scale
+Personalization, advanced analytics, simulation options, expanded performance, and long-term maintainability.
+
+For each track provide:
+- Workstream.
+- Dependencies.
+- Expected outcome.
+- Risk.
+- Acceptance criteria.
+- Tests.
+
+Prioritize the logout synchronization defect and Arena's mathematical redesign as major dedicated workstreams.
+
+## 24. Required special design documents inside Report 22
+
+The final report must contain sufficiently detailed design proposals for these four areas:
+
+1. **Session and logout synchronization architecture**
+   - Same-browser tabs.
+   - Other devices.
+   - Immediate server revocation.
+   - Frontend state transition.
+   - Revalidation/push strategy.
+   - Failure and race scenarios.
+
+2. **New Arena simulated ranking system**
+   - Complete formulas.
+   - Competitor-generation methodology.
+   - Stability and fairness.
+   - Deterministic replay.
+   - User-facing configuration.
+   - Comparison of candidate models.
+   - Recommended model and rationale.
+
+3. **Focus system improvement blueprint**
+   - Correct timing model.
+   - Recovery and interruption reliability.
+   - Session lifecycle.
+   - Analytics and UX improvements.
+   - Data requirements.
+
+4. **Efficiency methodology redesign**
+   - Existing formula audit.
+   - Mathematical shortcomings.
+   - Alternative models.
+   - Recommended calculation.
+   - Confidence/data sufficiency.
+   - User-facing explanations.
+
+These must be design-ready documents, not brief bullet lists.
+
+---
+
+# PART IX — EXECUTION AND EVIDENCE RULES
+
+## 25. Read-only inspection
+
+Inspect all relevant source files and existing tests.
+
+Use existing tests only if safe and dependencies are already installed.
+
+Allowed:
+- Git status and diff.
+- Source inspection.
+- Static analysis that does not rewrite files.
+- Existing unit/integration tests using isolated fixtures.
+- Typechecks and lint if they do not modify tracked files.
+- Read-only public endpoint checks if useful.
+- Read-only database diagnostics if the tool is proven not to create indexes, collections, sessions, or account state.
+
+Not allowed:
+- npm install or package upgrades.
+- Database writes.
+- Account mutations.
+- Token generation into real environments.
+- Live email sends.
+- Migrations.
+- Destructive scripts.
+- Deployment or configuration changes.
+
+If a test requires network access, an authenticated account, real provider credentials, or mutation, do not execute it. Record the missing verification.
+
+## 26. Evidence quality
+
+Every finding must carry one evidence classification:
+
+- **Confirmed:** directly observed in source, reproducible test, or safe diagnostic.
+- **Partially confirmed:** supporting evidence exists but an important runtime condition remains unverified.
+- **Potential risk:** plausible concern requiring further testing.
+- **Not found:** specific check completed without identifying the stated problem.
+- **Not tested:** required environment or browser capability unavailable.
+
+Distinguish source evidence, test evidence, and live production evidence.
+
+Never claim:
+- A cookie leak without evidence.
+- A session theft vulnerability without evidence.
+- All-devices logout works because the server has a revoke function alone.
+- Arena is mathematically correct because unit tests pass.
+- Efficiency is meaningful without validating its units and inputs.
+- Cloud persistence works without evidence of successful reads/writes.
+- Production works because local builds pass.
+
+## 27. No implementation
+
+Do not implement the proposed improvements during this audit.
+
+Do not change application files even if a defect is obvious.
+
+The user's next step will be to review Report 22 and decide which improvement workstreams to implement in separate, controlled implementation phases.
+
+---
+
+# PART X — FINAL AUDIT REPORT
+
+## 28. Create exactly one report
+
+Create:
+
+`docs/user-doc/audit2/22_LEARNQUEST_COMPLETE_PRODUCT_SECURITY_QUALITY_AUDIT_2026-10-30.md`
+
+If it already exists from an interrupted run, inspect and continue it instead of creating a duplicate.
+
+Update:
+
+`docs/user-doc/audit2/README.md`
+
+Do not create any other Markdown report, secondary index, progress document, or duplicate file.
+
+### Required report structure
+
+1. Executive summary and overall quality verdict.
+2. Repository baseline and architecture map.
+3. Full application feature inventory.
+4. Authentication and session lifecycle.
+5. Cookies and leakage assessment.
+6. Single-browser multi-tab logout defect.
+7. All-devices logout defect.
+8. Recommended session/logout architecture.
+9. Complete Arena mathematical audit.
+10. New Arena simulation model proposal.
+11. Arena frontend configuration experience.
+12. Focus reliability and mathematical assessment.
+13. Focus improvement blueprint.
+14. Efficiency formula analysis.
+15. Recommended efficiency methodology and UX.
+16. Playlist ingestion and duration integrity.
+17. Progress/checkpoint/module calculations.
+18. Goals, XP, achievements, and challenges.
+19. Analytics and charts.
+20. Cloud persistence and multi-device data.
+21. Frontend quality and accessibility.
+22. Backend architecture and quality.
+23. Security threat model.
+24. Performance and scalability.
+25. QA coverage and gaps.
+26. Complete prioritized improvement backlog.
+27. P0/P1/P2/P3 implementation roadmap.
+28. Regression and acceptance-test matrix.
+29. Evidence classification and limitations.
+30. Final Git status and report-only compliance confirmation.
+
+Be detailed, technically grounded, and explicit about uncertainties.
+
+The proposed Arena and Focus designs must be specific enough to create future implementation prompts directly from the report.
+
+## 29. Final compliance check
+
+Before finishing:
+- Recheck `git status --short`.
+- Confirm that no application source, tests, dependencies, or environment files changed during this audit.
+- Confirm that no live database writes or external email sends occurred.
+- Confirm that no commits, pushes, deployments, or credential changes occurred.
+- Confirm exactly one new report and one existing archive-index update.
+- Verify internal relative links in Report 22.
+- Verify the archive index points to Report 22 as the latest report.
+
+If any unrelated file changed, do not silently include or overwrite it. Report the discrepancy.
+
+## 30. Final objective
+
+Deliver one comprehensive, evidence-based document explaining:
+
+- What currently works.
+- What is broken.
+- What may be vulnerable.
+- Why the problem exists.
+- How serious it is.
+- What must be improved.
+- How the future implementation should work.
+- How to test it properly.
+- What should be implemented first.
+
+
+# ADDENDUM — FORMULA RECOMMENDATIONS, USER-FACING MICROCOPY, STORAGE ARCHITECTURE AND NEXT-PHASE READINESS
+
+This addendum extends the complete Report 22 audit. Treat all recommendations below as candidates to investigate and validate against the actual implementation. Do not assume the proposed formulas are automatically correct merely because they are included here.
+
+The current task remains **READ-ONLY ANALYSIS AND REPORTING**. Do not implement any recommendation, change application code, run migrations, change storage-mode environment variables, modify production settings, or perform database writes.
+
+---
+
+## 1. User-facing wording and unnecessary technical explanations
+
+Inspect the supplied screenshot and use it as a concrete example of the wording problem.
+
+Current account-connection screen:
+
+**Heading:**
+"Connecting to your LearnQuest account..."
+
+**Secondary text:**
+"Learning data is loaded from the server; the browser is not used as an authoritative store."
+
+### Required recommendation
+
+The secondary sentence should be removed from this normal application loading screen. It exposes internal architecture without providing useful information to the user.
+
+The concise connection-status heading is sufficient. Do not replace the removed sentence with another technical explanation.
+
+### Broader application-wide review
+
+Inspect all user-facing pages, dialogs, loading states, errors, empty states, confirmations, tooltips, and notifications for similar problems.
+
+Look for wording that:
+- Explains internal storage, database, browser, API, authentication, synchronization, or infrastructure implementation when the user does not need that information.
+- Repeats information already communicated by the heading or interface.
+- Sounds defensive, excessively explanatory, or written for developers instead of users.
+- Exposes internal technical details that belong in developer documentation.
+- Makes an ordinary application action feel unnecessarily complicated.
+
+For every relevant instance, report:
+
+1. Exact current wording.
+2. Page, component, and source file.
+3. Why the wording is unnecessary, confusing, or inappropriate in that context.
+4. Recommendation: KEEP, REMOVE, SHORTEN, or REWRITE.
+5. Proposed replacement wording, where appropriate.
+6. Whether the wording belongs in normal UI, contextual help, or developer documentation.
+
+### Important restriction: preserve useful help content
+
+Do not apply a blanket rule to remove explanatory text.
+
+Sections such as Arena instructions, Modules, Revision guidance, learning explanations, methodology descriptions, and other intentional help or educational content are allowed to explain concepts and guide users.
+
+Distinguish between:
+- **Operational microcopy:** loading messages, button labels, transient status, error messages, notifications, and routine UI explanations.
+- **Contextual help:** content that intentionally teaches the user how a feature works, explains methodology, or helps the user make a decision.
+- **Developer-facing explanations:** internal implementation details that should not appear in ordinary user-facing screens.
+
+Preserve useful contextual help unless there is a specific usability or factual problem. Do not shorten instructional content simply to make the application less verbose.
+
+Produce a prioritized microcopy improvement table. Do not modify the wording in source files during this audit.
+
+---
+
+## 2. Recommended formula investigation — Focus, Efficiency, and Arena
+
+I want actionable mathematical recommendations, not merely statements that an algorithm is good or bad.
+
+For every existing formula:
+- Locate its actual implementation.
+- Identify every input and its source.
+- Explain the units and mathematical meaning.
+- Check edge cases and possible manipulation.
+- Compare actual implementation with the candidate design below.
+- Show worked numerical examples.
+- Recommend a final formula only after inspecting the real data model and product behaviour.
+
+Never invent input signals that the application does not collect.
+
+### 2.1 Efficiency: distinguish learning throughput from learning quality
+
+Investigate whether the current efficiency calculation is mathematically meaningful and whether its name accurately describes what it measures.
+
+A candidate baseline is:
+
+`Learning Throughput (%) = 100 × Total Unique Content Seconds / Total Qualified Focus Seconds`
+
+Where:
+
+- `Unique Content Seconds` means genuinely unique learning content completed, with duplicate watching and repeated progress events handled correctly.
+- `Qualified Focus Seconds` means valid focus-session time after pauses, idle periods, invalid intervals, and overlapping sessions have been handled.
+- Period-level calculation should use the ratio of totals, not the unweighted arithmetic mean of daily percentages.
+
+For example, compare:
+
+`100 × (U1 + U2 + ... + Un) / (F1 + F2 + ... + Fn)`
+
+against:
+
+`(DailyEfficiency1 + DailyEfficiency2 + ... + DailyEfficiencyN) / n`
+
+Explain why the two calculations can produce different results, and which one is justified for LearnQuest.
+
+**Important:** This is a content-throughput measure, not proof of comprehension, retention, intelligence, or learning quality.
+
+The result can exceed 100% because content duration and elapsed focus time are not necessarily the same unit of activity, especially with playback speed changes. Do not silently cap, distort, or misrepresent the raw value.
+
+Investigate whether playback speed and segment-level watch telemetry are reliably available. If they are, evaluate a playback-adjusted alternative:
+
+`Expected Playback Time = Σ (Unique Watched Segment Content Seconds / Segment Playback Speed)`
+
+`Playback-Adjusted Pace (%) = 100 × Expected Playback Time / Qualified Focus Seconds`
+
+Validate whether the inputs genuinely represent watched segments rather than skipped or merely marked-complete content. Do not use this adjusted formula if the required telemetry is unavailable or unreliable.
+
+Recommend whether the existing metric should remain named Efficiency, be renamed Learning Pace or Learning Throughput, or be separated into multiple metrics.
+
+Do not manufacture a composite efficiency score without a defensible reason.
+
+### 2.2 Focus: recommended accounting model
+
+Investigate the current focus timer from the perspective of data correctness and user trust.
+
+A candidate accounting model is:
+
+`Qualified Focus Time = Union(Valid Active Intervals) - Union(Paused Intervals ∪ Disqualified Idle Intervals)`
+
+The implementation must avoid counting overlapping intervals more than once, including where multiple tabs or devices are involved.
+
+Investigate:
+- Start, pause, resume, stop, and reset operations.
+- Browser refresh, tab closing, crashes, and recovery.
+- Browser backgrounding, visibility changes, sleep, and device wake-up.
+- Timer throttling and delayed callbacks.
+- Idle detection and false idle detection.
+- Duplicate sessions and simultaneous sessions.
+- Multi-tab and multi-device overlap.
+- Clock changes, timezones, midnight boundaries, and daylight-saving transitions where applicable.
+- Periodic persistence and data-loss windows.
+- Session ownership, concurrent writes, and race conditions.
+- Whether users can accidentally accumulate focus time without actively studying.
+
+Do not treat page visibility as proof of attention. It is only a contextual signal.
+
+Recommend a reliable architecture for tracking and persisting focus intervals. Define which events are authoritative, how interruptions are reconciled, and how corrupted or incomplete sessions are handled.
+
+Also identify whether Focus should display only trustworthy quantities such as focused minutes, session duration, active days, and trends, rather than suggesting that the application can measure a user's actual concentration.
+
+### 2.3 Arena: propose a mathematically defensible new simulation
+
+Investigate the entire current Arena implementation. Do not simply patch individual ranking defects.
+
+The proposed redesign should separate:
+
+1. The user's actual learning progress.
+2. The ranking/scoring system.
+3. Simulated competitor generation.
+4. Challenge difficulty.
+5. User-configurable Arena preferences.
+6. Ranking presentation and explanations.
+
+A candidate baseline score for a playlist-based competition is:
+
+`P = min(Unique Completed Content Seconds / Total Eligible Playlist Seconds, 1)`
+
+`C = min(Qualifying Active Days / Elapsed Competition Days, 1)`
+
+`Arena Score = 100 × (0.85 × P + 0.15 × C)`
+
+This is a **provisional candidate**, not a required final formula.
+
+Investigate whether the 85/15 weighting is appropriate. Compare alternative approaches, run sensitivity analysis, and explain the trade-offs. Do not present arbitrary weights as scientifically established.
+
+Define qualifying active days carefully. Do not allow a user to improve a ranking merely by leaving a focus timer running. Explain what minimum valid activity and progress evidence would be required.
+
+The design must consider:
+- Progress across short and long playlists.
+- Repeated viewing and duplicate progress.
+- Skipping, seeking, playback-speed changes, and partial completion.
+- New users and late competition entry.
+- Burst learning versus consistent learning.
+- Different competition windows.
+- Missing, incomplete, imported, and reset data.
+- Timezone-safe daily aggregation.
+- Ties and deterministic tie-breaking.
+- Score bounds and invalid inputs.
+- Competitor realism and distribution.
+- Reproducibility across refreshes and devices.
+
+### Simulated competitors
+
+All competitors and the user should be evaluated using the same defined scoring rules and comparable competition windows.
+
+A simulation should be deterministic for the same inputs, with an explicit algorithm version and stable seed. Competitor progress must be bounded by playlist duration, monotonic where appropriate, and consistent with the selected difficulty.
+
+Clearly distinguish simulated opponents from real users. Do not create the impression that simulated rankings are real-world leaderboard results.
+
+Recommend a realistic opponent-generation model rather than arbitrary random daily percentages. Explain how competitor learning trajectories, activity patterns, completion rates, and difficulty distributions should be generated and validated.
+
+### Recommended user-facing Arena options
+
+Evaluate an interface that lets users control the simulation experience, for example:
+
+- Competition intensity: Relaxed, Standard, or Competitive.
+- Number of simulated competitors.
+- Competition period or challenge window.
+- Whether to show competitor progress and ranking explanations.
+- Restart or generate a new simulation cohort, where appropriate.
+
+Crucial distinction: preferences may adjust the simulation cohort or difficulty, but must not secretly change the user's underlying learning progress or manipulate an official score.
+
+Recommend a clear separation between personal learning statistics, simulated Arena results, and any future real-user leaderboard.
+
+Provide the proposed UI structure, interaction behaviour, settings persistence requirements, empty states, explanations, and accessibility considerations.
+
+Include complete worked examples of the proposed ranking formula and explain how it handles ties, incomplete data, and new users.
+
+---
+
+## 3. Deep Legacy versus Unified data-storage architecture assessment
+
+This is a major requirement. We intend to implement the approved improvements in a later phase, so the audit must establish whether a storage-mode change is safe and what would be required before doing it.
+
+Do not assume that Unified is automatically better simply because it is newer or consolidated.
+
+Inspect the current source code, data-access architecture, schemas, repository abstractions, environment configuration, migration scripts, indexes, tests, and all relevant read/write paths.
+
+Use previous audit reports as historical context, but verify every important conclusion against the current repository.
+
+### 3.1 Establish the actual current architecture
+
+Investigate and document:
+
+- What `LQ_USER_DATA_STORE=legacy` actually selects.
+- What `LQ_USER_DATA_STORE=unified` actually selects.
+- The exact MongoDB collections used in each mode.
+- Whether the modes use different document structures, collections, indexes, or access patterns.
+- Which modules, endpoints, services, and background jobs read and write each structure.
+- Whether all user-data domains are supported in both modes.
+- Whether any feature still bypasses the repository/data-access layer.
+- Whether any code accidentally mixes legacy and unified storage.
+- Whether a collection can contain inconsistent or stale representations.
+- Whether switching modes could make existing user data appear missing.
+- Whether storage mode is applied consistently across all processes and deployments.
+
+Do not infer collection names or document structures; read the actual implementation.
+
+### 3.2 Legacy architecture assessment
+
+Assess:
+
+- Collection separation and organization.
+- Query complexity and number of round trips.
+- Index quality and index growth.
+- Data consistency across multiple collections.
+- Transactions and multi-document operations.
+- Account deletion and data-retention behaviour.
+- Import, restore, and backup behaviour.
+- Concurrent writes and race conditions.
+- Performance as user count and data volume grow.
+- Operational complexity and long-term maintainability.
+
+Identify strengths, weaknesses, risks, and limitations.
+
+### 3.3 Unified architecture assessment
+
+Assess:
+
+- The actual unified schema and document boundaries.
+- Whether consolidation improves or worsens data-access patterns.
+- Document growth and MongoDB document-size limits.
+- Index design and query selectivity.
+- Update contention and concurrent writes.
+- Atomicity and consistency.
+- Transaction requirements.
+- Data validation and versioning.
+- Partial updates and lost-update risks.
+- Account deletion and retention.
+- Import, restore, backup, and recovery.
+- Behaviour under large accounts and concurrent sessions.
+- Performance for frequently updated learning state.
+- Any possibility of a large document becoming a write bottleneck.
+
+Do not assume that one collection means one giant document. Verify the actual design.
+
+### 3.4 Migration safety and cutover readiness
+
+Inspect the migration implementation in depth, including:
+
+- Dry-run behaviour.
+- Copy semantics.
+- Idempotency.
+- Handling of existing destination records.
+- Conflict resolution.
+- Missing-data detection.
+- Record counts and checksums.
+- Partial failures and retry behaviour.
+- Interrupted migration recovery.
+- Concurrent application writes during migration.
+- Consistent snapshots.
+- Verification before cutover.
+- Rollback feasibility.
+- Backup and restore requirements.
+- Data ownership and deletion semantics.
+- Compatibility with current and future application versions.
+
+Pay particular attention to whether a migration that copies only missing records could overlook conflicting or outdated existing records.
+
+Evaluate whether a safe migration requires maintenance mode, write suspension, change capture, a dual-write period, versioned records, or another strategy. Recommend only mechanisms justified by the actual code and operational constraints.
+
+Determine whether there is any automatic fallback or dual-write behaviour. Do not assume one exists.
+
+### 3.5 Final storage recommendation
+
+Provide a direct verdict:
+
+- SAFE TO RETAIN LEGACY.
+- UNIFIED READY FOR CONTROLLED STAGING.
+- UNIFIED READY FOR PRODUCTION CUTOVER.
+- NOT READY — SPECIFIC BLOCKERS.
+- INSUFFICIENT EVIDENCE.
+
+Support the verdict with evidence and a risk table.
+
+Compare Legacy and Unified on:
+- Correctness and data safety.
+- Read/write performance.
+- Scalability.
+- Concurrency.
+- Security.
+- Maintainability.
+- Operational complexity.
+- Migration and rollback risk.
+- Testing requirements.
+
+Then provide a recommended target architecture and a staged migration plan, including prerequisites, backups, verification gates, rollback conditions, and acceptance criteria.
+
+**Do not switch the production or local environment to Unified during this audit. Do not execute a migration, change a database, or run a test that writes to production data.** The purpose is to decide whether the next implementation phase can safely proceed and under what conditions.
+
+---
+
+## 4. Next implementation phase — implementation and test-readiness plan
+
+The next phase will implement approved fixes and improvements. This Report 22 exercise must prepare that work without implementing anything now.
+
+Convert the findings into an ordered implementation roadmap.
+
+For every proposed work item include:
+
+- Priority: P0, P1, P2, or P3.
+- Severity and user impact.
+- Exact source files and modules likely to be involved.
+- Dependencies on other fixes.
+- Recommended implementation approach.
+- Data migration or compatibility implications.
+- Required unit tests.
+- Required integration tests.
+- Required end-to-end tests.
+- Security regression tests.
+- Performance tests, where relevant.
+- Acceptance criteria.
+- Rollback or recovery approach.
+- Risks if the work is deferred.
+
+### Required future test coverage
+
+Explicitly plan tests for:
+
+**Authentication and sessions**
+- Logout from one browser/tab.
+- Logout from all devices.
+- Revocation while another tab is open.
+- Revocation while another browser or device is open.
+- Session expiry and refresh.
+- Stale frontend state after server-side revocation.
+- Cross-tab notification and revalidation.
+- Unauthorized requests after revocation.
+- Cookie, CSRF, and session-security regressions.
+
+**Focus**
+- Accurate interval accounting.
+- Duplicate interval prevention.
+- Pause/resume and idle handling.
+- Refresh, crash, sleep, and recovery.
+- Concurrent tabs and devices.
+- Timezone and date-boundary behaviour.
+
+**Efficiency and Arena**
+- Formula unit tests and mathematical invariants.
+- Zero denominators and missing data.
+- Duplicate progress.
+- Out-of-order events.
+- Playback-speed variations.
+- New-user and short-playlist scenarios.
+- Deterministic competitor generation.
+- Tie-breaking.
+- Score bounds.
+- Ranking stability and fairness.
+- User settings changing simulation difficulty without manipulating actual learning records.
+
+**Legacy and Unified storage**
+- Repository contract tests in each mode.
+- Read/write parity.
+- Data integrity and checksum verification.
+- Migration dry-run tests.
+- Idempotent reruns.
+- Conflicting records.
+- Partial migration and interrupted migration recovery.
+- Rollback and backup restoration drills.
+- Account deletion and retention.
+- Concurrent update tests.
+- Large-account and performance tests.
+
+Keep test databases and test accounts isolated from production.
+
+### Final deliverables
+
+Extend Report 22 with:
+1. Recommended formulas and mathematical validation.
+2. User-facing microcopy audit and proposed replacements.
+3. Deep Legacy-versus-Unified architectural comparison.
+4. Storage migration safety verdict.
+5. Proposed target architecture.
+6. Prioritized implementation roadmap.
+7. Comprehensive future test matrix.
+8. Explicit blockers and prerequisites for the next phase.
+9. A final readiness verdict for starting implementation.
+
+Update only the Report 22 document and the existing audit archive README index.
+
+Do not create a separate report or modify any application source, test, configuration, dependency, environment file, database, deployment, or production setting during this audit.
+
+Before finishing, verify the Git diff and confirm that the only changes are the Report 22 documentation file and the existing audit archive index.
+
+Do not implement fixes.
+
+Begin with the latest repository state and Reports 19–21. Investigate the logout synchronization issue first, then Arena, Focus, Efficiency, and the rest of the application. Finish with Report 22 only.

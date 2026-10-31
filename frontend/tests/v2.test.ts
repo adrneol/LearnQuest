@@ -146,7 +146,7 @@ describe('competition', () => {
     const { rows, userRank, percentile } = rankBoard(
       { ...DEFAULT_CHALLENGE, cohortSize: 50 },
       comps,
-      { dailyEffs: [70, 75, 80], uniqueContentSec: 5000, verifiedCount: 10, focusSec: 3600, activeDays: 3 },
+      { uniqueContentSec: 5000, playlistDurationSec: 36000, qualifyingDays: 3, observedDays: 14, focusSec: 3600, activeDays: 3 },
     );
     expect(rows).toHaveLength(50);
     expect(userRank).not.toBeNull();
@@ -158,7 +158,7 @@ describe('competition', () => {
     const e = rankBoard(
       { ...DEFAULT_CHALLENGE },
       comps,
-      { dailyEffs: [], uniqueContentSec: 0, verifiedCount: 0, focusSec: 0, activeDays: 0 },
+      { uniqueContentSec: 0, playlistDurationSec: 36000, qualifyingDays: 0, observedDays: 14, focusSec: 0, activeDays: 0 },
     );
     expect(e.userRank).toBeNull();
     expect(e.percentile).toBeNull();

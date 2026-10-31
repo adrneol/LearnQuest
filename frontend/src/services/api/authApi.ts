@@ -99,7 +99,7 @@ function invalidAccountData(): ApiError {
   );
 }
 
-function validateAccountDataResponse(value: unknown): { state: ServerState; version: number } {
+function validateAccountDataResponse(value: unknown): { state: ServerState; version: number; userId?: string } {
   if (!isObject(value) || !isObject(value.state) || value.ok !== true) {
     throw invalidAccountData();
   }
@@ -139,7 +139,14 @@ function validateAccountDataResponse(value: unknown): { state: ServerState; vers
     || typeof state.prefs.minViableMin !== 'number') {
     throw invalidAccountData();
   }
-  return { state: state as unknown as ServerState, version };
+  if (value.userId !== undefined && (typeof value.userId !== 'string' || !value.userId)) {
+    throw invalidAccountData();
+  }
+  return {
+    state: state as unknown as ServerState,
+    version,
+    ...(typeof value.userId === 'string' ? { userId: value.userId } : {}),
+  };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -272,7 +279,7 @@ function validatePasswordLoginResponse(value: unknown): PasswordLoginResponse {
   };
 }
 
-function validateGoogleStart(value: unknown): { url: string; intent: 'login' | 'register' } {
+function validateGoogleStart(value: unknown): { url: string; intent: 'login' | 'register' | 'email_change' } {
   if (!isObject(value) || typeof value.url !== 'string') {
     throw new ApiError('The account service did not return a Google sign-in URL.', 502, 'INVALID_OAUTH_RESPONSE');
   }
@@ -285,7 +292,11 @@ function validateGoogleStart(value: unknown): { url: string; intent: 'login' | '
   if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com') {
     throw new ApiError('The account service returned an unexpected sign-in destination. Nothing was opened.', 502, 'INVALID_OAUTH_RESPONSE');
   }
-  const intent = value.intent === 'register' ? 'register' : 'login';
+  const intent = value.intent === 'register'
+    ? 'register'
+    : value.intent === 'email_change'
+      ? 'email_change'
+      : 'login';
   return { url: url.toString(), intent };
 }
 
@@ -300,7 +311,7 @@ export async function fetchSession(): Promise<SessionResponse> {
   return session;
 }
 
-export async function startGoogleAuth(intent: 'login' | 'register'): Promise<void> {
+export async function startGoogleAuth(intent: 'login' | 'register' | 'email_change'): Promise<void> {
   const result = validateGoogleStart(await apiRequest<unknown>(
     `/auth/google/start?intent=${encodeURIComponent(intent)}`,
     { timeoutMs: 15_000 },
@@ -417,7 +428,7 @@ export async function deleteAccount(confirmPhrase: string, password?: string): P
   setCsrfToken(null);
 }
 
-export async function fetchAccountData(): Promise<{ state: ServerState; version: number }> {
+export async function fetchAccountData(): Promise<{ state: ServerState; version: number; userId?: string }> {
   return validateAccountDataResponse(await apiRequest('/account/data', { timeoutMs: 30_000 }));
 }
 
@@ -439,6 +450,18 @@ export async function putAccountCollection(
     );
   }
   return result as unknown as { version: number; collection: string; savedAt: string };
+}
+
+export async function appendAccountCollection(
+  collection: string,
+  items: unknown[],
+  version: number,
+): Promise<{ version: number; collection: string; appended: number; skipped: number; savedAt: string }> {
+  return apiRequest(`/account/data/${encodeURIComponent(collection)}/append`, {
+    method: 'POST',
+    body: { version, items },
+    timeoutMs: 30_000,
+  });
 }
 
 export async function importAccountBackup(payload: unknown, version?: number): Promise<{ version: number }> {

@@ -3,7 +3,8 @@ import { XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGri
 import {
   computePlaylistProgress, snapshotCompleteness, sumEntries, formatSecondsHHMMSS, formatHuman,
   buildInsights, calendarWindowDates, buildEntryProgressIndex, isProgressComplete, hasRevisionSignal,
-  attributePlaybackByDay, attributeFocusByDay, splitIntervalByDay, focusSessionDaySlices,
+  attributeFocusByDay, splitIntervalByDay, focusSessionDaySlices, splitPlaybackSegmentByDay,
+  summarizeByEntry,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
@@ -41,10 +42,16 @@ export function Analytics() {
     const thisWk = new Set(calendarWindowDates(7, s.prefs.timezone));
     const lastWkKeys = calendarWindowDates(14, s.prefs.timezone).slice(0, 7);
     const lastWk = new Set(lastWkKeys);
-    const playbackByDay = attributePlaybackByDay(s.segments.filter((x) => x.playlistId === pid), s.prefs.timezone);
+    // Playback coverage is a timeline union, not a sum of every observed
+    // segment. Rewatches, overlapping polls, and cross-midnight slices of the
+    // same occurrence must not inflate "content watched" or the weekly change.
+    const scopedSegments = s.segments.filter((x) => x.playlistId === pid);
     const focusByDay = attributeFocusByDay(s.sessions.filter((x) => x.playlistId === pid), s.prefs.timezone);
-    const contentIn = (set: Set<string>) => [...set].reduce((a, k) => a
-      + (playbackByDay.get(k) ?? []).reduce((b, x) => b + Math.max(0, x.timelineEndSec - x.timelineStartSec), 0), 0);
+    const contentIn = (set: Set<string>) => summarizeByEntry(
+      scopedSegments.flatMap((segment) => splitPlaybackSegmentByDay(segment, s.prefs.timezone))
+        .filter((slice) => set.has(slice.dateKey))
+        .map((slice) => slice.segment),
+    ).uniqueSec;
     const focusIn = (set: Set<string>) => [...set].reduce((a, k) => a + (focusByDay.get(k) ?? 0), 0);
     const twContent = contentIn(thisWk);
     const lwContent = contentIn(lastWk);
@@ -100,6 +107,20 @@ export function Analytics() {
         <Card className="min-w-0">
           <h3 className="text-sm font-bold">Cumulative content</h3>
           <CumulativeChart data={data.cum} heightClass="h-52" complete={data.comp.isComplete} />
+          <details className="mt-2 text-xs text-slate-300">
+            <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
+            <div className="mt-1 overflow-x-auto">
+              <table className="w-full text-left text-[11px]">
+                <caption className="sr-only">Cumulative resolved content by playlist position</caption>
+                <thead><tr><th className="pr-3 font-semibold">Position</th><th className="font-semibold">Cumulative time</th></tr></thead>
+                <tbody>
+                  {data.cum.filter((_, i) => i === 0 || i === data.cum.length - 1 || i === Math.floor(data.cum.length / 2)).map((p) => (
+                    <tr key={p.pos} className="border-t border-white/5"><td className="pr-3">{p.pos}</td><td>{formatSecondsHHMMSS(p.cumSec)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </Card>
         <Card className="min-w-0">
           <h3 className="text-sm font-bold">Duration distribution</h3>
@@ -115,6 +136,21 @@ export function Analytics() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          <details className="mt-2 text-xs text-slate-300">
+            <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
+            <div className="mt-1 max-h-40 overflow-auto">
+              <table className="w-full text-left text-[11px]">
+                <caption className="sr-only">Duration in minutes by playlist position</caption>
+                <thead><tr><th className="pr-3 font-semibold">Position</th><th className="font-semibold">Minutes</th></tr></thead>
+                <tbody>
+                  {data.dist.slice(0, 10).map((p) => (
+                    <tr key={p.pos} className="border-t border-white/5"><td className="pr-3">{p.pos}</td><td>{p.min}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+              {data.dist.length > 10 && <p className="mt-1 text-[11px] text-slate-500">Showing the first 10 of {data.dist.length} resolved entries.</p>}
+            </div>
+          </details>
         </Card>
       </div>
 
@@ -144,6 +180,18 @@ export function Analytics() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          <details className="mt-2 text-xs text-slate-300">
+            <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
+            <table className="mt-1 w-full text-left text-[11px]">
+              <caption className="sr-only">Recorded session count by duration bucket</caption>
+              <thead><tr><th className="pr-3 font-semibold">Minutes</th><th className="font-semibold">Sessions</th></tr></thead>
+              <tbody>
+                {data.hist.map((row) => (
+                  <tr key={row.range} className="border-t border-white/5"><td className="pr-3">{row.range}</td><td>{row.n}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
         </Card>
       </div>
 

@@ -15,22 +15,16 @@ import { positionTicks } from '../src/components/charts/theme.js';
 const BIG = { totalSec: 100_000_000, n: 100000, avgVideoSec: 600 };
 const SMALL = { totalSec: 36000, n: 100, avgVideoSec: 360 };
 
-// Hand-written tier ceilings + deviations from the spec (percentage points).
-const CEIL: Record<string, number> = {
-  Ultra: 110,
-  High: 99.9,
-  Good: 84.9,
-  Normal: 69.9,
-  Average: 54.9,
-  'Below Average': 39.9,
-};
-const DEV: Record<string, number> = {
-  Ultra: 15,
-  High: 10,
-  Good: 8,
-  Normal: 6,
-  Average: 5,
-  'Below Average': 4,
+// Hand-written tier throughput bands from the simulation design. Arena v2 no
+// longer ranks these percentages, but rival session records must remain
+// internally coherent while they are shown as context.
+const BAND: Record<string, [number, number]> = {
+  Ultra: [100, 110],
+  High: [85, 99.9],
+  Good: [70, 84.9],
+  Normal: [55, 69.9],
+  Average: [40, 54.9],
+  'Below Average': [20, 39.9],
 };
 
 function anchors(endIso: string, windowDays: number): string[] {
@@ -86,18 +80,21 @@ describe('date-anchored simulation', () => {
     expect(c.map((r) => r.name)).toEqual(a.map((r) => r.name));
   });
 
-  it('anchored daily efficiencies vary by date within tier bounds (huge playlist, no capping)', () => {
+  it('anchored daily throughput stays within its context band (huge playlist, no capping)', () => {
     const cfg = { ...DEFAULT_CHALLENGE, cohortSize: 200, seed: 42, windowDays: 14 };
     const comps = generateCompetitors(cfg, BIG, { anchorDates: anchors('2026-10-18', 14) });
     let varied = 0;
     for (const c of comps) {
       if (c.sessions.length < 5) continue;
       const effs = c.sessions.map((s) => (s.contentMin / s.focusMin) * 100);
-      const hi = CEIL[c.tier];
-      const dev = DEV[c.tier];
-      for (const e of effs) {
+      const [lo, hi] = BAND[c.tier];
+      for (const s of c.sessions) {
+        // The 10-minute minimum session floor can sit below the tier band;
+        // only judge days where the floor is not binding.
+        if (s.focusMin <= 20) continue;
+        const e = (s.contentMin / s.focusMin) * 100;
         expect(e).toBeLessThanOrEqual(hi + 0.6);
-        expect(e).toBeGreaterThanOrEqual(hi - dev - 0.6);
+        expect(e).toBeGreaterThanOrEqual(lo - 0.6);
       }
       if (Math.max(...effs) - Math.min(...effs) > 0.5) varied += 1;
     }
@@ -108,10 +105,10 @@ describe('date-anchored simulation', () => {
     const cfg = { ...DEFAULT_CHALLENGE, cohortSize: 120, seed: 7, windowDays: 14, dailyCapHours: 1 };
     const comps = generateCompetitors(cfg, SMALL, { anchorDates: anchors('2026-10-18', 14) });
     for (const c of comps) {
-      const f = c.sessions.reduce((x, s) => x + Math.round(s.focusMin * 60), 0);
-      const u = c.sessions.reduce((x, s) => x + Math.round(s.contentMin * 60), 0);
+      const f = c.sessions.reduce((x, s) => x + s.focusSec, 0);
+      const u = c.sessions.reduce((x, s) => x + s.contentSec, 0);
       expect(c.focusSec).toBe(f);
-      expect(Math.abs(c.uniqueContentSec - u)).toBeLessThanOrEqual(c.sessions.length);
+      expect(c.uniqueContentSec).toBe(Math.min(36000, u));
       expect(c.uniqueContentSec).toBeLessThanOrEqual(36000);
       expect(c.verifiedCount).toBeLessThanOrEqual(100);
       for (const s of c.sessions) {
@@ -131,10 +128,10 @@ describe('date-anchored simulation', () => {
 });
 
 describe('fair efficiency math (independent fixtures)', () => {
-  it('arena score is the mean of eligible dailies; empty is unmeasurable', () => {
-    // Hand-computed: (60 + 70 + 80) / 3 = 70.
-    expect(arenaScore([60, 70, 80])).toBe(70);
-    expect(arenaScore([])).toBeNull();
+  it('Arena v2 score uses 75% progress + 25% consistency and is unavailable without a playlist', () => {
+    // Hand-computed: 100 × (0.75×0.6 + 0.25×0.4) = 55.
+    expect(arenaScore(0.6, 0.4)).toBeCloseTo(55, 10);
+    expect(arenaScore(null, 0.4)).toBeNull();
     expect(requiredEligibleDays(14)).toBe(3);
     expect(requiredEligibleDays(2)).toBe(2);
     expect(requiredEligibleDays(1)).toBe(1);

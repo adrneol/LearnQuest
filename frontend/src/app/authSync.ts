@@ -1,38 +1,104 @@
 /**
  * Same-origin UI synchronization for authentication changes. The event carries
- * only a reason and a timestamp: never a session token, cookie, user profile,
- * learning data, email address, or password.
+ * only a reason, timestamp, a non-secret generation counter, and the sender's
+ * random tab id: never a session token, cookie, user profile, learning data,
+ * email address, or password.
  *
  * BroadcastChannel is preferred. When it is unavailable or throws, a
  * localStorage write emits a `storage` event in other same-origin tabs. Both
  * paths are safe to fail: the server session remains the authority and a later
  * request will still be rejected.
+ *
+ * BroadcastChannel can deliver a message to another channel object in the same
+ * tab. The sender id lets a tab ignore that echo; otherwise a successful login
+ * would immediately revalidate its own cookie and could clear the new session.
+ *
+ * v2 adds `sign-in` and `sign-out-unconfirmed`, so an older tab cannot keep
+ * showing the previous account after another tab signs in, and a failed server
+ * logout still clears every same-browser tab.
  */
-export type AuthSyncReason = 'sign-out' | 'password-reset' | 'email-change' | 'account-deleted';
+export type AuthSyncReason =
+  | 'sign-in'
+  | 'sign-out'
+  | 'sign-out-unconfirmed'
+  | 'password-reset'
+  | 'email-change'
+  | 'account-deleted';
 
 interface AuthSyncEvent {
-  type: 'signed-out';
+  type: 'auth-change';
   reason: AuthSyncReason;
   at: number;
+  /** Non-secret optimistic counter; receivers still revalidate the server. */
+  generation: number;
+  /** Random per-page-load sender id; never linked to an account. */
+  sourceId: string;
 }
 
-const CHANNEL_NAME = 'lq-auth-sync-v1';
-const STORAGE_KEY = 'lq-auth-sync-v1';
-const VALID_REASONS: AuthSyncReason[] = ['sign-out', 'password-reset', 'email-change', 'account-deleted'];
+const CHANNEL_NAME = 'lq-auth-sync-v2';
+const STORAGE_KEY = 'lq-auth-sync-v2';
+const LEGACY_STORAGE_KEY = 'lq-auth-sync-v1';
+const VALID_REASONS: AuthSyncReason[] = [
+  'sign-in', 'sign-out', 'sign-out-unconfirmed', 'password-reset', 'email-change', 'account-deleted',
+];
+let generation = 0;
 
-function isEvent(value: unknown): value is AuthSyncEvent {
-  if (!value || typeof value !== 'object') return false;
+/**
+ * Random, non-secret identity for one auth-sync endpoint. The value carries no
+ * account or device data; it only suppresses a sender's own broadcast echo.
+ * `crypto.randomUUID`/`getRandomValues` is preferred. The last-resort fallback
+ * uses time and a high-resolution counter because this identifier is not a
+ * credential; if it collides, the worst case is one ignored UI notification,
+ * while the server session remains authoritative.
+ */
+export function createAuthSyncSourceId(): string {
+  try {
+    if (typeof crypto !== 'undefined') {
+      if (typeof crypto.randomUUID === 'function') return `tab-${crypto.randomUUID()}`;
+      if (typeof crypto.getRandomValues === 'function') {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return `tab-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+      }
+    }
+  } catch {
+    // Fall through to the non-security uniqueness fallback.
+  }
+  return `tab-${Date.now().toString(36)}-${Math.round(performance.now() * 1000).toString(36)}`;
+}
+
+/** Default endpoint identity for callers that do not own a provider scope. */
+export const AUTH_SYNC_TAB_ID = createAuthSyncSourceId();
+
+function isReason(value: unknown): value is AuthSyncReason {
+  return typeof value === 'string' && VALID_REASONS.includes(value as AuthSyncReason);
+}
+
+function parseEvent(value: unknown): { reason: AuthSyncReason; sourceId: string | null } | null {
+  if (!value || typeof value !== 'object') return null;
   const event = value as Record<string, unknown>;
-  return event.type === 'signed-out'
-    && typeof event.reason === 'string'
-    && VALID_REASONS.includes(event.reason as AuthSyncReason)
-    && typeof event.at === 'number'
-    && Number.isFinite(event.at);
+  const timestampValid = typeof event.at === 'number' && Number.isFinite(event.at);
+  if (!timestampValid || !isReason(event.reason)) return null;
+  if (event.type !== 'auth-change' && event.type !== 'signed-out') return null;
+  return {
+    reason: event.reason,
+    sourceId: typeof event.sourceId === 'string' && event.sourceId.length > 0 ? event.sourceId : null,
+  };
 }
 
-export function broadcastAuthSignOut(reason: AuthSyncReason): void {
+export function broadcastAuthChange(
+  reason: AuthSyncReason,
+  sourceId: string = AUTH_SYNC_TAB_ID,
+): void {
   if (typeof window === 'undefined') return;
-  const event: AuthSyncEvent = { type: 'signed-out', reason, at: Date.now() };
+  generation += 1;
+  const event: AuthSyncEvent = {
+    type: 'auth-change',
+    reason,
+    at: Date.now(),
+    generation,
+    sourceId,
+  };
   let sentWithChannel = false;
   try {
     if (typeof BroadcastChannel !== 'undefined') {
@@ -53,14 +119,28 @@ export function broadcastAuthSignOut(reason: AuthSyncReason): void {
   }
 }
 
-export function subscribeAuthSignOut(handler: (reason: AuthSyncReason) => void): () => void {
+/** Backward-compatible name used by existing sign-out paths. */
+export function broadcastAuthSignOut(reason: AuthSyncReason, sourceId?: string): void {
+  broadcastAuthChange(reason, sourceId);
+}
+
+export function broadcastAuthSignIn(sourceId?: string): void {
+  broadcastAuthChange('sign-in', sourceId);
+}
+
+export function subscribeAuthChange(
+  handler: (reason: AuthSyncReason) => void,
+  sourceId: string = AUTH_SYNC_TAB_ID,
+): () => void {
   if (typeof window === 'undefined') return () => undefined;
   let channel: BroadcastChannel | null = null;
   try {
     if (typeof BroadcastChannel !== 'undefined') {
       channel = new BroadcastChannel(CHANNEL_NAME);
       channel.onmessage = (message: MessageEvent) => {
-        if (isEvent(message.data)) handler(message.data.reason);
+        const parsed = parseEvent(message.data);
+        if (!parsed || parsed.sourceId === sourceId) return;
+        handler(parsed.reason);
       };
     }
   } catch {
@@ -68,10 +148,10 @@ export function subscribeAuthSignOut(handler: (reason: AuthSyncReason) => void):
   }
 
   const onStorage = (event: StorageEvent) => {
-    if (event.key !== STORAGE_KEY || !event.newValue) return;
+    if ((event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) || !event.newValue) return;
     try {
-      const parsed: unknown = JSON.parse(event.newValue);
-      if (isEvent(parsed)) handler(parsed.reason);
+      const parsed = parseEvent(JSON.parse(event.newValue));
+      if (parsed && parsed.sourceId !== sourceId) handler(parsed.reason);
     } catch {
       // Ignore malformed or unrelated storage values.
     }
@@ -81,4 +161,12 @@ export function subscribeAuthSignOut(handler: (reason: AuthSyncReason) => void):
     channel?.close();
     window.removeEventListener('storage', onStorage);
   };
+}
+
+/** Backward-compatible name used by existing store wiring/tests. */
+export function subscribeAuthSignOut(
+  handler: (reason: AuthSyncReason) => void,
+  sourceId?: string,
+): () => void {
+  return subscribeAuthChange(handler, sourceId);
 }

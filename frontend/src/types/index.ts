@@ -137,6 +137,19 @@ export interface StudySession {
   /** True when the user supplied a manual active-time correction. */
   estimated?: boolean;
   note?: string;
+  /** v1 = wall anchors only; v2 adds monotonic/gap metadata. */
+  timerVersion?: number;
+  /** Union of active intervals in ms, independent of wall-clock jumps. */
+  monotonicActiveMs?: number;
+  /** Suspect interval time that was excluded, for transparency. */
+  gapExcludedMs?: number;
+  interruptionCount?: number;
+  recovered?: boolean;
+  /** True when the session passed interval/clock consistency checks. */
+  qualified?: boolean;
+  /** Random non-PII tab/device diagnostic id. */
+  tabId?: string;
+  saveState?: 'draft' | 'confirmed';
   dateKey: string; // start-day label (legacy/display only; attribution derives from intervals)
 }
 

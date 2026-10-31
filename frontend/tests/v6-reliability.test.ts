@@ -133,8 +133,9 @@ describe('cross-screen agreement on one hand-verified story', () => {
       { uniqueContentSec: 300, focusedSec: 900 },
       { uniqueContentSec: 300, focusedSec: 300 },
     ])).toBe(50);
-    // Arena deliberately differs: mean of dailies = 66.67%.
-    expect(arenaScore(dailies)).toBeCloseTo(66.667, 2);
+    // Arena v2 deliberately uses progress/consistency, not daily means.
+    // Full progress + 3 qualifying of 14 days = 75 + 25×(3/14) = 80.357.
+    expect(arenaScore(1, 3 / 14)).toBeCloseTo(80.357, 3);
     // Attribution reconstructs the same denominators History/Dashboard use.
     const byDay = attributeFocusByDay(focus, 'UTC');
     expect(byDay.get('2026-10-12')).toBe(900);
@@ -190,28 +191,33 @@ describe('large-playlist workflows beyond sorting', () => {
     expect(lines.filter((l) => l.includes('UNRESOLVED'))).toHaveLength(Math.floor(1000 / 37));
   });
 
-  it('1000-competitor leaderboard paginates and orders by efficiency desc', () => {
-    const mk = (id: string, eff: number) => ({
+  it('1000-competitor leaderboard paginates and orders by Arena v2 score desc', () => {
+    const mk = (id: string, score: number) => ({
       id,
       name: 'B',
       initials: 'B',
       tier: 'Normal' as const,
-      uniqueContentSec: eff * 36,
+      uniqueContentSec: score * 36,
       verifiedCount: 1,
       focusSec: 3600,
       activeDays: 3,
       windowDays: 14,
       sessions: [],
-      efficiency: eff,
+      efficiency: score,
       practiceMin: 0,
-      arenaScore: eff,
-      eligibleDays: 3,
+      arenaScore: score,
+      eligibleDays: 7,
+      qualifyingDays: 7,
+      observedDays: 14,
+      progress: score / 100,
+      consistency: 0.5,
+      provisional: false,
     });
     const comps = Array.from({ length: 999 }, (_, i) => mk(`c${i}`, 20 + (i % 60)));
     const board = rankBoard(
       { ...DEFAULT_CHALLENGE, cohortSize: 1000 },
       comps,
-      { dailyEffs: [50, 50, 50], uniqueContentSec: 0, verifiedCount: 0, focusSec: 0, activeDays: 0 },
+      { uniqueContentSec: 18000, playlistDurationSec: 36000, qualifyingDays: 7, observedDays: 14, focusSec: 0, activeDays: 0 },
     );
     expect(board.rows).toHaveLength(1000);
     const scored = board.rows.filter((r) => r.value !== null).map((r) => r.value as number);

@@ -9,25 +9,33 @@ import type { PlaylistSnapshot, ProgressRecord } from '../src/domain/index.js';
 import { completedEntryKeys } from '../src/domain/index.js';
 import { snapshotToCsv } from '../src/services/api/playlistApi.js';
 
-function rival(id: string, score: number | null, eligibleDays: number): Competitor {
+function rival(id: string, score: number | null, qualifyingDays: number): Competitor {
   return {
     id, name: id, initials: id.slice(0, 2), tier: 'Good',
-    uniqueContentSec: 1000, verifiedCount: 1, focusSec: 1000, activeDays: eligibleDays,
+    uniqueContentSec: 1000, verifiedCount: 1, focusSec: 1000, activeDays: qualifyingDays,
     windowDays: 14, sessions: [], efficiency: score ?? 0, practiceMin: 0,
-    arenaScore: score, eligibleDays,
+    arenaScore: score, eligibleDays: qualifyingDays, qualifyingDays, observedDays: 14,
+    progress: score === null ? 0 : score / 100, consistency: qualifyingDays / 14,
+    provisional: score === null || qualifyingDays < 3,
   };
 }
 
 describe('Arena percentile and trend eligibility', () => {
   it('excludes provisional rivals from the percentile denominator', () => {
     const board = rankBoard(DEFAULT_CHALLENGE, [
-      rival('above', 80, 3),
+      rival('above', 80, 10),
       rival('below', 60, 5),
       rival('provisional', null, 0),
-    ], { dailyEffs: [70, 70, 70], uniqueContentSec: 0, verifiedCount: 0, focusSec: 0, activeDays: 3 });
-    expect(board.userScore).toBe(70);
+    ], {
+      uniqueContentSec: 27000, // P = 0.75
+      playlistDurationSec: 36000,
+      qualifyingDays: 7, // C = 0.5
+      observedDays: 14,
+    });
+    // 100 × (0.75×0.75 + 0.25×0.5) = 68.75
+    expect(board.userScore).toBeCloseTo(68.75, 6);
     expect(board.userRank).toBe(2);
-    // one of two scored rivals is strictly below 70 — provisional is excluded.
+    // one of two scored rivals is strictly below 68.75 — provisional is excluded.
     expect(board.percentile).toBe(50);
     expect(board.required).toBe(requiredEligibleDays(14));
   });

@@ -115,6 +115,7 @@ interface FakeServer {
   failWrites: boolean;
   dataReads: number;
   writes: Array<{ collection: string; body: any }>;
+  appends: Array<{ collection: string; body: any }>;
 }
 
 function makeServer(playlistId = P, note = 'note A'): FakeServer {
@@ -127,6 +128,7 @@ function makeServer(playlistId = P, note = 'note A'): FakeServer {
     failWrites: false,
     dataReads: 0,
     writes: [],
+    appends: [],
   };
 }
 
@@ -166,6 +168,24 @@ function installFetch(server: FakeServer) {
       server.dataReads += 1;
       if (server.failData) return json({ error: 'Cloud storage is unavailable. Nothing was overwritten.' }, 503);
       return json({ ok: true, state: server.state, version: server.version });
+    }
+    if (u.endsWith('/append') && method === 'POST') {
+      if (!server.authenticated) return json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' }, 401);
+      const body = JSON.parse(init.body);
+      const collection = u.split('/').slice(-2)[0];
+      server.appends.push({ collection, body });
+      if (server.failWrites) return json({ error: 'The save could not be completed.' }, 500);
+      if (body.version !== server.version) return json({ error: 'Version conflict.', code: 'VERSION_CONFLICT' }, 409);
+      const existing = Array.isArray(server.state[collection]) ? server.state[collection] : [];
+      const existingIds = new Set(existing.map((item: any) => item.id));
+      const fresh = body.items.filter((item: any) => !existingIds.has(item.id));
+      server.state = { ...server.state, [collection]: [...existing, ...fresh] };
+      server.version += 1;
+      return json({
+        ok: true, version: server.version, collection,
+        appended: fresh.length, skipped: body.items.length - fresh.length,
+        savedAt: new Date().toISOString(),
+      });
     }
     if (u.includes('/api/account/data/') && method === 'PUT') {
       if (!server.authenticated) return json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' }, 401);
@@ -332,6 +352,65 @@ describe('cloud persistence and source-of-truth boundaries', () => {
     expect(server.dataReads).toBe(0);
     expect(server.writes).toHaveLength(0);
     expect(screen.queryByTestId('p-note')).toBeNull();
+  });
+
+  it('appends a new high-volume record without rewriting the whole collection', async () => {
+    const server = makeServer();
+    installFetch(server);
+    const hook = await readyHook();
+    const segment = {
+      id: 'seg-append-1',
+      playlistId: P,
+      position: 1,
+      entryId: 'eA',
+      videoId: `${P}-v1`,
+      sessionId: 'play-append-1',
+      wallStartMs: Date.parse('2026-10-27T10:00:00.000Z'),
+      wallEndMs: Date.parse('2026-10-27T10:05:00.000Z'),
+      timelineStartSec: 0,
+      timelineEndSec: 300,
+      playbackRate: 1,
+      source: 'verified' as const,
+    };
+
+    act(() => hook.result.current.addSegments([segment]));
+
+    await waitFor(() => expect(hook.result.current.syncStatus).toBe('saved'));
+    expect(server.appends.some((entry) => entry.collection === 'segments')).toBe(true);
+    expect(server.writes.some((entry) => entry.collection === 'segments')).toBe(false);
+    expect(server.state.segments).toEqual([segment]);
+  });
+
+  it('awards Focus XP only after the cloud session save is confirmed', async () => {
+    const server = makeServer();
+    server.failWrites = true;
+    installFetch(server);
+    const hook = await readyHook();
+    const session = {
+      clientId: 'focus-append-1',
+      playlistId: P,
+      startedAt: '2026-10-27T10:00:00.000Z',
+      finishedAt: '2026-10-27T10:10:00.000Z',
+      activeSec: 600,
+      elapsedSec: 600,
+      pausedSec: 0,
+      intervals: [{ startMs: Date.parse('2026-10-27T10:00:00.000Z'), endMs: Date.parse('2026-10-27T10:10:00.000Z'), kind: 'active' as const }],
+      estimated: false,
+    };
+
+    act(() => hook.result.current.addSession(session));
+    await waitFor(() => expect(hook.result.current.syncStatus).toBe('error'));
+    expect(hook.result.current.xp.filter((event) => event.reason === 'focus')).toHaveLength(0);
+    expect(server.state.sessions).toHaveLength(0);
+
+    server.failWrites = false;
+    act(() => hook.result.current.retryCloudSave());
+
+    await waitFor(() => expect(hook.result.current.xp.filter((event) => event.reason === 'focus')).toHaveLength(1));
+    await waitFor(() => expect(server.state.xp.some((event: any) => event.reason === 'focus')).toBe(true));
+    expect(server.state.sessions).toHaveLength(1);
+    expect(server.appends.some((entry) => entry.collection === 'sessions')).toBe(true);
+    expect(server.appends.some((entry) => entry.collection === 'xp')).toBe(true);
   });
 
   it('never exposes the previous account state after signing out and signing in as another user', async () => {

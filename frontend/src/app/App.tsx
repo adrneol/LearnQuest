@@ -139,12 +139,13 @@ function SyncIndicator() {
   const s = useStore();
   if (s.mode !== 'cloud') return null;
   if (s.syncStatus === 'saving') return <span className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200" role="status">Saving…</span>;
+  if (s.syncStatus === 'resolving') return <span className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200" role="status">Reconciling changes…</span>;
   if (s.syncStatus === 'saved') return <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-[11px] text-emerald-200" role="status">Saved</span>;
-  if (s.syncStatus === 'conflict') {
+  if (s.syncStatus === 'review') {
     return (
-      <button type="button" onClick={() => { void s.reloadCloudData(); }} className="rounded-full bg-red-500/15 px-2 py-1 text-[11px] text-red-200 hover:bg-red-500/25" title={s.syncError ?? 'Save conflict'}>
-        Save conflict · reload
-      </button>
+      <a href="#cloud-conflicts" className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-500/25" title={s.syncError ?? 'Two devices changed the same records'}>
+        Review {s.cloudConflicts.length} change{s.cloudConflicts.length === 1 ? '' : 's'}
+      </a>
     );
   }
   if (s.syncStatus === 'error') {
@@ -155,6 +156,52 @@ function SyncIndicator() {
     );
   }
   return <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-slate-400" role="status">Cloud account</span>;
+}
+
+const COLLECTION_LABELS: Record<string, string> = {
+  playlists: 'Playlists', meta: 'Playlist details', activeId: 'Active playlist',
+  progress: 'Lesson progress', ranges: 'Ranges', checkpoints: 'Checkpoints',
+  modules: 'Modules', sessions: 'Focus sessions', goals: 'Daily goals', xp: 'XP',
+  achievements: 'Achievements', segments: 'Playback history', playSessions: 'Play sessions',
+  queue: 'Queues', flexGoals: 'Flexible goals', challenge: 'Arena settings',
+  challengeEnabled: 'Arena setting', rankHistory: 'Rank history', settings: 'Settings',
+  prefs: 'Preferences',
+};
+
+/**
+ * Two devices that edited the same record differently need an explicit
+ * decision. The banner never auto-picks a side and never reloads away the
+ * local edit.
+ */
+function CloudConflictBanner() {
+  const s = useStore();
+  if (s.mode !== 'cloud' || s.cloudConflicts.length === 0) return null;
+  const collections = [...new Set(s.cloudConflicts.map((c) => c.collection))];
+  return (
+    <section id="cloud-conflicts" role="alert" aria-labelledby="cloud-conflicts-title" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+      <h2 id="cloud-conflicts-title" className="font-semibold text-amber-100">Two devices changed the same records</h2>
+      <p className="mt-1 text-xs text-amber-100/80">
+        Your local changes are still here. Nothing was overwritten. Choose which version to keep for each area;
+        unrelated changes from both devices were already merged and saved.
+      </p>
+      <ul className="mt-2 space-y-2">
+        {collections.map((collection) => (
+          <li key={collection} className="flex flex-wrap items-center gap-2 rounded-xl bg-black/20 p-2">
+            <span className="min-w-0 flex-1 font-medium">{COLLECTION_LABELS[collection] ?? collection}</span>
+            <span className="text-[11px] text-amber-100/70">
+              {s.cloudConflicts.filter((c) => c.collection === collection).length} conflicting record(s)
+            </span>
+            <button type="button" onClick={() => s.resolveCloudConflict(collection, 'keep-local')} className="rounded-lg bg-amber-400/20 px-2.5 py-1 text-xs font-semibold hover:bg-amber-400/30">
+              Keep this device
+            </button>
+            <button type="button" onClick={() => s.resolveCloudConflict(collection, 'use-server')} className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold hover:bg-white/15">
+              Use server version
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function AppInner() {
@@ -518,6 +565,7 @@ function AppInner() {
           </div>
         )}
         <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
+          <CloudConflictBanner />
           {!isAccountPage && !snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
           {!isAccountPage && <LegacyMigrationCard />}
           {!isAccountPage && s.lastDiff && (

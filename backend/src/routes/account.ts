@@ -25,8 +25,9 @@ import {
   USER_COLLECTIONS, type UserCollectionName,
 } from '../store.js';
 import {
-  emptyUserState, getUserStateExport, readUserState, replaceAllUserState,
-  replaceUserCollection, validateStatePayload, type UserState, type UserStateDefaults,
+  appendUserCollection, emptyUserState, getUserStateExport, isAppendCollection, readUserState,
+  replaceAllUserState, replaceUserCollection, validateStatePayload,
+  type UserState, type UserStateDefaults,
 } from '../services/userData.js';
 import { deleteAccountPermanently } from '../services/accountDeletion.js';
 
@@ -43,6 +44,10 @@ const prefsSchema = z.object({
 const collectionSchema = z.object({
   version: z.number().int().min(0),
   items: z.unknown(),
+}).strict();
+const appendSchema = z.object({
+  version: z.number().int().min(0),
+  items: z.array(z.unknown()).min(1).max(5_000),
 }).strict();
 const importSchema = z.object({
   version: z.number().int().min(0).optional(),
@@ -303,6 +308,10 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         ok: true,
         schemaVersion: 1,
         loadedAt: new Date().toISOString(),
+        // Identity assertion: a tab holding an older cookie/CSRF context must
+        // be able to prove that this payload belongs to the account it already
+        // believes is signed in before rendering it.
+        userId: req.auth!.userId,
         state: result.state,
         version: result.version,
       });
@@ -320,6 +329,29 @@ export function createAccountRouter({ store, email }: AccountRouterDeps): Router
         store,
         req.auth!.userId,
         () => replaceUserCollection(store, req.auth!.userId, name, body.items, body.version),
+      );
+      res.json({ ok: true, ...saved, savedAt: new Date().toISOString() });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  /**
+   * Bounded append path for high-volume event domains. Full replacement above
+   * remains authoritative for edits, deletions, imports and older clients.
+   */
+  router.post('/data/:collection/append', requireCsrf, async (req: AuthedRequest, res, next) => {
+    try {
+      const name = req.params.collection as UserCollectionName;
+      if (!USER_COLLECTIONS.includes(name)) throw http(404, 'Unknown data collection.', 'NOT_FOUND');
+      if (!isAppendCollection(name)) {
+        throw http(400, 'This collection does not support append writes.', 'APPEND_UNSUPPORTED');
+      }
+      const body = parseBody(appendSchema, req.body);
+      const saved = await withAccountWriteLease(
+        store,
+        req.auth!.userId,
+        () => appendUserCollection(store, req.auth!.userId, name, body.items, body.version),
       );
       res.json({ ok: true, ...saved, savedAt: new Date().toISOString() });
     } catch (e) {

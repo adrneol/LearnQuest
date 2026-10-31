@@ -43,22 +43,27 @@ import {
 } from '../domain/index.js';
 import type { PlaybackSegment, Goal, AppPreferences, Module, RankSnapshot } from '../domain/index.js';
 import type { ChallengeConfig } from '../domain/competition/competition.js';
-import { DEFAULT_CHALLENGE, validateChallenge } from '../domain/competition/competition.js';
+import { DEFAULT_CHALLENGE, normalizeChallenge, validateChallenge } from '../domain/competition/competition.js';
 import type {
   PlaylistSnapshot, ProgressRecord, SavedRange, Checkpoint, StudySession, XpEvent, DayGoal,
   PlaySession, AppSettings,
 } from '../domain/index.js';
 import { kvGet, kvSet, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
+import { mergeAccountState, deepEqual, type MergeConflict } from '../services/persistence/cloudMerge.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
 import { notify } from '../services/notifications/notify.js';
 import { setCsrfToken } from '../services/api/http.js';
-import { broadcastAuthSignOut, subscribeAuthSignOut, type AuthSyncReason } from './authSync.js';
+import {
+  broadcastAuthChange, broadcastAuthSignIn, createAuthSyncSourceId, subscribeAuthChange,
+  type AuthSyncReason,
+} from './authSync.js';
 import {
   type AuthConfig, type AuthUser, type AccountSession,
   archivePlaylistApi, changePassword as changePasswordApi, completeOnboarding as completeOnboardingApi,
   deleteAccount as deleteAccountApi, deletePlaylistApi, downloadAccountExport, fetchAccountData,
   fetchSession, importAccountBackup, listAccountSessions, logout as logoutApi,
   logoutAll as logoutAllApi, migrateLocalData, passwordLogin, putAccountCollection,
+  appendAccountCollection,
   requestEmailChange as requestEmailChangeApi,
   restorePlaylistApi, revokeAccountSession, startGoogleAuth, updateAccountPreferences as updateAccountPreferencesApi,
   updateProfile as updateProfileApi,
@@ -151,14 +156,18 @@ interface Store {
   authError: string | null;
   /** Dismiss a cross-tab session notice when entering a public recovery screen. */
   clearAuthNotice: () => void;
-  syncStatus: 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
+  syncStatus: 'idle' | 'saving' | 'saved' | 'resolving' | 'review' | 'error';
   syncError: string | null;
+  /** Records changed differently on this device and another device. */
+  cloudConflicts: MergeConflict[];
+  /** Resolve every remaining conflict in one collection. */
+  resolveCloudConflict: (collection: string, strategy: 'keep-local' | 'use-server') => void;
   serverVersion: number;
   migrationAvailable: boolean;
   migrationSummary: string | null;
   migrationError: string | null;
   signInWithPassword: (identifier: string, password: string) => Promise<void>;
-  signInWithGoogle: (intent: 'login' | 'register') => Promise<void>;
+  signInWithGoogle: (intent: 'login' | 'register' | 'email_change') => Promise<void>;
   completeAccountSetup: (input: {
     username: string; displayName: string; password: string; timezone?: string;
     sessionLenMin?: number; breakMin?: number; minViableMin?: number;
@@ -390,8 +399,8 @@ function normalizeLoadedState(raw: Partial<LoadedState>, fallbackPrefs = default
     if (queue[snap.playlistId]) queue[snap.playlistId] = reconcileQueuePositions(undefined, snap, queue[snap.playlistId]);
   }
   const flexGoals = asArray<Goal>(raw.flexGoals).filter((g) => g && g.id && g.metric && Number.isFinite(g.target));
-  const challengeCandidate = { ...DEFAULT_CHALLENGE, ...asRecord(raw.challenge) } as ChallengeConfig;
-  const challenge = validateChallenge(challengeCandidate).length ? DEFAULT_CHALLENGE : challengeCandidate;
+  const challengeCandidate = normalizeChallenge(asRecord(raw.challenge));
+  const challenge = validateChallenge(challengeCandidate).length ? normalizeChallenge(DEFAULT_CHALLENGE) : challengeCandidate;
   const settings = sanitizeSettings(raw.settings);
   const activeId = typeof raw.activeId === 'string' && playlists[raw.activeId] ? raw.activeId : null;
   return {
@@ -447,8 +456,28 @@ function rekeyModules(
 
 const DEFAULT_MODE: 'local' | 'cloud' = import.meta.env.MODE === 'test' ? 'local' : 'cloud';
 
+/**
+ * Remove every focus recovery snapshot. v2 keys are account-scoped so a stale
+ * draft can never appear under a different signed-in account; v1 is removed for
+ * upgrades. A targeted scan is used because `localStorage` has no prefix API.
+ */
+function clearFocusTimerSnapshots(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key === 'lq-focus-timer-v1' || key?.startsWith('lq-focus-timer-v2:')) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 const REMOTE_SIGN_OUT_COPY: Record<AuthSyncReason, string> = {
+  'sign-in': 'A different account signed in in another tab, so this tab was cleared. Sign in again to continue.',
   'sign-out': 'You were signed out in another tab. Sign in again to continue.',
+  'sign-out-unconfirmed': 'Another tab could not confirm sign-out, so every tab cleared its private view. Sign in again to continue.',
   'password-reset': 'Your password was reset in another tab, so every session was signed out. Sign in again with your new password.',
   'email-change': 'Your account email was changed in another tab, so every session was signed out. Sign in again with the new address.',
   'account-deleted': 'This account was deleted in another tab. No LearnQuest data remains for it.',
@@ -496,11 +525,66 @@ function cloudPayload(state: LoadedState): Record<CloudCollection, unknown> {
   return out;
 }
 
-function cloudFingerprints(state: LoadedState): Record<string, string> {
-  const payload = cloudPayload(state);
-  const out: Record<string, string> = {};
-  for (const name of CLOUD_COLLECTIONS) out[name] = JSON.stringify(payload[name]);
-  return out;
+/** Event collections that may grow by appending new stable-identity records. */
+const APPEND_COLLECTIONS = new Set<CloudCollection>(['sessions', 'segments', 'playSessions', 'xp']);
+
+function appendIdentity(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  for (const field of ['id', 'clientId', 'dedupKey', 'sessionId'] as const) {
+    const candidate = record[field];
+    if (typeof candidate === 'string' && candidate.length > 0) return `${field}:${candidate}`;
+  }
+  return null;
+}
+
+/**
+ * Return only the new records when `local` is exactly `base` plus appended
+ * records. Any edit, deletion, reordering into an unknown identity, duplicate
+ * identity, or missing stable key falls back to a full replacement.
+ */
+function appendOnlyDelta(base: unknown, local: unknown): unknown[] | null {
+  if (!Array.isArray(base) || !Array.isArray(local)) return null;
+  const baseMap = new Map<string, unknown>();
+  const localMap = new Map<string, unknown>();
+  for (const item of base) {
+    const key = appendIdentity(item);
+    if (!key || baseMap.has(key)) return null;
+    baseMap.set(key, item);
+  }
+  for (const item of local) {
+    const key = appendIdentity(item);
+    if (!key || localMap.has(key)) return null;
+    localMap.set(key, item);
+  }
+  for (const [key, value] of baseMap) {
+    if (!localMap.has(key) || !deepEqual(localMap.get(key), value)) return null;
+  }
+  const delta = local.filter((item) => {
+    const key = appendIdentity(item);
+    return key !== null && !baseMap.has(key);
+  });
+  return delta.length > 0 ? delta : null;
+}
+
+async function writeCloudCollection(
+  name: CloudCollection,
+  value: unknown,
+  version: number,
+  baseline: unknown,
+): Promise<{ version: number; collection: string }> {
+  const delta = APPEND_COLLECTIONS.has(name) ? appendOnlyDelta(baseline, value) : null;
+  if (delta) {
+    try {
+      return await appendAccountCollection(name, delta, version);
+    } catch (error: any) {
+      // A deployment that predates the bounded append route still accepts the
+      // full replacement. Do not fall back after a timeout or conflict: those
+      // outcomes are ambiguous and must be reconciled by the caller.
+      if (error?.status !== 404) throw error;
+    }
+  }
+  return putAccountCollection(name, value, version);
 }
 
 function legacyHasData(dump: Record<string, unknown>): boolean {
@@ -586,8 +670,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const [authUser, setAuthUserState] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'conflict'>('idle');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'resolving' | 'review' | 'error'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [cloudConflicts, setCloudConflicts] = useState<MergeConflict[]>([]);
   const [serverVersion, setServerVersion] = useState(0);
   const [migrationAvailable, setMigrationAvailable] = useState(false);
   const [migrationSummary, setMigrationSummary] = useState<string | null>(null);
@@ -597,7 +682,20 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const writeChain = useRef<Promise<void>>(Promise.resolve());
   const loadAttempt = useRef(0);
   const serverVersionRef = useRef(0);
-  const lastSyncedRef = useRef<Record<string, string>>({});
+  // Last server-confirmed VALUE per collection. Three-way reconciliation needs
+  // the baseline records, not only fingerprints.
+  const lastSyncedItemsRef = useRef<Record<string, unknown>>({});
+  // Latest rendered state, read by the serialized cloud writer so a debounced
+  // run always saves current data instead of a stale closure snapshot.
+  const latestStateRef = useRef<LoadedState | null>(null);
+  // Remote values observed at the last conflict, used by "use server version".
+  const remoteBaselineRef = useRef<Record<string, unknown>>({});
+  // Collections awaiting an explicit decision must not be auto-written again.
+  const heldCollectionsRef = useRef<Set<string>>(new Set());
+  const cloudConflictsRef = useRef<MergeConflict[]>([]);
+  // All cloud writes run one after another through this chain. Overlapping
+  // effects previously reused the same stale version and produced conflicts.
+  const cloudSyncChain = useRef<Promise<void>>(Promise.resolve());
   const migrationIdRef = useRef<string | null>(null);
   const cloudUserRef = useRef<string | null>(null);
   // The latest authenticated account, available synchronously to the
@@ -610,6 +708,21 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // Invalidates in-flight session/login/onboarding responses after a local or
   // cross-tab sign-out so a stale response cannot repopulate the account.
   const authEpoch = useRef(0);
+  // One identity per provider mount, so two StoreProviders in the same page
+  // (simulated tabs in tests, an embedded demo, or React strict replay) never
+  // mistake another instance's broadcast for their own echo.
+  const authSyncSourceId = useMemo(() => createAuthSyncSourceId(), []);
+  // Cloud mode delays Focus/library XP until the session/segment collection
+  // that earned it is confirmed by the server. Local mode is browser-owned.
+  const pendingSessionAwards = useRef<Array<{
+    sessionKey: string;
+    activeSec: number;
+    activityKey: string;
+  }>>([]);
+  // Last successful server identity check. Visibility/focus and pre-write
+  // barriers use this to avoid redundant requests while bounding staleness.
+  const lastSessionCheckRef = useRef(0);
+  const sessionRevalidatingRef = useRef<Promise<boolean> | null>(null);
   // Client-generated session ids are a second idempotency barrier in memory:
   // two finish clicks in one tick cannot both pass the stale `sessions` closure.
   const sessionKeys = useRef<Set<string>>(new Set());
@@ -617,6 +730,21 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   useLayoutEffect(() => {
     authUserRef.current = authUser;
   }, [authUser]);
+
+  // Keep the cloud writer's source of truth in sync with the rendered state.
+  // The debounced effect below must never capture an old snapshot: a run that
+  // starts after a newer edit has to save the newer edit.
+  useLayoutEffect(() => {
+    latestStateRef.current = {
+      playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals,
+      xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge,
+      challengeEnabled, rankHistory, settings,
+    };
+  }, [
+    playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals,
+    xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge,
+    challengeEnabled, rankHistory, settings,
+  ]);
 
   useEffect(() => {
     if (actionRoute) stripEmailActionToken(actionRoute.kind);
@@ -725,8 +853,13 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const resetAccountState = useCallback(() => {
     cloudLoadGeneration.current += 1;
     cloudUserRef.current = null;
+    pendingSessionAwards.current = [];
     applyState(normalizeLoadedState({}, defaultPreferences()).state);
-    lastSyncedRef.current = {};
+    lastSyncedItemsRef.current = {};
+    remoteBaselineRef.current = {};
+    heldCollectionsRef.current.clear();
+    cloudConflictsRef.current = [];
+    setCloudConflicts([]);
     serverVersionRef.current = 0;
     setServerVersion(0);
     setSyncStatus('idle');
@@ -759,7 +892,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setAuthError(null);
     setSessionNotice(null);
     sessionKeys.current.clear();
-    try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* unavailable */ }
+    clearFocusTimerSnapshots();
     const hash = destination === 'forgot' ? '#/auth?mode=forgot' : '#/auth';
     if (typeof window !== 'undefined') {
       const target = `${window.location.pathname}${window.location.search}${hash}`;
@@ -792,17 +925,81 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setSessionNotice(notice);
     setAuthError(null);
     sessionKeys.current.clear();
-    try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* unavailable */ }
+    clearFocusTimerSnapshots();
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
   }, [resetAccountState]);
+
+  /**
+   * Ask the server who this browser is now. `userId` in account data blocks a
+   * stale tab from adopting another account's payload; this check catches the
+   * change before that payload is even requested.
+   */
+  const revalidateSession = useCallback(async (opts?: { maxAgeMs?: number }): Promise<boolean> => {
+    if (mode !== 'cloud') return true;
+    const knownUser = authUserRef.current;
+    if (!knownUser) return false;
+    const maxAgeMs = opts?.maxAgeMs ?? 90_000;
+    if (Date.now() - lastSessionCheckRef.current < maxAgeMs) return true;
+    if (sessionRevalidatingRef.current) return sessionRevalidatingRef.current;
+    const epoch = authEpoch.current;
+    const pending = (async () => {
+      try {
+        const res = await fetchSession();
+        if (epoch !== authEpoch.current) return false;
+        if (!res.authenticated || !res.user) {
+          clearLocalSession('Your session ended or was signed out on another device. Sign in again to continue.');
+          return false;
+        }
+        if (res.user.userId !== knownUser.userId) {
+          clearLocalSession(REMOTE_SIGN_OUT_COPY['sign-in']);
+          return false;
+        }
+        lastSessionCheckRef.current = Date.now();
+        setSetup(res);
+        setAuthUserState(res.user);
+        return true;
+      } catch (e: any) {
+        if (epoch !== authEpoch.current) return false;
+        if (e?.status === 401 || e?.status === 403) {
+          clearLocalSession('Your session could not be confirmed. Sign in again to continue.');
+        }
+        // Offline/transient: keep the local view, but callers must not claim a
+        // successful save. The next online check or user action revalidates.
+        return false;
+      }
+    })().finally(() => {
+      sessionRevalidatingRef.current = null;
+    });
+    sessionRevalidatingRef.current = pending;
+    return pending;
+  }, [clearLocalSession, mode]);
 
   const applyRemoteSignOut = useCallback((reason: AuthSyncReason) => {
     // The broadcast is only a UI signal, but no late response may repopulate it.
     // A tab that had an authenticated account has a session to lose. A public
     // recovery screen has no account and must never receive this notice.
     const hadAuthenticatedSession = authUserRef.current !== null || cloudUserRef.current !== null;
-    clearLocalSession(hadAuthenticatedSession ? REMOTE_SIGN_OUT_COPY[reason] : null);
-  }, [clearLocalSession]);
+    if (!hadAuthenticatedSession) {
+      // Public recovery screens must not receive a notice, but an in-flight
+      // login or onboarding request still belongs to the previous browser
+      // session. Invalidate it so a late response cannot sign this tab in
+      // after another tab has already signed out.
+      if (reason !== 'sign-in') authEpoch.current += 1;
+      return;
+    }
+    if (reason === 'sign-in') {
+      // Never trust the event payload to know who signed in. Revalidate the
+      // shared cookie: the same account keeps its open tab; a different
+      // account clears this tab instead of showing the new identity's data.
+      void revalidateSession({ maxAgeMs: 0 });
+      return;
+    }
+    if (reason === 'sign-out-unconfirmed') {
+      clearLocalSession(REMOTE_SIGN_OUT_COPY[reason]);
+      return;
+    }
+    clearLocalSession(REMOTE_SIGN_OUT_COPY[reason]);
+  }, [clearLocalSession, revalidateSession]);
 
   const clearAuthNotice = useCallback(() => setSessionNotice(null), []);
 
@@ -811,17 +1008,30 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setLoadError(null);
     setReady(false);
     try {
-      const { state, version } = await fetchAccountData();
+      const { state, version, userId } = await fetchAccountData();
       // Signing out or switching accounts while the request was in flight must
       // discard the late response instead of exposing the previous identity's
       // learning data or overwriting the next account's state.
       if (generation !== cloudLoadGeneration.current) return;
+      // The session cookie is the server's identity authority. If it has moved
+      // to another account since this tab rendered, the payload must never be
+      // adopted as the old account's data. Older servers omit `userId`; that is
+      // accepted for compatibility, but a present and different id is fatal.
+      if (userId && userId !== user.userId) {
+        clearLocalSession('This browser is now signed in to a different account. The previous account data was cleared. Sign in again to continue.');
+        return;
+      }
       const normalized = normalizeLoadedState(state as Partial<LoadedState>, defaultPreferences());
       applyState(normalized.state);
       serverVersionRef.current = version;
       setServerVersion(version);
-      lastSyncedRef.current = cloudFingerprints(normalized.state);
+      lastSyncedItemsRef.current = cloudPayload(normalized.state);
+      remoteBaselineRef.current = { ...lastSyncedItemsRef.current };
+      heldCollectionsRef.current.clear();
+      cloudConflictsRef.current = [];
+      setCloudConflicts([]);
       cloudUserRef.current = user.userId;
+      lastSessionCheckRef.current = Date.now();
       setSyncStatus('idle');
       setSyncError(null);
       setReady(true);
@@ -830,7 +1040,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setLoadError(e?.message ?? 'LearnQuest could not load your cloud learning data. Nothing was overwritten; retry the load.');
       setReady(false);
     }
-  }, [applyState]);
+  }, [applyState, clearLocalSession]);
 
   const bootstrap = useCallback(async () => {
     const epoch = authEpoch.current;
@@ -839,6 +1049,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     try {
       const session = await fetchSession();
       if (epoch !== authEpoch.current) return;
+      lastSessionCheckRef.current = Date.now();
       setSetup(session);
       if (session.authenticated && session.user) {
         setAuthUserState(session.user);
@@ -885,8 +1096,63 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // server for its next authenticated request.
   useEffect(() => {
     if (mode !== 'cloud') return;
-    return subscribeAuthSignOut((reason) => applyRemoteSignOut(reason));
-  }, [mode, applyRemoteSignOut]);
+    return subscribeAuthChange((reason) => applyRemoteSignOut(reason), authSyncSourceId);
+  }, [mode, applyRemoteSignOut, authSyncSourceId]);
+
+  /**
+   * Bounded remote-device staleness. While this tab is visible and online,
+   * revalidate roughly every 60–90 seconds with jitter; on return (visibility,
+   * focus, reconnect), revalidate immediately when the last check is stale.
+   * Hidden tabs do not poll, and no timer runs without an authenticated user.
+   */
+  useEffect(() => {
+    if (mode !== 'cloud') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const check = () => {
+      if (!authUserRef.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      void revalidateSession({ maxAgeMs: 45_000 });
+    };
+    const schedule = () => {
+      if (cancelled) return;
+      const delay = 60_000 + Math.floor(Math.random() * 30_001);
+      timer = setTimeout(() => {
+        check();
+        schedule();
+      }, delay);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') check();
+    };
+    const onFocus = () => check();
+    const onOnline = () => check();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [mode, revalidateSession]);
+
+  // A 403 CSRF failure does not prove the session is gone: the session may have
+  // rotated in another tab. Revalidate identity, refresh the token, and retry.
+  useEffect(() => {
+    if (mode !== 'cloud') return;
+    const onRevalidate = () => {
+      void revalidateSession({ maxAgeMs: 0 }).then((ok) => {
+        if (ok) setSaveNonce((n) => n + 1);
+      });
+    };
+    window.addEventListener('lq:auth-revalidate', onRevalidate);
+    return () => window.removeEventListener('lq:auth-revalidate', onRevalidate);
+  }, [mode, revalidateSession]);
 
   // Detect unclaimed legacy IndexedDB data only AFTER authentication. The
   // login screen never reads or displays learning records. A claim made by a
@@ -974,61 +1240,6 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     };
   }, [mode, ready, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
 
-  // Cloud persistence: only changed collections are sent, sequentially, with
-  // the server's optimistic version. Success is shown only after every write
-  // has been confirmed. IndexedDB is never written in this mode.
-  useEffect(() => {
-    if (mode !== 'cloud' || !ready || !authUser) return;
-    if (saveT.current) clearTimeout(saveT.current);
-    saveT.current = setTimeout(() => {
-      const state: LoadedState = {
-        playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals,
-        xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge,
-        challengeEnabled, rankHistory, settings,
-      };
-      const payload = cloudPayload(state);
-      const userId = authUser.userId;
-      const changed = CLOUD_COLLECTIONS.filter((name) => JSON.stringify(payload[name]) !== lastSyncedRef.current[name]);
-      if (changed.length === 0) {
-        if (cloudUserRef.current === userId) setSyncStatus('saved');
-        return;
-      }
-      const run = (async () => {
-        if (cloudUserRef.current !== userId) return;
-        setSyncStatus('saving');
-        setSyncError(null);
-        let version = serverVersionRef.current;
-        try {
-          for (const name of changed) {
-            // A sign-out or account switch must stop queued writes from the
-            // previous account. The server still enforces the session owner,
-            // but the client must not deliberately send stale data.
-            if (cloudUserRef.current !== userId) return;
-            const result = await putAccountCollection(name, payload[name], version);
-            if (cloudUserRef.current !== userId) return;
-            version = result.version;
-            serverVersionRef.current = version;
-            setServerVersion(version);
-            lastSyncedRef.current[name] = JSON.stringify(payload[name]);
-          }
-          setSyncStatus('saved');
-        } catch (e: any) {
-          if (cloudUserRef.current !== userId) return;
-          setSyncStatus(e?.code === 'VERSION_CONFLICT' ? 'conflict' : 'error');
-          setSyncError(
-            e?.code === 'VERSION_CONFLICT'
-              ? 'Another session changed your account data. Reload account data before making more changes; nothing was silently overwritten.'
-              : (e?.message ?? 'Your changes were not saved to the server. Retry the save.'),
-          );
-        }
-      })();
-      writeChain.current = run.catch(() => undefined);
-    }, 350);
-    return () => {
-      if (saveT.current) clearTimeout(saveT.current);
-    };
-  }, [mode, ready, authUser, saveNonce, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
-
   const awardXp = useCallback((reason: string, points: number, dedupKey: string) => {
     if (!Number.isFinite(points) || !dedupKey) return;
     setXp((prev) => {
@@ -1036,6 +1247,214 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       return [...prev, { id: uid(), reason, points, dedupKey, at: new Date().toISOString() }];
     });
   }, []);
+
+  /**
+   * Award Focus XP only after the server has confirmed the sessions collection
+   * that contains the session. A failed/conflicted save leaves the award
+   * pending, so retrying the save can still award it exactly once.
+   */
+  const confirmPendingSessionAwards = useCallback((savedSessions: StudySession[]) => {
+    if (pendingSessionAwards.current.length === 0) return;
+    const savedIds = new Set<string>();
+    for (const session of savedSessions) {
+      if (typeof session.clientId === 'string' && session.clientId.length > 0) savedIds.add(session.clientId);
+      if (typeof session.id === 'string' && session.id.length > 0) savedIds.add(session.id);
+    }
+    if (savedIds.size === 0) return;
+    const ready = pendingSessionAwards.current.filter((award) => savedIds.has(award.sessionKey));
+    if (ready.length === 0) return;
+    pendingSessionAwards.current = pendingSessionAwards.current.filter((award) => !savedIds.has(award.sessionKey));
+    for (const award of ready) {
+      awardXp('focus', xpForFocusSession(award.activeSec), `focus:${award.sessionKey}`);
+      awardXp('studyDay', XP_RULES.studyDay, `day:${award.activityKey}`);
+    }
+  }, [awardXp]);
+
+  /**
+   * One cloud write pass. The effect below never starts this concurrently:
+   * every pass is appended to `cloudSyncChain`, so each request sees the
+   * version returned by the previous one.
+   *
+   * A version conflict is not a dead end. The pass re-reads the server state,
+   * reconciles base/local/remote by stable record identity, preserves local
+   * edits, writes every non-conflicting collection at the new version, and
+   * asks the person to resolve only records that both sides edited differently.
+   */
+  const runCloudSync = useCallback(async (userId: string) => {
+    if (cloudUserRef.current !== userId) return;
+    const state = latestStateRef.current;
+    if (!state) return;
+    // Pre-write identity barrier: do not mutate data under a cookie that may
+    // now belong to another account or a revoked session.
+    const identityOk = await revalidateSession({ maxAgeMs: 90_000 });
+    if (!identityOk) {
+      if (cloudUserRef.current === userId) {
+        setSyncStatus('error');
+        setSyncError('Your session could not be confirmed. Your changes are still in this tab; sign in again, then retry the save.');
+      }
+      return;
+    }
+    if (cloudUserRef.current !== userId) return;
+    const payload = cloudPayload(state);
+    const changed = CLOUD_COLLECTIONS.filter((name) =>
+      !heldCollectionsRef.current.has(name)
+      && !deepEqual(payload[name], lastSyncedItemsRef.current[name]));
+    if (changed.length === 0) {
+      if (cloudUserRef.current !== userId) return;
+      // Sessions already match the last confirmed server baseline, so a pending
+      // award can safely be credited without another network write.
+      confirmPendingSessionAwards(state.sessions);
+      setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'saved');
+      return;
+    }
+    setSyncStatus('saving');
+    setSyncError(null);
+    let version = serverVersionRef.current;
+    try {
+      for (const name of changed) {
+        // A sign-out or account switch must stop queued writes from the
+        // previous account. The server still enforces the session owner, but
+        // the client must not deliberately send stale data.
+        if (cloudUserRef.current !== userId) return;
+        const result = await writeCloudCollection(
+          name,
+          payload[name],
+          version,
+          lastSyncedItemsRef.current[name],
+        );
+        if (cloudUserRef.current !== userId) return;
+        version = result.version;
+        serverVersionRef.current = version;
+        setServerVersion(version);
+        lastSyncedItemsRef.current[name] = payload[name];
+        if (name === 'sessions') {
+          confirmPendingSessionAwards(payload[name] as StudySession[]);
+        }
+      }
+      setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'saved');
+    } catch (e: any) {
+      if (cloudUserRef.current !== userId) return;
+      if (e?.code !== 'VERSION_CONFLICT') {
+        setSyncStatus('error');
+        setSyncError(e?.message ?? 'Your changes were not saved to the server. Retry the save.');
+        return;
+      }
+      setSyncStatus('resolving');
+      setSyncError(null);
+      try {
+        const remote = await fetchAccountData();
+        if (cloudUserRef.current !== userId) return;
+        if (remote.userId && remote.userId !== userId) {
+          clearLocalSession('This browser is now signed in to a different account. The previous account data was cleared. Sign in again to continue.');
+          return;
+        }
+        const currentLocal = latestStateRef.current ?? state;
+        const localPayload = cloudPayload(currentLocal);
+        const normalizedRemote = normalizeLoadedState(remote.state as Partial<LoadedState>, defaultPreferences());
+        const remotePayload = cloudPayload(normalizedRemote.state);
+        const merged = mergeAccountState(
+          CLOUD_COLLECTIONS,
+          lastSyncedItemsRef.current,
+          localPayload as unknown as Record<string, unknown>,
+          remotePayload as unknown as Record<string, unknown>,
+        );
+        const mergedNormalized = normalizeLoadedState(
+          merged.state as Partial<LoadedState>,
+          defaultPreferences(),
+        );
+        const mergedPayload = cloudPayload(mergedNormalized.state);
+        const conflictCollections = new Set(merged.conflicts.map((c) => c.collection));
+        // The server value is now the baseline. Conflicting collections are
+        // held back until the person chooses; everything else is reconciled
+        // and will be written below at the fresh version.
+        lastSyncedItemsRef.current = { ...remotePayload };
+        remoteBaselineRef.current = { ...remotePayload };
+        heldCollectionsRef.current.clear();
+        for (const name of conflictCollections) heldCollectionsRef.current.add(name);
+        cloudConflictsRef.current = merged.conflicts;
+        setCloudConflicts(merged.conflicts);
+        serverVersionRef.current = remote.version;
+        setServerVersion(remote.version);
+        applyState(mergedNormalized.state);
+
+        let retryVersion = remote.version;
+        for (const name of CLOUD_COLLECTIONS) {
+          if (conflictCollections.has(name)) continue;
+          if (deepEqual(mergedPayload[name], remotePayload[name])) continue;
+          if (cloudUserRef.current !== userId) return;
+          const result = await writeCloudCollection(
+            name,
+            mergedPayload[name],
+            retryVersion,
+            remotePayload[name],
+          );
+          if (cloudUserRef.current !== userId) return;
+          retryVersion = result.version;
+          serverVersionRef.current = retryVersion;
+          setServerVersion(retryVersion);
+          lastSyncedItemsRef.current[name] = mergedPayload[name];
+          if (name === 'sessions') {
+            confirmPendingSessionAwards(mergedPayload[name] as StudySession[]);
+          }
+        }
+        if (!conflictCollections.has('sessions')) {
+          confirmPendingSessionAwards(mergedPayload.sessions as StudySession[]);
+        }
+        if (merged.conflicts.length > 0) {
+          setSyncStatus('review');
+          setSyncError('Some records changed on two devices. Nothing was overwritten; choose which version to keep below.');
+        } else {
+          setSyncStatus('saved');
+        }
+      } catch (resolveError: any) {
+        if (cloudUserRef.current !== userId) return;
+        setSyncStatus('error');
+        setSyncError(resolveError?.message ?? 'The other device change could not be reconciled. Your local changes are still here; retry the save.');
+      }
+    }
+  }, [applyState, clearLocalSession, revalidateSession, confirmPendingSessionAwards]);
+
+  const resolveCloudConflict = useCallback((collection: string, strategy: 'keep-local' | 'use-server') => {
+    if (!(CLOUD_COLLECTIONS as readonly string[]).includes(collection)) return;
+    const name = collection as CloudCollection;
+    heldCollectionsRef.current.delete(name);
+    cloudConflictsRef.current = cloudConflictsRef.current.filter((c) => c.collection !== name);
+    setCloudConflicts(cloudConflictsRef.current);
+    if (strategy === 'use-server') {
+      const remoteValue = remoteBaselineRef.current[name];
+      const current = latestStateRef.current;
+      if (current) {
+        const next = { ...current, [name]: remoteValue } as LoadedState;
+        const normalized = normalizeLoadedState(next as Partial<LoadedState>, defaultPreferences());
+        applyState(normalized.state);
+        lastSyncedItemsRef.current[name] = remoteValue;
+      }
+    }
+    setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'idle');
+    setSyncError(cloudConflictsRef.current.length > 0
+      ? 'Some records still need a decision.'
+      : null);
+    setSaveNonce((n) => n + 1);
+  }, [applyState]);
+
+  // Cloud persistence: only changed collections are sent, sequentially, with
+  // the server's optimistic version. Success is shown only after every write
+  // has been confirmed. IndexedDB is never written in this mode.
+  useEffect(() => {
+    if (mode !== 'cloud' || !ready || !authUser) return;
+    if (saveT.current) clearTimeout(saveT.current);
+    saveT.current = setTimeout(() => {
+      const userId = authUser.userId;
+      cloudSyncChain.current = cloudSyncChain.current
+        .then(() => runCloudSync(userId))
+        .catch(() => undefined);
+      // Destructive operations await the same barrier as local writes.
+      writeChain.current = cloudSyncChain.current;
+    }, 350);
+    return () => {
+      if (saveT.current) clearTimeout(saveT.current);
+    };
+  }, [mode, ready, authUser, saveNonce, runCloudSync, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
 
   // achievement evaluation runs when progress/sessions/checkpoints change
   useEffect(() => {
@@ -1153,7 +1572,8 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration,
     segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings,
-    mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, serverVersion,
+    mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, cloudConflicts,
+    resolveCloudConflict, serverVersion,
     migrationAvailable, migrationSummary, migrationError,
 
     signInWithPassword: async (identifier, password) => {
@@ -1171,6 +1591,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setSessionNotice(null);
       setAuthUserState(res.user);
       await loadCloud(res.user);
+      // A successful login rotates the shared cookie. Other tabs must
+      // revalidate rather than keep showing the previous account's UI.
+      broadcastAuthSignIn(authSyncSourceId);
     },
     signInWithGoogle: async (intent) => {
       await startGoogleAuth(intent);
@@ -1186,6 +1609,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setAuthError(null);
       setSessionNotice(null);
       await loadCloud(res.user);
+      broadcastAuthSignIn(authSyncSourceId);
     },
     signOut: async (allDevices = false) => {
       // Cancel a debounced save and invalidate any in-flight load or login
@@ -1210,15 +1634,16 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         setSetup((prev) => prev);
         cloudUserRef.current = null;
         sessionKeys.current.clear();
-        try {
-          localStorage.removeItem('lq-focus-timer-v1');
-        } catch { /* unavailable */ }
+        clearFocusTimerSnapshots();
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
       }
       if (serverError) {
-        notify(`This device view was cleared, but the server could not confirm sign-out. Your session may still be active; reload and sign out again. ${serverError}`);
+        // The server may still consider the session active, but no tab in this
+        // browser should keep showing private data while that is unknown.
+        broadcastAuthChange('sign-out-unconfirmed', authSyncSourceId);
+        notify(`This browser's tabs were cleared, but the server could not confirm sign-out. Your session may still be active; reload and sign out again. ${serverError}`);
       } else {
-        broadcastAuthSignOut('sign-out');
+        broadcastAuthChange('sign-out', authSyncSourceId);
       }
     },
     refreshSession: async () => {
@@ -1280,9 +1705,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setReady(false);
       setAuthReady(true);
       setSessionNotice(null);
-      try { localStorage.removeItem('lq-focus-timer-v1'); } catch { /* ignore */ }
+      clearFocusTimerSnapshots();
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
-      broadcastAuthSignOut('account-deleted');
+      broadcastAuthChange('account-deleted', authSyncSourceId);
     },
     exportAccountData: async () => {
       await downloadAccountExport();
@@ -1684,11 +2109,27 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         elapsedSec: Math.max(input.activeSec, Number.isFinite(input.elapsedSec) ? input.elapsedSec : input.activeSec),
       };
       setSessions((prev) => (full.clientId && prev.some((x) => x.clientId === full.clientId) ? prev : [...prev, full]));
-      awardXp('focus', xpForFocusSession(full.activeSec), `focus:${full.clientId ?? full.id}`);
       const activityKey = dateKeyInTimezone(finished ?? started, prefs.timezone);
-      awardXp('studyDay', XP_RULES.studyDay, `day:${activityKey}`);
+      if (mode === 'cloud') {
+        // The server save pass confirms this session before the cosmetic XP
+        // ledger is credited. A failed save leaves the award pending for retry.
+        pendingSessionAwards.current.push({
+          sessionKey: full.clientId ?? full.id,
+          activeSec: full.activeSec,
+          activityKey,
+        });
+      } else {
+        awardXp('focus', xpForFocusSession(full.activeSec), `focus:${full.clientId ?? full.id}`);
+        awardXp('studyDay', XP_RULES.studyDay, `day:${activityKey}`);
+      }
     },
-    deleteSession: (id) => setSessions((prev) => prev.filter((s) => s.id !== id)),
+    deleteSession: (id) => {
+      const target = sessions.find((session) => session.id === id);
+      const targetKey = target?.clientId ?? id;
+      pendingSessionAwards.current = pendingSessionAwards.current
+        .filter((award) => award.sessionKey !== targetKey);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    },
     setGoal: (g) => setGoals((prev) => ({ ...prev, [g.dateKey]: g })),
     setPrefs: (patch) => {
       const check = validatePreferencePatch(prefs, patch);
@@ -1711,10 +2152,17 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     saveFlexGoal: (g) => setFlexGoals((prev) => [...prev, { ...g, id: uid(), createdAt: new Date().toISOString(), achievedAt: null, achievedValue: null }]),
     updateFlexGoal: (id, patch) => setFlexGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g))),
     deleteFlexGoal: (id) => setFlexGoals((prev) => prev.filter((g) => g.id !== id)),
-    setChallenge: (patch) => setChallengeState((prev) => ({ ...prev, ...patch })),
+    setChallenge: (patch) => setChallengeState((prev) => {
+      // A fixed challenge freezes its scoring settings after the run starts.
+      if (prev.mode === 'fixed' && prev.fixed) return prev;
+      return normalizeChallenge({ ...prev, ...patch });
+    }),
     setChallengeEnabled: (on) => setChallengeEnabledState(on),
-    // NEVER clears real learning data — sim snapshots/history only.
-    resetChallenge: () => { setRankHistory([]); },
+    // NEVER clears real learning data - sim snapshots/history only.
+    resetChallenge: () => {
+      setRankHistory([]);
+      setChallengeState(normalizeChallenge(DEFAULT_CHALLENGE));
+    },
     pushRank: (r) => setRankHistory((prev) => [...prev.slice(-100), r]),
     setSettings: (patch) => setSettingsState((prev) => sanitizeSettings({ ...prev, ...patch })),
 
@@ -1839,7 +2287,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       }
     },
     setLastDiff: (s) => setLastDiff(s),
-  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState]);
+  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, cloudConflicts, resolveCloudConflict, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState, authSyncSourceId]);
 
   if (mode === 'cloud' && actionRoute) {
     const exit = () => leaveEmailAction('signin');
@@ -1854,7 +2302,6 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       return (
         <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
           <p className="text-lg font-semibold">Connecting to your LearnQuest account…</p>
-          <p className="mt-1 text-sm text-slate-500">Learning data is loaded from the server; the browser is not used as an authoritative store.</p>
         </div>
       );
     }

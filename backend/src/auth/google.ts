@@ -12,11 +12,13 @@ export interface GoogleIdentity {
   name?: string;
 }
 
-export type GoogleAuthIntent = 'login' | 'register';
+export type GoogleAuthIntent = 'login' | 'register' | 'email_change';
 
 export interface GoogleOAuthResult {
   identity: GoogleIdentity;
   intent: GoogleAuthIntent;
+  /** Account that started an authenticated email-change flow. */
+  userId?: string;
 }
 
 export interface GoogleOAuthService {
@@ -102,8 +104,11 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
       if (!env.googleConfigured) {
         throw Object.assign(new Error('Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.'), { status: 503, code: 'SETUP_REQUIRED' });
       }
-      if (intent !== 'login' && intent !== 'register') {
-        throw Object.assign(new Error('Choose whether to sign in or create an account.'), { status: 400, code: 'INVALID_OAUTH_INTENT' });
+      if (intent !== 'login' && intent !== 'register' && intent !== 'email_change') {
+        throw Object.assign(new Error('Choose whether to sign in, create an account, or verify an email change.'), { status: 400, code: 'INVALID_OAUTH_INTENT' });
+      }
+      if (intent === 'email_change' && !userId) {
+        throw Object.assign(new Error('Sign in before changing your email address.'), { status: 401, code: 'AUTH_REQUIRED' });
       }
       if (typeof browserBinding !== 'string' || browserBinding.length < 32 || browserBinding.length > 512) {
         throw Object.assign(new Error('The Google sign-in browser binding is missing. Start again.'), { status: 400, code: 'INVALID_OAUTH_BINDING' });
@@ -195,9 +200,13 @@ export function createGoogleOAuthService(store: DataStore, deps?: {
       try {
         const identity = await verify(tokenResponse.id_token, { nonce: record.nonce, clientId: env.googleClientId });
         // State documents created by an older deployment have no intent. They
-        // are treated as login, never as implicit registration.
-        const intent: GoogleAuthIntent = record.intent === 'register' ? 'register' : 'login';
-        return { identity, intent };
+        // are treated as login, never as implicit registration or email change.
+        const intent: GoogleAuthIntent = record.intent === 'register'
+          ? 'register'
+          : record.intent === 'email_change'
+            ? 'email_change'
+            : 'login';
+        return { identity, intent, ...(record.userId ? { userId: record.userId } : {}) };
       } catch (e: any) {
         if (e?.status) throw e;
         throw Object.assign(new Error('Google identity token validation failed.'), { status: 401, code: 'INVALID_GOOGLE_TOKEN' });

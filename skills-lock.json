@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "skills": {
+    "mongodb-schema-design": {
+      "source": "mongodb/agent-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/mongodb-schema-design/SKILL.md",
+      "computedHash": "932249833753aab8cc9f4a5016f406eb82631be57d795fad4611b75a8de34d03"
+    },
+    "playwright-best-practices-for-agents": {
+      "source": "checkly/docs",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/playwright-best-practices-for-agents/SKILL.md",
+      "computedHash": "4fc81254da38260a28fe61de8064477d983b954577c6047708f761fda183f707"
+    },
+    "security-best-practices": {
+      "source": "openai/skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/security-best-practices/SKILL.md",
+      "computedHash": "0c42fff660b6f7e85add36437edc36976466bb254b7cd9eb38ec67b2ad64a9bf"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/react-best-practices/SKILL.md",
+      "computedHash": "6b526d013e28073246a36f99b529bc43745d30832ecfa8217b359c34f260ca6b"
+    }
+  }
+}

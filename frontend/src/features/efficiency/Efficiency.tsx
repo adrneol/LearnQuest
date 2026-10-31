@@ -104,19 +104,20 @@ export function Efficiency() {
     return {
       unique: Math.round(unique), content: Math.round(content), active: Math.round(active),
       focus, allScopedFocus, eff, util, days, overall, trend, perPl,
+      contentOnlyDays: days.filter((d) => d.focusMin === 0 && d.uniqueMin > 0).length,
       hasRecordedSegments: segs.length > 0,
       hasScopedFocusSessions: scopedSessions.length > 0,
       estimatedFocusInScope: scopedSessions.filter((x) => x.estimated).reduce((a, x) => a + x.activeSec, 0),
     };
   }, [s.segments, s.sessions, s.playlists, scope, src, tz, todayTick]);
 
-  if (!snap && scope !== 'all') return <Empty title="No active playlist" hint="Efficiency needs recorded playback and focus sessions." />;
+  if (!snap && scope !== 'all') return <Empty title="No active playlist" hint="Learning throughput needs recorded playback and focus sessions." />;
 
   return (
     <div className="space-y-4">
       <Card>
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="mr-auto text-base font-bold">Learning efficiency</h2>
+          <h2 className="mr-auto text-base font-bold">Learning throughput</h2>
           <div className="w-52">
             <Dropdown
               label="Scope"
@@ -143,13 +144,13 @@ export function Efficiency() {
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
           <EffStat
-            label="Content efficiency"
+            label="Learning throughput"
             value={model.eff !== null ? `${model.eff.toFixed(1)}%` : 'n/a'}
             title={model.eff === null
               ? model.focus === 0
-                ? 'Undefined: focused study is zero in this selection.'
+                ? 'Undefined: timer-active study is zero in this selection.'
                 : 'Undefined: the inputs are invalid or negative.'
-              : 'Unique content ÷ focused study × 100'}
+              : 'Unique content ÷ timer-active study × 100'}
           />
           <EffStat
             label="Playback utilization"
@@ -158,28 +159,28 @@ export function Efficiency() {
           />
           <EffStat label="Unique content / focused study" value={`${formatHuman(model.unique)} / ${formatHuman(model.focus)}`} title="Aggregate eligible seconds in the current scope and evidence selection" />
           <EffStat
-            label="Overall aggregate ratio"
+            label="Period throughput"
             value={model.overall !== null ? `${model.overall.toFixed(1)}%` : 'n/a'}
-            title="Aggregate unique content ÷ aggregate focused study — never the mean of daily percentages"
+            title="Aggregate unique content ÷ aggregate timer-active study — never the mean of daily percentages"
           />
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          <b>Content efficiency</b> = unique content ÷ focused study × 100. <b>Playback utilization</b> = active playback
-          (playing time only; pauses and buffering excluded) ÷ focused study × 100. <b>Overall</b> uses the aggregate ratio
-          over this exact scope and evidence selection, never the average of daily percentages. Over 100% is normal above
-          1× speed; lower is not worse — notes, coding and practice take real time. <b>n/a means undefined</b> (usually a
-          zero denominator), not a fabricated zero.
+          <b>Learning throughput</b> = unique content ÷ timer-active study × 100. <b>Playback utilization</b> = active playback
+          (playing time only; pauses and buffering excluded) ÷ timer-active study × 100. <b>Period throughput</b> uses the
+          aggregate ratio over this exact scope and evidence selection, never the average of daily percentages. Over 100% is
+          normal above 1× speed; lower is not worse — notes, coding and practice take real time. <b>n/a means undefined</b>
+          (usually a zero denominator), not a fabricated zero.
         </p>
         {model.focus === 0 && (
           <div className="mt-2 rounded-xl border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100" role="status">
             {model.unique > 0 ? (
               <>
-                {formatHuman(model.unique)} of unique content is recorded, but there is no matching focused study in this
-                selection, so efficiency has no denominator and is shown as <b>n/a</b>. The content measurement itself is
+                {formatHuman(model.unique)} of unique content is recorded, but there is no matching timer-active study in this
+                selection, so throughput has no denominator and is shown as <b>n/a</b>. The content measurement itself is
                 still valid; record a Focus session (or change the Evidence filter) to calculate a ratio.
               </>
             ) : (
-              <>No focused study and no unique content are recorded for this selection, so efficiency is unavailable. This is an empty result, not a 0% performance score.</>
+              <>No timer-active study and no unique content are recorded for this selection, so throughput is unavailable. This is an empty result, not a 0% performance score.</>
             )}
             {model.allScopedFocus > 0 && src !== 'all' && (
               <> There are {formatHuman(model.allScopedFocus)} of focus time under other evidence; choose <b>All evidence</b> to include it.</>
@@ -191,9 +192,9 @@ export function Efficiency() {
         )}
         {model.focus > 0 && model.unique === 0 && (
           <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-slate-300" role="status">
-            Focused time exists but no eligible unique content is recorded in this selection. Content efficiency is a real
-            <b> 0%</b>: there is a denominator, but no coverage numerator. Playback utilization may still be meaningful if
-            active playback exists.
+            Timer-active time exists but no eligible unique content is recorded in this selection. Learning throughput is a
+            real <b>0%</b>: there is a denominator, but no coverage numerator. Playback utilization may still be meaningful
+            if active playback exists.
           </div>
         )}
         <p className="mt-2 text-[11px] text-slate-500">
@@ -207,31 +208,31 @@ export function Efficiency() {
           <summary className="cursor-pointer font-semibold text-slate-200">What exactly am I looking at?</summary>
           <ul className="mt-1 list-disc space-y-1 pl-5">
             <li><b>Numerator — unique content:</b> video-timeline seconds covered at least once (interval union). Rewatching the same 5 minutes never adds new content; seeking over unseen minutes never credits them.</li>
-            <li><b>Denominator — focused study:</b> active seconds from focus sessions (pauses/breaks excluded) plus genuine note-taking, coding, and practice time inside active study. Your real measurements are never clamped — 110%+ is possible and stays exact.</li>
-            <li><b>Playback utilization:</b> active playback wall time ÷ focused study × 100. Active playback excludes pauses and buffering. Above 100% means playback was observed without an equal amount of tracked focus; the value is shown rather than clamped, so the mismatch stays visible.</li>
+            <li><b>Denominator — timer-active study:</b> active seconds from focus sessions (pauses/breaks excluded) plus genuine note-taking, coding, and practice time inside active study. Your real measurements are never clamped — 110%+ is possible and stays exact.</li>
+            <li><b>Playback utilization:</b> active playback wall time ÷ timer-active study × 100. Active playback excludes pauses and buffering. Above 100% means playback was observed without an equal amount of tracked focus; the value is shown rather than clamped, so the mismatch stays visible.</li>
             <li><b>Worked examples:</b> 3 h study → 1 h unique content = 33.33% (deep study, not bad learning) · 90 min → 60 min = 66.67% · 90 min → 99 min = 110% (faster-than-realtime coverage) · 10 min focused + 12 min active playback = 120% utilization.</li>
             <li><b>Evidence filter:</b> verified = Player-observed playback plus timer-observed focus; self-reported = hand-logged timeline entries plus estimated focus corrections. The filter applies to both sides of the ratio. Throughput describes coverage speed — not intelligence, mastery, or comprehension.</li>
-            <li><b>Arena uses a different aggregation on purpose:</b> the Arena ranks the <i>mean of eligible daily percentages</i> (equal weight per day), while this page shows the <i>aggregate ratio</i>. Same records, different question — so the two numbers will differ, and both are correct.</li>
+            <li><b>Arena v2 uses a different question on purpose:</b> it scores <i>75% playlist progress + 25% qualifying-day consistency</i>. This page shows the <i>aggregate content/focus ratio</i>. They use the same records but answer different questions; neither number replaces the other.</li>
           </ul>
         </details>
         {model.unique > 0 && model.focus === 0 && (
           <p className="mt-1 text-xs text-amber-300">
-            {formatHuman(model.unique)} of unique content exists without a Focus denominator. Content coverage is not invalid;
-            efficiency simply cannot be calculated until focused study is recorded.
+            {formatHuman(model.unique)} of unique content exists without a timer denominator. Content coverage is not invalid;
+            throughput simply cannot be calculated until timer-active study is recorded.
           </p>
         )}
       </Card>
 
       <Card>
-        <h3 className="text-sm font-bold">Daily efficiency (14 days, {tz})</h3>
-        <p className="text-[11px] text-slate-500">Content efficiency in percent per day; gaps mean no measurable efficiency that day (never zero-filled)</p>
+        <h3 className="text-sm font-bold">Daily throughput (14 days, {tz})</h3>
+        <p className="text-[11px] text-slate-500">Learning throughput in percent per day; gaps mean no measurable ratio that day (never zero-filled)</p>
         <div className="h-52 min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={model.days} margin={{ top: 8, right: 12, bottom: 20, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff14" />
               <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} interval={1} label={{ value: 'day (MM-DD)', position: 'insideBottom', offset: -14, fontSize: 11, fill: '#64748b' }} />
               <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={48} label={{ value: '%', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
-              <Tooltip contentStyle={{ backgroundColor: '#141830', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 12, fontSize: 12, color: '#e8ecf6' }} formatter={(v: any) => [v === null ? 'n/a' : `${v}%`, 'efficiency']} />
+              <Tooltip contentStyle={{ backgroundColor: '#141830', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 12, fontSize: 12, color: '#e8ecf6' }} formatter={(v: any) => [v === null ? 'n/a' : `${v}%`, 'throughput']} />
               <Line type="monotone" dataKey="eff" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls={false} />
             </LineChart>
           </ResponsiveContainer>
@@ -241,6 +242,7 @@ export function Efficiency() {
           ({model.trend.meaningful
             ? '3+ active days in each window — comparable'
             : `only ${model.trend.sampleRecent}/${model.trend.samplePrevious} active days with content — not enough to claim a meaningful change`}).
+          {model.contentOnlyDays > 0 && ` ${model.contentOnlyDays} day${model.contentOnlyDays === 1 ? '' : 's'} have content but no timer focus, so those days have no throughput ratio.`}
         </p>
       </Card>
 

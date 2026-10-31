@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { StoreProvider } from '../src/app/store.js';
-import { broadcastAuthSignOut, subscribeAuthSignOut } from '../src/app/authSync.js';
+import { AUTH_SYNC_TAB_ID, broadcastAuthSignOut, subscribeAuthSignOut } from '../src/app/authSync.js';
 import { setCsrfToken } from '../src/services/api/http.js';
 import type { AuthConfig, AuthUser } from '../src/services/api/authApi.js';
 
@@ -54,7 +54,8 @@ const EMPTY_STATE = {
   prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, reducedMotion: false, minViableMin: 10 },
 };
 
-const STORAGE_KEY = 'lq-auth-sync-v1';
+const STORAGE_KEY = 'lq-auth-sync-v2';
+const LEGACY_STORAGE_KEY = 'lq-auth-sync-v1';
 const realFetch = globalThis.fetch;
 
 function json(body: unknown, status = 200): Response {
@@ -66,9 +67,18 @@ function json(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function emitStorageSignOut(reason = 'sign-out') {
+/** v2 storage fallback shape, as written by the current protocol. */
+function emitStorageAuthChange(reason = 'sign-out', generation = 1) {
   window.dispatchEvent(new StorageEvent('storage', {
     key: STORAGE_KEY,
+    newValue: JSON.stringify({ type: 'auth-change', reason, at: Date.now(), generation }),
+  }));
+}
+
+/** v1 shape kept for tabs left open across a deployment. */
+function emitStorageSignOut(reason = 'sign-out') {
+  window.dispatchEvent(new StorageEvent('storage', {
+    key: LEGACY_STORAGE_KEY,
     newValue: JSON.stringify({ type: 'signed-out', reason, at: Date.now() }),
   }));
 }
@@ -102,10 +112,11 @@ describe('cross-tab auth sync messages', () => {
     broadcastAuthSignOut('sign-out');
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].name).toBe('lq-auth-sync-v1');
-    expect(Object.keys(sent[0].data).sort()).toEqual(['at', 'reason', 'type']);
-    expect(sent[0].data).toMatchObject({ type: 'signed-out', reason: 'sign-out' });
+    expect(sent[0].name).toBe('lq-auth-sync-v2');
+    expect(Object.keys(sent[0].data).sort()).toEqual(['at', 'generation', 'reason', 'sourceId', 'type']);
+    expect(sent[0].data).toMatchObject({ type: 'auth-change', reason: 'sign-out', sourceId: AUTH_SYNC_TAB_ID });
     expect(typeof sent[0].data.at).toBe('number');
+    expect(typeof sent[0].data.generation).toBe('number');
     // BroadcastChannel succeeded, so no storage fallback write is made.
     expect(storageSpy).not.toHaveBeenCalledWith(STORAGE_KEY, expect.anything());
     const serialized = JSON.stringify(sent[0].data);
@@ -122,8 +133,8 @@ describe('cross-tab auth sync messages', () => {
     const [key, raw] = storageSpy.mock.calls[0];
     expect(key).toBe(STORAGE_KEY);
     const parsed = JSON.parse(String(raw));
-    expect(parsed).toMatchObject({ type: 'signed-out', reason: 'password-reset' });
-    expect(Object.keys(parsed).sort()).toEqual(['at', 'reason', 'type']);
+    expect(parsed).toMatchObject({ type: 'auth-change', reason: 'password-reset', sourceId: AUTH_SYNC_TAB_ID });
+    expect(Object.keys(parsed).sort()).toEqual(['at', 'generation', 'reason', 'sourceId', 'type']);
     expect(String(raw)).not.toMatch(/token|cookie|@|userid/i);
   });
 
@@ -137,23 +148,27 @@ describe('cross-tab auth sync messages', () => {
 
     expect(storageSpy).toHaveBeenCalledWith(STORAGE_KEY, expect.any(String));
     expect(JSON.parse(storageSpy.mock.calls[0][1])).toMatchObject({
-      type: 'signed-out',
+      type: 'auth-change',
       reason: 'account-deleted',
     });
   });
 
-  it('delivers valid storage fallbacks and ignores malformed or unknown reasons', () => {
+  it('delivers v2 storage fallbacks, accepts v1 for compatibility, and ignores malformed or unknown reasons', () => {
     vi.stubGlobal('BroadcastChannel', undefined);
     const handler = vi.fn();
     const unsubscribe = subscribeAuthSignOut(handler);
 
-    emitStorageSignOut('email-change');
+    emitStorageAuthChange('email-change', 2);
     expect(handler).toHaveBeenCalledWith('email-change');
+
+    handler.mockClear();
+    emitStorageSignOut('password-reset');
+    expect(handler).toHaveBeenCalledWith('password-reset');
 
     handler.mockClear();
     window.dispatchEvent(new StorageEvent('storage', {
       key: STORAGE_KEY,
-      newValue: JSON.stringify({ type: 'signed-out', reason: 'session-token-is-not-a-reason', at: 1 }),
+      newValue: JSON.stringify({ type: 'auth-change', reason: 'session-token-is-not-a-reason', at: 1, generation: 3 }),
     }));
     window.dispatchEvent(new StorageEvent('storage', {
       key: STORAGE_KEY,
@@ -161,13 +176,44 @@ describe('cross-tab auth sync messages', () => {
     }));
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'unrelated-app-key',
-      newValue: JSON.stringify({ type: 'signed-out', reason: 'sign-out', at: 1 }),
+      newValue: JSON.stringify({ type: 'auth-change', reason: 'sign-out', at: 1, generation: 4 }),
     }));
     expect(handler).not.toHaveBeenCalled();
 
     unsubscribe();
-    emitStorageSignOut('sign-out');
+    emitStorageAuthChange('sign-out', 5);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('ignores a message echoed by its own page load', () => {
+    vi.stubGlobal('BroadcastChannel', undefined);
+    const handler = vi.fn();
+    const unsubscribe = subscribeAuthSignOut(handler);
+
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: STORAGE_KEY,
+      newValue: JSON.stringify({
+        type: 'auth-change',
+        reason: 'sign-in',
+        at: Date.now(),
+        generation: 1,
+        sourceId: AUTH_SYNC_TAB_ID,
+      }),
+    }));
+    expect(handler).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: STORAGE_KEY,
+      newValue: JSON.stringify({
+        type: 'auth-change',
+        reason: 'sign-in',
+        at: Date.now(),
+        generation: 2,
+        sourceId: 'different-tab',
+      }),
+    }));
+    expect(handler).toHaveBeenCalledWith('sign-in');
+    unsubscribe();
   });
 });
 
@@ -190,7 +236,7 @@ describe('store integration with cross-tab sign-out', () => {
     );
     expect(await screen.findByText('APP CONTENT')).toBeInTheDocument();
 
-    emitStorageSignOut('sign-out');
+    emitStorageAuthChange('sign-out');
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByText('APP CONTENT')).toBeNull();
@@ -247,7 +293,7 @@ describe('store integration with cross-tab sign-out', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    emitStorageSignOut('sign-out');
+    emitStorageAuthChange('sign-out');
     resolveLogin(json({ authenticated: true, user: USER, csrfToken: 'csrf-late' }));
 
     expect(await screen.findByText(/A sign-out happened in another tab while this request was in progress/i)).toBeInTheDocument();

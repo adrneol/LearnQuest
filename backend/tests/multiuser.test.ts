@@ -4,7 +4,7 @@ import type { Express } from 'express';
 import { createApp } from '../src/app.js';
 import { createMemoryDb } from '../src/db/memoryAdapter.js';
 import { createDataStore, type DataStore } from '../src/store.js';
-import { createAccountFromGoogle, completeOnboarding } from '../src/auth/accounts.js';
+import { createAccountFromGoogle, completeOnboarding, findAccountById } from '../src/auth/accounts.js';
 import { assertProductionConfig } from '../src/config/env.js';
 import { hashCode, sessionTokenHash } from '../src/auth/crypto.js';
 import { actionTokenDigest } from '../src/auth/actionTokens.js';
@@ -68,14 +68,14 @@ beforeEach(() => {
   store = createDataStore(db);
   email = new FakeEmail();
   googleIdentity = { sub: 'google-sub-1', email: 'one@example.test', emailVerified: true, name: 'One' };
-  const started = new Map<string, { intent: GoogleAuthIntent; binding: string }>();
+  const started = new Map<string, { intent: GoogleAuthIntent; binding: string; userId: string | null }>();
   google = {
     configured: true,
-    async start(intent: GoogleAuthIntent, _userId: string | null, browserBinding: string) {
+    async start(intent: GoogleAuthIntent, userId: string | null, browserBinding: string) {
       // Include the binding in the state key only for this fake; the real
       // service stores a digest of the binding alongside the state.
       const state = `fake-state-${intent}-${browserBinding.slice(0, 8)}`;
-      started.set(state, { intent, binding: browserBinding });
+      started.set(state, { intent, binding: browserBinding, userId });
       return { url: `https://accounts.google.test/auth?state=${encodeURIComponent(state)}`, state };
     },
     async complete(code: string, state: string, browserBinding: string) {
@@ -84,7 +84,11 @@ beforeEach(() => {
         throw Object.assign(new Error('bad oauth'), { status: 400, code: 'INVALID_OAUTH_STATE' });
       }
       started.delete(state);
-      return { identity: { ...googleIdentity }, intent: record.intent };
+      return {
+        identity: { ...googleIdentity },
+        intent: record.intent,
+        ...(record.userId ? { userId: record.userId } : {}),
+      };
     },
   };
   app = createApp({ store, email, google });
@@ -109,10 +113,35 @@ async function startGoogle(intent: GoogleAuthIntent) {
   return { state: state!, cookie: binding! };
 }
 
+async function startGoogleAs(intent: GoogleAuthIntent, sessionCookieValue: string) {
+  const res = await request(app)
+    .get('/api/auth/google/start')
+    .set('Cookie', sessionCookieValue)
+    .query({ intent });
+  expect(res.status).toBe(200);
+  const state = new URL(res.body.url).searchParams.get('state');
+  expect(state).toBeTruthy();
+  const cookies = (res.headers['set-cookie'] ?? []) as unknown as string[];
+  const binding = cookies.find((cookie) => cookie.startsWith('lq_oauth='))?.split(';')[0];
+  expect(binding, 'OAuth start must set a browser-binding cookie').toBeTruthy();
+  return { state: state!, cookie: binding! };
+}
+
 async function callback(start: { state: string; cookie: string }, code = 'code-ok') {
   return request(app)
     .get('/api/auth/google/callback')
     .set('Cookie', start.cookie)
+    .query({ code, state: start.state });
+}
+
+async function callbackWithSession(
+  start: { state: string; cookie: string },
+  sessionCookieValue: string,
+  code = 'code-ok',
+) {
+  return request(app)
+    .get('/api/auth/google/callback')
+    .set('Cookie', `${start.cookie}; ${sessionCookieValue}`)
     .query({ code, state: start.state });
 }
 
@@ -576,6 +605,105 @@ describe('OAuth, email links, and password recovery security', () => {
     const res = await request(app).get('/api/auth/google/start').query({ intent: 'admin' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_OAUTH_INTENT');
+  });
+
+  it('requires an authenticated session to start an email-change flow', async () => {
+    const res = await request(app).get('/api/auth/google/start').query({ intent: 'email_change' });
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('AUTH_REQUIRED');
+  });
+
+  it('changes email only through the matching linked Google identity and revokes every session', async () => {
+    const account = await seedUser(
+      'email_change_ok',
+      'email-change-old@example.test',
+      'correct horse battery staple',
+      'google-sub-email-change-ok',
+    );
+    const session = await login('email_change_ok', 'correct horse battery staple');
+    googleIdentity = {
+      sub: 'google-sub-email-change-ok',
+      email: 'email-change-new@example.test',
+      emailVerified: true,
+    };
+    const start = await startGoogleAs('email_change', session.cookie);
+    const cb = await callbackWithSession(start, session.cookie);
+    expect(cb.status).toBe(303);
+    expect(cb.headers.location).toContain('notice=email-changed');
+
+    const updated = await findAccountById(store, account.userId);
+    expect(updated?.email).toBe('email-change-new@example.test');
+    expect(updated?.emailNormalized).toBe('email-change-new@example.test');
+    expect(await store.sessions.count({ userId: account.userId, revokedAt: null })).toBe(0);
+    expect(email.notices.some((notice) => notice.to === 'email-change-old@example.test')).toBe(true);
+
+    const stale = await request(app).get('/api/account/data').set('Cookie', session.cookie);
+    expect(stale.status).toBe(401);
+  });
+
+  it('rejects an email change from a different Google identity without changing the account', async () => {
+    const account = await seedUser(
+      'email_change_wrong',
+      'email-wrong-old@example.test',
+      'correct horse battery staple',
+      'google-sub-email-change-right',
+    );
+    const session = await login('email_change_wrong', 'correct horse battery staple');
+    googleIdentity = {
+      sub: 'google-sub-email-change-other',
+      email: 'attacker@example.test',
+      emailVerified: true,
+    };
+    const start = await startGoogleAs('email_change', session.cookie);
+    const cb = await callbackWithSession(start, session.cookie);
+    expect(cb.headers.location).toContain('error=GOOGLE_IDENTITY_MISMATCH');
+
+    const unchanged = await findAccountById(store, account.userId);
+    expect(unchanged?.email).toBe('email-wrong-old@example.test');
+    expect(await store.sessions.count({ userId: account.userId, revokedAt: null })).toBe(1);
+  });
+
+  it('links a first Google identity for an email change only inside the recent-auth window', async () => {
+    const account = await seedUser(
+      'email_link_first',
+      'email-link-old@example.test',
+      'correct horse battery staple',
+      'google-sub-will-be-removed',
+    );
+    await store.accounts.updateOne({ userId: account.userId }, { $set: { googleSub: null } });
+    const session = await login('email_link_first', 'correct horse battery staple');
+    googleIdentity = {
+      sub: 'google-sub-first-link',
+      email: 'email-link-new@example.test',
+      emailVerified: true,
+    };
+    const start = await startGoogleAs('email_change', session.cookie);
+    const cb = await callbackWithSession(start, session.cookie);
+    expect(cb.headers.location).toContain('notice=email-changed');
+    const updated = await findAccountById(store, account.userId);
+    expect(updated?.googleSub).toBe('google-sub-first-link');
+    expect(updated?.email).toBe('email-link-new@example.test');
+  });
+
+  it('rejects first-time Google linking for an email change outside the recent-auth window', async () => {
+    const account = await seedUser(
+      'email_link_stale',
+      'email-stale-old@example.test',
+      'correct horse battery staple',
+      'google-sub-stale-removed',
+    );
+    await store.accounts.updateOne({ userId: account.userId }, { $set: { googleSub: null } });
+    const session = await login('email_link_stale', 'correct horse battery staple');
+    await store.sessions.updateOne(
+      { userId: account.userId },
+      { $set: { reauthenticatedAt: new Date(Date.now() - 60 * 60_000).toISOString() } },
+    );
+    const res = await request(app)
+      .get('/api/auth/google/start')
+      .set('Cookie', session.cookie)
+      .query({ intent: 'email_change' });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RECENT_AUTH_REQUIRED');
   });
 
   it('rejects onboarding from a password session or a tampered Google onboarding binding', async () => {
