@@ -15,7 +15,9 @@
  *
  * v2 adds `sign-in` and `sign-out-unconfirmed`, so an older tab cannot keep
  * showing the previous account after another tab signs in, and a failed server
- * logout still clears every same-browser tab.
+ * logout still clears every same-browser tab. Receivers accept only a strict
+ * v2 shape from the current channel/key, a strict legacy v1 shape from the
+ * legacy key, and ignore stale, future-dated, duplicate, or malformed events.
  */
 export type AuthSyncReason =
   | 'sign-in'
@@ -41,6 +43,14 @@ const LEGACY_STORAGE_KEY = 'lq-auth-sync-v1';
 const VALID_REASONS: AuthSyncReason[] = [
   'sign-in', 'sign-out', 'sign-out-unconfirmed', 'password-reset', 'email-change', 'account-deleted',
 ];
+// A notification is only useful while the action is current. Ignoring old
+// signals prevents a delayed event from signing out a tab that has since
+// signed back in; a skipped signal is still caught by the server on the next
+// authenticated request or by the visibility revalidation check.
+const MAX_EVENT_AGE_MS = 30_000;
+const MAX_FUTURE_SKEW_MS = 5_000;
+const MAX_SOURCE_ID_LENGTH = 128;
+const MAX_SEEN_SOURCES = 64;
 let generation = 0;
 
 /**
@@ -74,16 +84,48 @@ function isReason(value: unknown): value is AuthSyncReason {
   return typeof value === 'string' && VALID_REASONS.includes(value as AuthSyncReason);
 }
 
-function parseEvent(value: unknown): { reason: AuthSyncReason; sourceId: string | null } | null {
+interface ParsedAuthSyncEvent {
+  reason: AuthSyncReason;
+  sourceId: string | null;
+  generation: number | null;
+  at: number;
+}
+
+function parseEvent(value: unknown, shape: 'v2' | 'v1'): ParsedAuthSyncEvent | null {
   if (!value || typeof value !== 'object') return null;
   const event = value as Record<string, unknown>;
-  const timestampValid = typeof event.at === 'number' && Number.isFinite(event.at);
-  if (!timestampValid || !isReason(event.reason)) return null;
-  if (event.type !== 'auth-change' && event.type !== 'signed-out') return null;
+  if (!isReason(event.reason)) return null;
+  if (typeof event.at !== 'number' || !Number.isFinite(event.at)) return null;
+
+  if (shape === 'v1') {
+    if (event.type !== 'signed-out') return null;
+    return { reason: event.reason, sourceId: null, generation: null, at: event.at };
+  }
+
+  if (event.type !== 'auth-change') return null;
+  if (
+    typeof event.generation !== 'number'
+    || !Number.isSafeInteger(event.generation)
+    || event.generation <= 0
+  ) return null;
+  if (
+    typeof event.sourceId !== 'string'
+    || event.sourceId.length === 0
+    || event.sourceId.length > MAX_SOURCE_ID_LENGTH
+  ) return null;
   return {
     reason: event.reason,
-    sourceId: typeof event.sourceId === 'string' && event.sourceId.length > 0 ? event.sourceId : null,
+    sourceId: event.sourceId,
+    generation: event.generation,
+    at: event.at,
   };
+}
+
+function isFresh(at: number, now = Date.now()): boolean {
+  const age = now - at;
+  return Number.isFinite(age)
+    && age >= -MAX_FUTURE_SKEW_MS
+    && age <= MAX_EVENT_AGE_MS;
 }
 
 export function broadcastAuthChange(
@@ -133,14 +175,30 @@ export function subscribeAuthChange(
   sourceId: string = AUTH_SYNC_TAB_ID,
 ): () => void {
   if (typeof window === 'undefined') return () => undefined;
+  const seenGenerations = new Map<string, number>();
+
+  const accept = (parsed: ParsedAuthSyncEvent): boolean => {
+    if (parsed.sourceId === sourceId) return false;
+    if (!isFresh(parsed.at)) return false;
+    if (!parsed.sourceId || parsed.generation === null) return true;
+    const previous = seenGenerations.get(parsed.sourceId) ?? 0;
+    if (parsed.generation <= previous) return false;
+    seenGenerations.delete(parsed.sourceId);
+    seenGenerations.set(parsed.sourceId, parsed.generation);
+    if (seenGenerations.size > MAX_SEEN_SOURCES) {
+      const oldest = seenGenerations.keys().next().value;
+      if (oldest) seenGenerations.delete(oldest);
+    }
+    return true;
+  };
+
   let channel: BroadcastChannel | null = null;
   try {
     if (typeof BroadcastChannel !== 'undefined') {
       channel = new BroadcastChannel(CHANNEL_NAME);
       channel.onmessage = (message: MessageEvent) => {
-        const parsed = parseEvent(message.data);
-        if (!parsed || parsed.sourceId === sourceId) return;
-        handler(parsed.reason);
+        const parsed = parseEvent(message.data, 'v2');
+        if (parsed && accept(parsed)) handler(parsed.reason);
       };
     }
   } catch {
@@ -150,8 +208,11 @@ export function subscribeAuthChange(
   const onStorage = (event: StorageEvent) => {
     if ((event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) || !event.newValue) return;
     try {
-      const parsed = parseEvent(JSON.parse(event.newValue));
-      if (parsed && parsed.sourceId !== sourceId) handler(parsed.reason);
+      const parsed = parseEvent(
+        JSON.parse(event.newValue),
+        event.key === LEGACY_STORAGE_KEY ? 'v1' : 'v2',
+      );
+      if (parsed && accept(parsed)) handler(parsed.reason);
     } catch {
       // Ignore malformed or unrelated storage values.
     }

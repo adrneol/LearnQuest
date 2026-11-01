@@ -3,12 +3,26 @@
 export class ApiError extends Error {
   status: number;
   code?: string;
-  constructor(message: string, status: number, code?: string) {
+  /** Server-requested cooldown for a 429 response, when provided. */
+  retryAfterSec?: number;
+  constructor(message: string, status: number, code?: string, retryAfterSec?: number) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.retryAfterSec = retryAfterSec;
   }
+}
+
+function parseRetryAfter(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value.trim());
+  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) {
+    return Math.max(1, Math.ceil((date - Date.now()) / 1_000));
+  }
+  return undefined;
 }
 
 /** API requests always stay on the frontend origin and use its /api proxy. */
@@ -99,7 +113,10 @@ export async function apiRequest<T = any>(path: string, opts: ApiRequestOptions 
       signal: ctrl.signal,
     });
     if (opts.raw) {
-      if (!res.ok) throw new ApiError('The account export could not be downloaded.', res.status);
+      if (!res.ok) {
+        const retryAfter = parseRetryAfter(res.headers?.get?.('Retry-After'));
+        throw new ApiError('The account export could not be downloaded.', res.status, undefined, retryAfter);
+      }
       return (await res.blob()) as unknown as T;
     }
     const text = await res.text();
@@ -107,6 +124,10 @@ export async function apiRequest<T = any>(path: string, opts: ApiRequestOptions 
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     if (!res.ok) {
       const code = typeof parsed?.code === 'string' ? parsed.code : undefined;
+      const retryAfter = parseRetryAfter(res.headers?.get?.('Retry-After'))
+        ?? (Number.isFinite(Number(parsed?.retryAfterSec)) && Number(parsed.retryAfterSec) > 0
+          ? Math.ceil(Number(parsed.retryAfterSec))
+          : undefined);
       // Only a request made with an established session context can prove that
       // the session itself expired. A 401 from a sign-in/recovery endpoint, a
       // tab that never had a session, or a wrong-password check is a normal
@@ -134,6 +155,7 @@ export async function apiRequest<T = any>(path: string, opts: ApiRequestOptions 
         parsed?.error ?? `Request failed (HTTP ${res.status}).`,
         res.status,
         code,
+        retryAfter,
       );
     }
     return parsed as T;

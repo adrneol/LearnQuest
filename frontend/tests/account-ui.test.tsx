@@ -162,6 +162,82 @@ describe('account screen', () => {
     await waitFor(() => expect(storeRef.current.revokeAccountSession).toHaveBeenCalledWith('s-other'));
   });
 
+  it('reports a rate-limited session revocation against that operation', async () => {
+    storeRef.current.revokeAccountSession = vi.fn().mockRejectedValueOnce(Object.assign(
+      new Error('Too many requests. Wait and try again.'),
+      { status: 429, code: 'RATE_LIMITED', retryAfterSec: 20 },
+    ));
+
+    render(<Account section="security" onSection={() => undefined} />);
+    await screen.findByText('This device');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /That session could not be signed out.*rate-limiting requests.*20 seconds/i,
+    );
+    expect(screen.queryByText(/JSON backup/i)).toBeNull();
+    expect(screen.getByText('Other Browser')).toBeInTheDocument();
+  });
+
+  it('loads active sessions once per mount, even when unrelated store state changes', async () => {
+    const view = render(<Account section="security" onSection={() => undefined} />);
+    await screen.findByText('This device');
+    expect(storeRef.current.listAccountSessions).toHaveBeenCalledTimes(1);
+
+    storeRef.current = { ...storeRef.current, syncStatus: 'saving', serverVersion: 2 };
+    view.rerender(<Account section="security" onSection={() => undefined} />);
+    await Promise.resolve();
+
+    expect(storeRef.current.listAccountSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the last loaded sessions and reports a specific 429 cooldown', async () => {
+    storeRef.current.listAccountSessions = vi.fn()
+      .mockResolvedValueOnce([
+        {
+          sessionId: 's-current', current: true, userAgent: 'Test Browser',
+          lastSeenAt: '2026-10-27T10:00:00.000Z', expiresAt: '2026-11-26T10:00:00.000Z',
+        },
+        {
+          sessionId: 's-other', current: false, userAgent: 'Other Browser',
+          lastSeenAt: '2026-10-26T10:00:00.000Z', expiresAt: '2026-11-25T10:00:00.000Z',
+        },
+      ])
+      .mockRejectedValueOnce(Object.assign(
+        new Error('Too many requests. Wait and try again.'),
+        { status: 429, code: 'RATE_LIMITED', retryAfterSec: 30 },
+      ));
+
+    render(<Account section="security" onSection={() => undefined} />);
+    await screen.findByText('This device');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Showing the last loaded session list.*rate-limiting requests.*30 seconds/i,
+    );
+    expect(screen.getByText('This device')).toBeInTheDocument();
+    expect(screen.getByText('Other Browser')).toBeInTheDocument();
+    expect(screen.queryByText(/JSON backup/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
+    expect(storeRef.current.listAccountSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not claim there are no sessions when the initial load is rate-limited', async () => {
+    storeRef.current.listAccountSessions = vi.fn().mockRejectedValueOnce(Object.assign(
+      new Error('Too many requests. Wait and try again.'),
+      { status: 429, code: 'RATE_LIMITED', retryAfterSec: 15 },
+    ));
+
+    render(<Account section="security" onSection={() => undefined} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Active sessions could not be loaded.*rate-limiting requests.*15 seconds/i,
+    );
+    expect(screen.queryByText('No active sessions were returned.')).toBeNull();
+    expect(screen.queryByText(/JSON backup/i)).toBeNull();
+  });
+
   it('portals the account-deletion dialog to a viewport-centered overlay', () => {
     const { container } = render(<Account section="settings" onSection={() => undefined} />);
     fireEvent.click(screen.getByRole('button', { name: /^Delete my account$/ }));

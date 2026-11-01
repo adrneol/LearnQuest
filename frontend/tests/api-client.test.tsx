@@ -76,6 +76,19 @@ describe('API base URL contract', () => {
     await expect(apiRequest('/account/data')).rejects.toMatchObject({ status: 503 });
     setCsrfToken(null);
   });
+
+  it('preserves the server Retry-After cooldown on a 429', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      '{"error":"Too many requests. Wait and try again.","code":"RATE_LIMITED","retryAfterSec":45}',
+      { status: 429, headers: { 'Retry-After': '42' } },
+    )) as unknown as typeof fetch;
+
+    await expect(apiRequest('/account/sessions')).rejects.toMatchObject({
+      status: 429,
+      code: 'RATE_LIMITED',
+      retryAfterSec: 42,
+    });
+  });
 });
 
 describe('health check truthfulness', () => {

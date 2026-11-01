@@ -57,6 +57,7 @@ import {
   broadcastAuthChange, broadcastAuthSignIn, createAuthSyncSourceId, subscribeAuthChange,
   type AuthSyncReason,
 } from './authSync.js';
+import { openAuthInvalidationStream, type ServerAuthInvalidationReason } from './authEvents.js';
 import {
   type AuthConfig, type AuthUser, type AccountSession,
   archivePlaylistApi, changePassword as changePasswordApi, completeOnboarding as completeOnboardingApi,
@@ -491,6 +492,16 @@ const REMOTE_SIGN_OUT_COPY: Record<AuthSyncReason, string> = {
   'account-deleted': 'This account was deleted in another tab. No LearnQuest data remains for it.',
 };
 
+/**
+ * Server-pushed invalidation is authoritative for this browser's current
+ * session. It uses the same canonical clear path as a same-profile broadcast,
+ * but a copy that does not claim the action happened in "another tab".
+ */
+const SERVER_SIGN_OUT_COPY: Record<ServerAuthInvalidationReason, string> = {
+  'sessions-revoked': 'Your session was signed out on another device or browser. Sign in again to continue.',
+  'password-reset': 'Your password was reset, so every session was signed out. Sign in again with your new password.',
+};
+
 interface EmailActionRoute {
   kind: 'reset' | 'verify';
   token: string | null;
@@ -717,10 +728,18 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // Invalidates in-flight session/login/onboarding responses after a local or
   // cross-tab sign-out so a stale response cannot repopulate the account.
   const authEpoch = useRef(0);
+  // A sign-out is published before the server request finishes. If that request
+  // fails, a follow-up `sign-out-unconfirmed` event corrects the notice on tabs
+  // that already cleared. This timestamp bounds that follow-up so it cannot be
+  // mistaken for a new session invalidation much later.
+  const remoteSignOutAtRef = useRef(0);
   // One identity per provider mount, so two StoreProviders in the same page
   // (simulated tabs in tests, an embedded demo, or React strict replay) never
   // mistake another instance's broadcast for their own echo.
   const authSyncSourceId = useMemo(() => createAuthSyncSourceId(), []);
+  // Invalidates a queued SSE event from a previous authenticated effect
+  // generation after sign-out, account switch, or React StrictMode replay.
+  const authStreamGeneration = useRef(0);
   // Cloud mode delays Focus/library XP until the session/segment collection
   // that earned it is confirmed by the server. Local mode is browser-owned.
   const pendingSessionAwards = useRef<Array<{
@@ -989,27 +1008,53 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     // A tab that had an authenticated account has a session to lose. A public
     // recovery screen has no account and must never receive this notice.
     const hadAuthenticatedSession = authUserRef.current !== null || cloudUserRef.current !== null;
+    const followUpToRemoteSignOut = reason === 'sign-out-unconfirmed'
+      && !hadAuthenticatedSession
+      && remoteSignOutAtRef.current > 0
+      && Date.now() - remoteSignOutAtRef.current <= 30_000;
+    if (followUpToRemoteSignOut) {
+      // The tab already cleared its private view for the initial signal. Only
+      // correct the notice; the account state is already fail-closed signed out.
+      remoteSignOutAtRef.current = 0;
+      setSessionNotice(REMOTE_SIGN_OUT_COPY[reason]);
+      return;
+    }
     if (!hadAuthenticatedSession) {
       // Public recovery screens must not receive a notice, but an in-flight
-      // login or onboarding request still belongs to the previous browser
-      // session. Invalidate it so a late response cannot sign this tab in
-      // after another tab has already signed out.
-      if (reason !== 'sign-in') authEpoch.current += 1;
+      // login, onboarding, or bootstrap request still belongs to the previous
+      // browser session. Invalidate it so a late response cannot sign this tab
+      // in after another tab has already signed out. A bootstrap request that
+      // notices the changed epoch releases its loading state without adopting
+      // the stale identity.
+      if (reason !== 'sign-in') {
+        authEpoch.current += 1;
+        if (reason !== 'sign-out') remoteSignOutAtRef.current = 0;
+      }
       return;
     }
     if (reason === 'sign-in') {
+      remoteSignOutAtRef.current = 0;
       // Never trust the event payload to know who signed in. Revalidate the
       // shared cookie: the same account keeps its open tab; a different
       // account clears this tab instead of showing the new identity's data.
       void revalidateSession({ maxAgeMs: 0 });
       return;
     }
-    if (reason === 'sign-out-unconfirmed') {
-      clearLocalSession(REMOTE_SIGN_OUT_COPY[reason]);
-      return;
-    }
+    remoteSignOutAtRef.current = reason === 'sign-out' ? Date.now() : 0;
     clearLocalSession(REMOTE_SIGN_OUT_COPY[reason]);
   }, [clearLocalSession, revalidateSession]);
+
+  /**
+   * Server-pushed account/session invalidation. This is a one-way security
+   * signal: it runs the same canonical clear path as a same-profile broadcast,
+   * invalidates late requests through `authEpoch`, clears account-scoped state,
+   * and never calls logout-all or restores an identity from the event.
+   */
+  const applyServerAuthInvalidation = useCallback((reason: ServerAuthInvalidationReason) => {
+    if (!authUserRef.current && !cloudUserRef.current) return;
+    remoteSignOutAtRef.current = 0;
+    clearLocalSession(SERVER_SIGN_OUT_COPY[reason]);
+  }, [clearLocalSession]);
 
   const clearAuthNotice = useCallback(() => setSessionNotice(null), []);
 
@@ -1059,10 +1104,21 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setAuthError(null);
     try {
       const session = await fetchSession();
-      if (epoch !== authEpoch.current) return;
+      if (epoch !== authEpoch.current) {
+        // Another tab invalidated the browser session while this bootstrap
+        // request was in flight. Keep the public configuration so a sign-in
+        // screen can render, but never adopt the possibly stale identity.
+        setCsrfToken(null);
+        setSetup(session);
+        setAuthUserState(null);
+        setReady(false);
+        setAuthReady(true);
+        return;
+      }
       lastSessionCheckRef.current = Date.now();
       setSetup(session);
       if (session.authenticated && session.user) {
+        remoteSignOutAtRef.current = 0;
         setAuthUserState(session.user);
         if (session.user.onboardingComplete) {
           await loadCloud(session.user);
@@ -1078,7 +1134,15 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         setReady(false);
       }
     } catch (e: any) {
-      if (epoch !== authEpoch.current) return;
+      if (epoch !== authEpoch.current) {
+        // The tab was invalidated while the request failed. Surface the
+        // connection problem instead of leaving the loading screen permanent.
+        setCsrfToken(null);
+        setAuthError(e?.message ?? 'The LearnQuest account service is unreachable. Check the connection and retry.');
+        setReady(false);
+        setAuthReady(true);
+        return;
+      }
       setAuthError(e?.message ?? 'The LearnQuest account service is unreachable. Check the connection and retry.');
       setReady(false);
     } finally {
@@ -1109,6 +1173,37 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     if (mode !== 'cloud') return;
     return subscribeAuthChange((reason) => applyRemoteSignOut(reason), authSyncSourceId);
   }, [mode, applyRemoteSignOut, authSyncSourceId]);
+
+  // Cross-profile and cross-device invalidation. One authenticated provider
+  // owns at most one credentialed EventSource. The server authenticates every
+  // connection from the HttpOnly cookie; the client never supplies an account
+  // identifier and never treats the event as a sign-in.
+  const authenticatedUserId = authUser?.userId ?? null;
+  useEffect(() => {
+    if (mode !== 'cloud' || !authReady || !authenticatedUserId) return;
+    const generation = ++authStreamGeneration.current;
+    let lastErrorCheck = 0;
+    const close = openAuthInvalidationStream({
+      onInvalidate: (reason) => {
+        if (generation !== authStreamGeneration.current) return;
+        if (authUserRef.current?.userId !== authenticatedUserId) return;
+        applyServerAuthInvalidation(reason);
+      },
+      onError: () => {
+        if (generation !== authStreamGeneration.current) return;
+        const now = Date.now();
+        // Native EventSource retries with its own backoff. Coalesce our
+        // session revalidation while a server/network outage is ongoing.
+        if (now - lastErrorCheck < 5_000) return;
+        lastErrorCheck = now;
+        void revalidateSession({ maxAgeMs: 0 });
+      },
+    });
+    return () => {
+      close();
+      if (authStreamGeneration.current === generation) authStreamGeneration.current += 1;
+    };
+  }, [mode, authReady, authenticatedUserId, applyServerAuthInvalidation, revalidateSession]);
 
   /**
    * Bounded remote-device staleness. While this tab is visible and online,
@@ -1608,6 +1703,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         throw new Error('A sign-out happened in another tab while this request was in progress. Sign in again.');
       }
       cloudUserRef.current = null;
+      remoteSignOutAtRef.current = 0;
       setAuthError(null);
       setSessionNotice(null);
       setAuthUserState(res.user);
@@ -1626,6 +1722,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         throw new Error('A sign-out happened in another tab while setup was completing. Sign in again.');
       }
       cloudUserRef.current = null;
+      remoteSignOutAtRef.current = 0;
       setAuthUserState(res.user);
       setAuthError(null);
       setSessionNotice(null);
@@ -1633,38 +1730,46 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       broadcastAuthSignIn(authSyncSourceId);
     },
     signOut: async (allDevices = false) => {
-      // Cancel a debounced save and invalidate any in-flight load or login
-      // before the session is revoked, so a late response cannot repopulate
-      // the UI after sign-out.
+      // Fail closed before awaiting the server. The session revocation request
+      // can be slow (for example, a cold backend or a degraded network); other
+      // tabs must not keep showing private data until that request returns.
+      // Publish the invalidation only after all in-flight load/login/save work
+      // has been invalidated, so a late response cannot repopulate the UI.
       authEpoch.current += 1;
       if (saveT.current) clearTimeout(saveT.current);
       cloudUserRef.current = null;
       cloudLoadGeneration.current += 1;
+      resetAccountState();
+      setAuthUserState(null);
+      setReady(false);
+      setAuthReady(true);
+      setAuthError(null);
+      setSessionNotice(null);
+      setSetup((prev) => prev);
+      cloudUserRef.current = null;
+      sessionKeys.current.clear();
+      clearFocusTimerSnapshots();
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
+      // This is a local sign-out signal, not proof of server revocation. The
+      // request below is still authoritative; a failure is reported separately.
+      broadcastAuthChange('sign-out', authSyncSourceId);
       let serverError: string | null = null;
       try {
+        // The CSRF token is intentionally not cleared above: logout-all uses
+        // it, and each API helper clears it when the request settles.
         if (allDevices) await logoutAllApi();
         else await logoutApi();
       } catch (e: any) {
         serverError = e?.message ?? 'The server could not confirm session revocation.';
-      } finally {
-        resetAccountState();
-        setAuthUserState(null);
-        setReady(false);
-        setAuthReady(true);
-        setSessionNotice(null);
-        setSetup((prev) => prev);
-        cloudUserRef.current = null;
-        sessionKeys.current.clear();
-        clearFocusTimerSnapshots();
-        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lq:data-cleared'));
       }
       if (serverError) {
         // The server may still consider the session active, but no tab in this
-        // browser should keep showing private data while that is unknown.
+        // browser should keep showing private data while that is unknown. This
+        // tab shows the same notice as its peers; the follow-up event corrects
+        // their copy without re-exposing account data.
+        setSessionNotice(REMOTE_SIGN_OUT_COPY['sign-out-unconfirmed']);
         broadcastAuthChange('sign-out-unconfirmed', authSyncSourceId);
         notify(`This browser's tabs were cleared, but the server could not confirm sign-out. Your session may still be active; reload and sign out again. ${serverError}`);
-      } else {
-        broadcastAuthChange('sign-out', authSyncSourceId);
       }
     },
     refreshSession: async () => {
@@ -1672,19 +1777,31 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       const res = await fetchSession();
       if (epoch !== authEpoch.current) return;
       setSetup(res);
-      if (res.authenticated && res.user) setAuthUserState(res.user);
-      else {
+      if (res.authenticated && res.user) {
+        remoteSignOutAtRef.current = 0;
+        setAuthUserState(res.user);
+      } else {
         setAuthUserState(null);
         setReady(false);
       }
     },
     updateProfile: async (input) => {
+      const epoch = authEpoch.current;
       const user = await updateProfileApi(input);
+      // A profile response that started before a cross-tab sign-out must not
+      // restore the authenticated shell after the account has been cleared.
+      if (epoch !== authEpoch.current) {
+        throw new Error('A sign-out happened in another tab while this request was in progress. Sign in again.');
+      }
       setAuthUserState(user);
       setLastDiff('Profile saved to your account.');
     },
     updateAccountPreferences: async (input) => {
+      const epoch = authEpoch.current;
       const user = await updateAccountPreferencesApi(input);
+      if (epoch !== authEpoch.current) {
+        throw new Error('A sign-out happened in another tab while this request was in progress. Sign in again.');
+      }
       setAuthUserState(user);
       const check = validatePreferencePatch(prefs, {
         ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
@@ -2334,7 +2451,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     const configured = setup?.configured;
     const coreMissing = !configured?.mongodb || !configured?.session || !configured?.emailLinks;
     if (authError) {
-      return <AccountErrorScreen message={authError} onRetry={() => { void bootstrap(); }} onSignOut={() => { void logoutApi().finally(() => setAuthError(null)); }} />;
+      return <AccountErrorScreen message={authError} onRetry={() => { void bootstrap(); }} onSignOut={() => { void value.signOut(); }} />;
     }
     if (coreMissing) {
       return <SetupRequiredScreen setup={setup} onRetry={() => { void bootstrap(); }} />;

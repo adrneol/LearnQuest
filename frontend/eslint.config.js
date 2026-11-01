@@ -35,4 +35,11 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': 'off',
     },
   },
+  {
+    files: ['tests/browser/**/*.mjs'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+    rules: {
+      'no-empty': ['error', { allowEmptyCatch: true }],
+    },
+  },
 );

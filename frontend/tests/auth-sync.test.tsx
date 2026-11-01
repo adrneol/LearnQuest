@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { StoreProvider } from '../src/app/store.js';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { openDB } from 'idb';
+import { StoreProvider, useStore } from '../src/app/store.js';
 import { AUTH_SYNC_TAB_ID, broadcastAuthSignOut, subscribeAuthSignOut } from '../src/app/authSync.js';
 import { setCsrfToken } from '../src/services/api/http.js';
 import type { AuthConfig, AuthUser } from '../src/services/api/authApi.js';
@@ -68,10 +69,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** v2 storage fallback shape, as written by the current protocol. */
-function emitStorageAuthChange(reason = 'sign-out', generation = 1) {
+function emitStorageAuthChange(reason = 'sign-out', generation = 1, sourceId = 'other-tab') {
   window.dispatchEvent(new StorageEvent('storage', {
     key: STORAGE_KEY,
-    newValue: JSON.stringify({ type: 'auth-change', reason, at: Date.now(), generation }),
+    newValue: JSON.stringify({ type: 'auth-change', reason, at: Date.now(), generation, sourceId }),
   }));
 }
 
@@ -185,6 +186,45 @@ describe('cross-tab auth sync messages', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('ignores stale, future-dated, duplicate, and structurally invalid v2 events', () => {
+    vi.stubGlobal('BroadcastChannel', undefined);
+    const handler = vi.fn();
+    const unsubscribe = subscribeAuthSignOut(handler);
+    const now = Date.now();
+    const dispatch = (value: unknown) => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: STORAGE_KEY,
+        newValue: JSON.stringify(value),
+      }));
+    };
+    const event = (overrides: Record<string, unknown> = {}) => ({
+      type: 'auth-change',
+      reason: 'sign-out',
+      at: now,
+      generation: 1,
+      sourceId: 'peer-tab',
+      ...overrides,
+    });
+
+    dispatch(event({ at: now - 10 * 60_000 }));
+    dispatch(event({ at: now + 60_000, generation: 2 }));
+    dispatch(event({ reason: 'session-token-is-not-a-reason', generation: 3 }));
+    dispatch(event({ generation: 0 }));
+    dispatch(event({ generation: 4, sourceId: '' }));
+    dispatch(event({ type: 'signed-out', generation: 5 }));
+    expect(handler).not.toHaveBeenCalled();
+
+    dispatch(event({ generation: 6 }));
+    expect(handler).toHaveBeenCalledTimes(1);
+    dispatch(event({ generation: 6 }));
+    dispatch(event({ generation: 5 }));
+    expect(handler).toHaveBeenCalledTimes(1);
+    dispatch(event({ generation: 7 }));
+    expect(handler).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+  });
+
   it('ignores a message echoed by its own page load', () => {
     vi.stubGlobal('BroadcastChannel', undefined);
     const handler = vi.fn();
@@ -217,6 +257,21 @@ describe('cross-tab auth sync messages', () => {
   });
 });
 
+function ProfileAction() {
+  const s = useStore();
+  return (
+    <>
+      <div>APP CONTENT</div>
+      <button
+        type="button"
+        onClick={() => { void s.updateProfile({ displayName: 'Late response' }).catch(() => undefined); }}
+      >
+        Update profile
+      </button>
+    </>
+  );
+}
+
 describe('store integration with cross-tab sign-out', () => {
   it('clears the authenticated UI when another tab signs out', async () => {
     globalThis.fetch = (async (url: any) => {
@@ -228,6 +283,7 @@ describe('store integration with cross-tab sign-out', () => {
       return json({ error: 'not found' }, 404);
     }) as any;
     localStorage.setItem('lq-focus-timer-v1', '{"startedAt":1}');
+    localStorage.setItem('lq-unrelated-local-data', 'keep');
 
     render(
       <StoreProvider mode="cloud">
@@ -242,6 +298,40 @@ describe('store integration with cross-tab sign-out', () => {
     expect(screen.queryByText('APP CONTENT')).toBeNull();
     expect(screen.getByText(/You were signed out in another tab/i)).toBeInTheDocument();
     expect(localStorage.getItem('lq-focus-timer-v1')).toBeNull();
+    expect(localStorage.getItem('lq-unrelated-local-data')).toBe('keep');
+  });
+
+  it('preserves durable local-only IndexedDB data when another tab signs out', async () => {
+    const db = await openDB('learnquest-db', 2, {
+      upgrade(d) { if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); },
+    });
+    const key = 'local-only-preserved';
+    await db.put('kv', { title: 'Local-only playlist' }, key);
+    try {
+      globalThis.fetch = (async (url: any) => {
+        const u = String(url);
+        if (u.endsWith('/api/auth/session')) {
+          return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
+        }
+        if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+        return json({ error: 'not found' }, 404);
+      }) as any;
+
+      render(
+        <StoreProvider mode="cloud">
+          <div>APP CONTENT</div>
+        </StoreProvider>,
+      );
+      expect(await screen.findByText('APP CONTENT')).toBeInTheDocument();
+
+      emitStorageAuthChange('sign-out');
+
+      expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+      expect(await db.get('kv', key)).toEqual({ title: 'Local-only playlist' });
+    } finally {
+      await db.delete('kv', key);
+      db.close();
+    }
   });
 
   it('shows the sign-in form and clears account state when the server rejects the session', async () => {
@@ -379,6 +469,89 @@ describe('store integration with cross-tab sign-out', () => {
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByText(/Your password was reset in another tab/i)).toBeInTheDocument();
+    expect(screen.queryByText('APP CONTENT')).toBeNull();
+  });
+
+  it('shows sign-in instead of a perpetual connecting state when sign-out arrives during bootstrap', async () => {
+    let resolveSession!: (response: Response) => void;
+    const sessionResponse = new Promise<Response>((resolve) => { resolveSession = resolve; });
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).endsWith('/api/auth/session')) return sessionResponse;
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <div>APP CONTENT</div>
+      </StoreProvider>,
+    );
+    expect(screen.getByText(/Connecting to your LearnQuest account/i)).toBeInTheDocument();
+
+    emitStorageAuthChange('sign-out');
+    resolveSession(json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG }));
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByText('APP CONTENT')).toBeNull();
+  });
+
+  it('transitions to sign-in when the server rejects an authenticated request', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) {
+        return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
+      }
+      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/profile')) {
+        return json({ error: 'This session was signed out after a password change. Sign in again.', code: 'SESSION_REVOKED' }, 401);
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <ProfileAction />
+      </StoreProvider>,
+    );
+    expect(await screen.findByText('APP CONTENT')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update profile' }));
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByText(/Your session ended or was signed out elsewhere/i)).toBeInTheDocument();
+    expect(screen.queryByText('APP CONTENT')).toBeNull();
+  });
+
+  it('does not let a late profile response restore authenticated UI after cross-tab sign-out', async () => {
+    let resolveProfile!: (response: Response) => void;
+    let markProfileRequested!: () => void;
+    const profileRequested = new Promise<void>((resolve) => { markProfileRequested = resolve; });
+    const profileResponse = new Promise<Response>((resolve) => { resolveProfile = resolve; });
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.endsWith('/api/auth/session')) {
+        return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
+      }
+      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/profile')) {
+        markProfileRequested();
+        return profileResponse;
+      }
+      return json({ error: 'not found' }, 404);
+    }) as any;
+
+    render(
+      <StoreProvider mode="cloud">
+        <ProfileAction />
+      </StoreProvider>,
+    );
+    expect(await screen.findByText('APP CONTENT')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update profile' }));
+    await profileRequested;
+    emitStorageAuthChange('sign-out');
+    resolveProfile(json({ user: { ...USER, displayName: 'Late response' } }));
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByText('APP CONTENT')).toBeNull();
   });
 });

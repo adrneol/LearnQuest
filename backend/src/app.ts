@@ -17,11 +17,20 @@ import type { MongoReadinessSource } from './db/mongoSupervisor.js';
 import { createBrevoEmailService, type EmailService } from './email/brevo.js';
 import { createGoogleOAuthService, type GoogleOAuthService } from './auth/google.js';
 import { requireTrustedOrigin } from './auth/middleware.js';
+import { createMemoryAuthEventBus, type AuthEventBus } from './auth/eventBus.js';
 
 export interface AppDependencies {
   store?: DataStore;
   email?: EmailService;
   google?: GoogleOAuthService;
+  /**
+   * Shared authentication-invalidation fan-out. The production entry point
+   * supplies a MongoDB-backed bus so a revocation handled by one Render
+   * instance reaches SSE clients connected to every other instance. The
+   * in-memory default is intentional for isolated tests and single-process
+   * embedders; it never claims cross-instance delivery.
+   */
+  authEvents?: AuthEventBus;
   /** Production supplies the process supervisor; in-memory tests may omit it. */
   readiness?: MongoReadinessSource;
   /** Called when a route observes a driver failure, so recovery can start. */
@@ -33,6 +42,7 @@ export function createApp(deps: AppDependencies = {}) {
   const store = deps.store ?? createDataStore(getMongoAdapter());
   const email = deps.email ?? createBrevoEmailService();
   const google = deps.google ?? createGoogleOAuthService(store);
+  const authEvents = deps.authEvents ?? createMemoryAuthEventBus();
   const app = express();
 
   // Only the documented number of reverse-proxy hops may set the client IP.
@@ -89,7 +99,7 @@ export function createApp(deps: AppDependencies = {}) {
     app.use('/api/playlists', databaseReady);
   }
 
-  app.use('/api/auth', createAuthRouter({ store, email, google }));
+  app.use('/api/auth', createAuthRouter({ store, email, google, authEvents }));
   app.use('/api/account', createAccountRouter({ store, email }));
   app.use('/api/playlists', createPlaylistManagementRouter(store));
   app.use('/api', createApiRouter(cache, deps.readiness));

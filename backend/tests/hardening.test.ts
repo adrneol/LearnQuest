@@ -95,10 +95,45 @@ describe('proxy-aware rate limiting', () => {
     const spoofed = await request(app).get('/api/health').set('X-Forwarded-For', '7.7.7.7, 203.0.113.9');
     expect(spoofed.status).toBe(429);
     expect(spoofed.body.error).toMatch(/Too many requests/);
+    expect(spoofed.body.code).toBe('RATE_LIMITED');
+    expect(spoofed.body.error).not.toContain('JSON backup');
+    expect(spoofed.body.retryAfterSec).toBeGreaterThan(0);
+    expect(spoofed.headers['retry-after']).toMatch(/^\d+$/);
 
     // A genuinely different client IP gets its own bucket.
     const other = await request(app).get('/api/health').set('X-Forwarded-For', '203.0.113.10');
     expect(other.status).toBe(200);
+  });
+
+  it('does not spend the general API budget on the long-lived event stream', async () => {
+    process.env.RATE_LIMIT_PER_MIN = '2';
+    process.env.TRUST_PROXY_HOPS = '0';
+    const app = createApp();
+
+    // The route is still protected by authentication; the point is that this
+    // request must not consume one of the two general JSON request slots.
+    const stream = await request(app).get('/api/auth/events');
+    expect(stream.status).toBe(401);
+    expect(stream.headers.ratelimit).toBeUndefined();
+
+    const first = await request(app).get('/api/health');
+    expect(first.status).toBe(200);
+    const second = await request(app).get('/api/health');
+    expect(second.status).toBe(200);
+    const blocked = await request(app).get('/api/health');
+    expect(blocked.status).toBe(429);
+  });
+
+  it('keeps a separate bounded connection limit on the event stream', async () => {
+    const app = createApp();
+    for (let i = 0; i < 60; i += 1) {
+      expect((await request(app).get('/api/auth/events')).status).toBe(401);
+    }
+    const blocked = await request(app).get('/api/auth/events');
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.code).toBe('STREAM_CONNECT_LIMIT');
+    expect(blocked.body.retryAfterSec).toBeGreaterThan(0);
+    expect(blocked.headers['retry-after']).toMatch(/^\d+$/);
   });
 
   it('does not trust forwarded headers when TRUST_PROXY_HOPS=0', async () => {

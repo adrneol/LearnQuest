@@ -6,6 +6,7 @@ import { createDataStore } from './store.js';
 import { resumePendingAccountDeletions } from './services/accountDeletion.js';
 import { resumeDeletionFences } from './auth/writeLease.js';
 import { purgeExpiredSecurityRecords } from './services/securityMaintenance.js';
+import { createMongoAuthEventBus } from './auth/eventBus.js';
 
 const entry = (process.argv[1] ?? '').replace(/\\/g, '/');
 if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
@@ -52,12 +53,13 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
   const unrefMaintenance = (maintenanceTimer as { unref?: () => void }).unref;
   if (typeof unrefMaintenance === 'function') unrefMaintenance.call(maintenanceTimer);
 
+  const authEvents = createMongoAuthEventBus();
   const app = createApp({
     store,
     readiness: supervisor,
     onMongoFailure: (error) => supervisor.markUnavailable(error),
+    authEvents,
   });
-
   const server = app.listen(env.port, () => {
     console.log(`LearnQuest API listening on :${env.port} (CORS: ${env.corsOrigin.join(',')})`);
     if (status.setupRequired) {
@@ -81,7 +83,19 @@ if (entry.endsWith('/dist/server.js') || entry.endsWith('/src/server.ts')) {
     console.log(`Received ${signal}; closing LearnQuest API.`);
     clearInterval(maintenanceTimer);
     supervisor.stop();
+    void authEvents.close();
+    // SSE connections remain active until the client or process closes them.
+    // Give ordinary requests a short grace period, then force any remaining
+    // sockets so `server.close()` can finish and Render can replace the
+    // instance without waiting for every open stream.
+    const forceClose = setTimeout(() => {
+      const closeAll = (server as { closeAllConnections?: () => void }).closeAllConnections;
+      if (typeof closeAll === 'function') closeAll.call(server);
+    }, 10_000);
+    const unrefForceClose = (forceClose as { unref?: () => void }).unref;
+    if (typeof unrefForceClose === 'function') unrefForceClose.call(forceClose);
     server.close(() => {
+      clearTimeout(forceClose);
       void closeMongo().finally(() => process.exit(0));
     });
   };

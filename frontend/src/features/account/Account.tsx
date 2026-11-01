@@ -12,6 +12,13 @@ import type { AccountSection } from './AccountMenu.js';
 
 const ACCOUNT_SECTIONS: AccountSection[] = ['profile', 'settings', 'security'];
 
+function rateLimitedMessage(action: string, error: any): string | null {
+  if (error?.status !== 429) return null;
+  const requested = Number(error?.retryAfterSec);
+  const seconds = Number.isFinite(requested) && requested > 0 ? Math.ceil(requested) : 60;
+  return `${action} The server is rate-limiting requests; try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
+}
+
 export function Account({ section, onSection }: { section: AccountSection; onSection: (s: AccountSection) => void }) {
   const s = useStore();
   const user = s.authUser;
@@ -409,19 +416,85 @@ function SecuritySection() {
   const [emailError, setEmailError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AccountSession[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [sessionsNotice, setSessionsNotice] = useState<string | null>(null);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sessionsBusy, setSessionsBusy] = useState(false);
+  const [sessionsCooldownUntil, setSessionsCooldownUntil] = useState(0);
+  const sessionsRef = useRef<AccountSession[]>([]);
+  const sessionsLoadedRef = useRef(false);
+  const listSessionsRef = useRef(s.listAccountSessions);
+  const sessionsInFlightRef = useRef(false);
+  const sessionsCooldownRef = useRef(0);
+
+  // Keep the latest store action in a ref. Depending on the whole store object
+  // here made the mount effect reload the session list after every unrelated
+  // store update (sync status, version, timer state), which could exhaust the
+  // global API budget and surface an unrelated rate-limit message.
+  useEffect(() => { listSessionsRef.current = s.listAccountSessions; });
+
+  useEffect(() => {
+    if (!sessionsCooldownUntil) return;
+    const remaining = Math.max(0, sessionsCooldownUntil - Date.now());
+    const timer = window.setTimeout(() => {
+      sessionsCooldownRef.current = 0;
+      setSessionsCooldownUntil(0);
+      setSessionsError(null);
+      if (!sessionsLoadedRef.current) {
+        setSessionsNotice('Active sessions have not been loaded. Select Refresh to retry.');
+      } else if (sessionsRef.current.length > 0) {
+        setSessionsNotice('Showing the last loaded session list. Select Refresh to check for newer sessions.');
+      } else {
+        setSessionsNotice('The last loaded session list was empty. Select Refresh to check again.');
+      }
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [sessionsCooldownUntil]);
 
   const loadSessions = useCallback(async () => {
+    if (sessionsInFlightRef.current) return;
+    if (sessionsCooldownRef.current > Date.now()) {
+      const seconds = Math.max(1, Math.ceil((sessionsCooldownRef.current - Date.now()) / 1_000));
+      setSessionsError(
+        `Active sessions could not be refreshed because the server is rate-limiting requests. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
+      );
+      return;
+    }
+    sessionsInFlightRef.current = true;
     setSessionsBusy(true);
     setSessionsError(null);
     try {
-      setSessions(await s.listAccountSessions());
+      const next = await listSessionsRef.current();
+      sessionsRef.current = next;
+      sessionsLoadedRef.current = true;
+      setSessionsLoaded(true);
+      setSessions(next);
+      setSessionsNotice(null);
+      sessionsCooldownRef.current = 0;
+      setSessionsCooldownUntil(0);
     } catch (e: any) {
-      setSessionsError(e?.message ?? 'Active sessions could not be loaded.');
+      setSessionsNotice(null);
+      if (e?.status === 429) {
+        const requested = Number(e?.retryAfterSec);
+        const seconds = Number.isFinite(requested) && requested > 0 ? Math.ceil(requested) : 60;
+        const until = Date.now() + seconds * 1_000;
+        sessionsCooldownRef.current = until;
+        setSessionsCooldownUntil(until);
+        const prefix = !sessionsLoadedRef.current
+          ? 'Active sessions could not be loaded. '
+          : sessionsRef.current.length > 0
+            ? 'Showing the last loaded session list. '
+            : 'The last loaded session list was empty. ';
+        setSessionsError(
+          `${prefix}The server is rate-limiting requests; try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
+        );
+      } else {
+        setSessionsError(e?.message ?? 'Active sessions could not be loaded.');
+      }
     } finally {
+      sessionsInFlightRef.current = false;
       setSessionsBusy(false);
     }
-  }, [s]);
+  }, []);
 
   useEffect(() => { void loadSessions(); }, [loadSessions]);
 
@@ -439,7 +512,9 @@ function SecuritySection() {
       setConfirmPassword('');
       await loadSessions();
     } catch (e: any) {
-      setPasswordError(e?.message ?? 'Password could not be changed.');
+      setPasswordError(rateLimitedMessage('Your password could not be changed.', e)
+        ?? e?.message
+        ?? 'Password could not be changed.');
     } finally {
       setPasswordBusy(false);
     }
@@ -469,6 +544,17 @@ function SecuritySection() {
       danger: true,
     });
     if (ok) await s.signOut(true);
+  };
+
+  const revokeSession = async (sessionId: string) => {
+    try {
+      await s.revokeAccountSession(sessionId);
+      await loadSessions();
+    } catch (e: any) {
+      setSessionsError(rateLimitedMessage('That session could not be signed out.', e)
+        ?? e?.message
+        ?? 'That session could not be signed out. Refresh the list and try again.');
+    }
   };
 
   return (
@@ -521,10 +607,16 @@ function SecuritySection() {
       <Card>
         <h2 className="flex items-center gap-1.5 text-base font-bold"><ShieldCheck size={16} /> Active sessions</h2>
         <div className="mt-2 flex flex-wrap gap-2">
-          <Btn onClick={() => { void loadSessions(); }} disabled={sessionsBusy}><RefreshCw size={14} /> Refresh</Btn>
+          <Btn
+            onClick={() => { void loadSessions(); }}
+            disabled={sessionsBusy || sessionsCooldownUntil > Date.now()}
+          >
+            <RefreshCw size={14} /> Refresh
+          </Btn>
           <Btn variant="danger" onClick={signOutAll}><LogOut size={14} /> Sign out all devices</Btn>
         </div>
         {sessionsError && <p role="alert" className="mt-2 text-sm text-red-300">{sessionsError}</p>}
+        {sessionsNotice && <p role="status" className="mt-2 text-sm text-amber-200">{sessionsNotice}</p>}
         <ul className="mt-2 divide-y divide-white/5 text-sm">
           {sessions.map((session) => (
             <li key={session.sessionId} className="flex flex-wrap items-center gap-2 py-2">
@@ -533,11 +625,13 @@ function SecuritySection() {
                 <p className="text-[11px] text-slate-500">Last active {new Date(session.lastSeenAt).toLocaleString()} · expires {new Date(session.expiresAt).toLocaleDateString()}</p>
               </div>
               {!session.current && (
-                <Btn onClick={async () => { await s.revokeAccountSession(session.sessionId); await loadSessions(); }}>Sign out</Btn>
+                <Btn onClick={() => { void revokeSession(session.sessionId); }}>Sign out</Btn>
               )}
             </li>
           ))}
-          {sessions.length === 0 && !sessionsBusy && <li className="py-2 text-slate-500">No active sessions were returned.</li>}
+          {sessions.length === 0 && sessionsLoaded && !sessionsBusy && !sessionsError && !sessionsNotice && (
+            <li className="py-2 text-slate-500">No active sessions were returned.</li>
+          )}
         </ul>
       </Card>
     </div>

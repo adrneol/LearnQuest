@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { createSharedRateLimiter } from '../middleware/sharedRateLimit.js';
+import { createAuthStreamConnectLimiter } from '../middleware/rateLimit.js';
 import type { DataStore } from '../store.js';
 import { env, configStatus } from '../config/env.js';
 import type { EmailService } from '../email/brevo.js';
@@ -28,6 +29,7 @@ import {
   setSessionCookie, type AuthedRequest,
 } from '../auth/middleware.js';
 import { withAccountWriteLease } from '../auth/writeLease.js';
+import type { AuthEventBus, AuthInvalidationReason } from '../auth/eventBus.js';
 
 const loginSchema = z.object({
   identifier: z.string().trim().min(1).max(320),
@@ -55,6 +57,37 @@ const passwordChangeSchema = z.object({
 const reauthSchema = z.object({ password: z.string().max(128).optional() }).strict();
 
 const GOOGLE_ONBOARDING_MINUTES = 30;
+
+/**
+ * SSE connection limits. They are deliberately process-local safety caps, not
+ * an authentication policy: the cookie-authenticated session remains the only
+ * subscription authority. A per-account cap also prevents one account from
+ * exhausting all streams on an instance.
+ */
+const MAX_AUTH_STREAMS_PER_ACCOUNT = 20;
+const MAX_AUTH_STREAMS_TOTAL = 1_000;
+const AUTH_STREAM_HEARTBEAT_MS = 25_000;
+
+/**
+ * Notification failure must never turn a completed server-side revocation into
+ * a client-visible failure. Session revocation is authoritative; the SSE event
+ * is best-effort delivery. The log intentionally contains neither an account
+ * identifier nor any credential.
+ */
+async function publishAuthInvalidation(
+  authEvents: AuthEventBus,
+  input: { userId: string; sessionId?: string | null; reason: AuthInvalidationReason },
+): Promise<void> {
+  try {
+    await authEvents.publish(input);
+  } catch {
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'auth_invalidation_publish_failed',
+      reason: input.reason,
+    }));
+  }
+}
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -119,12 +152,16 @@ export interface AuthRouterDeps {
   store: DataStore;
   email: EmailService;
   google: GoogleOAuthService;
+  authEvents: AuthEventBus;
 }
 
-export function createAuthRouter({ store, email, google }: AuthRouterDeps): Router {
+export function createAuthRouter({ store, email, google, authEvents }: AuthRouterDeps): Router {
   const router = Router();
   const auth = requireAuth(store);
   const csrf = requireCsrf;
+  const streamCounts = new Map<string, number>();
+  let streamTotal = 0;
+  const streamConnectLimiter = createAuthStreamConnectLimiter();
   // Shared across backend instances. A single Render instance is not assumed;
   // if the shared store is unavailable these security endpoints fail closed.
   const loginLimiter = createSharedRateLimiter(store, {
@@ -192,6 +229,144 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
       });
     } catch (e) {
       next(e);
+    }
+  });
+
+  /**
+   * Authenticated cross-profile/device invalidation stream.
+   *
+   * The account and session are derived only from the HttpOnly session cookie
+   * by the existing `requireAuth` middleware. There is no account parameter,
+   * token query string, or user-supplied identifier. The stream carries no
+   * account data: only `auth-invalidated` with an allow-listed reason.
+   */
+  router.get('/events', streamConnectLimiter, auth, noStore, async (req: AuthedRequest, res, next) => {
+    const userId = req.auth!.userId;
+    const session = req.auth!.session;
+    const token = readSessionToken(req);
+    const activeForAccount = streamCounts.get(userId) ?? 0;
+    if (streamTotal >= MAX_AUTH_STREAMS_TOTAL || activeForAccount >= MAX_AUTH_STREAMS_PER_ACCOUNT) {
+      res.setHeader('Retry-After', '60');
+      res.status(429).json({
+        error: 'Too many active authentication streams. Close some LearnQuest tabs and retry.',
+        code: 'STREAM_LIMIT',
+        retryable: true,
+        retryAfterSec: 60,
+      });
+      return;
+    }
+
+    streamCounts.set(userId, activeForAccount + 1);
+    streamTotal += 1;
+    let released = false;
+    let unsubscribe: (() => void) | null = null;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let expiry: ReturnType<typeof setTimeout> | null = null;
+
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (heartbeat) clearInterval(heartbeat);
+      if (expiry) clearTimeout(expiry);
+      heartbeat = null;
+      expiry = null;
+      unsubscribe?.();
+      unsubscribe = null;
+      const remaining = (streamCounts.get(userId) ?? 1) - 1;
+      if (remaining > 0) streamCounts.set(userId, remaining);
+      else streamCounts.delete(userId);
+      streamTotal = Math.max(0, streamTotal - 1);
+    };
+    res.on('close', release);
+
+    const sendInvalidation = (reason: AuthInvalidationReason) => {
+      if (res.writableEnded) return;
+      res.write(`event: auth-invalidated\ndata: ${JSON.stringify({ type: 'auth-invalidated', reason })}\n\n`);
+      res.end();
+    };
+
+    try {
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-store, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      // Render and other reverse proxies may buffer a response unless told not
+      // to. The headers are advisory; the heartbeat below also keeps idle
+      // proxy connections from being treated as dead.
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+      // Native EventSource reconnects three seconds after a transport failure
+      // by default. A proxy restart or a sleeping free instance would turn that
+      // into 20 requests per minute per tab. Tell the browser to wait instead;
+      // the client also closes and applies capped backoff on error.
+      res.write('retry: 30000\n\n');
+
+      unsubscribe = await authEvents.subscribe({
+        userId,
+        sessionId: session.sessionId,
+        listener: (event) => sendInvalidation(event.reason),
+      });
+      if (released || res.writableEnded) {
+        unsubscribe();
+        unsubscribe = null;
+        return;
+      }
+
+      // Close the tiny race between the middleware's session check and the
+      // subscription: a revocation that landed in between is caught here.
+      const current = token ? await findSessionByToken(store, token) : null;
+      if (!current || current.sessionId !== session.sessionId) {
+        sendInvalidation('sessions-revoked');
+        return;
+      }
+
+      // Sentinel after the listener is registered and the session re-check
+      // passed. Tests and diagnostics can wait for it without guessing.
+      res.write(': connected\n\n');
+
+      heartbeat = setInterval(() => {
+        if (!res.writableEnded) {
+          // A named event, not only an SSE comment: the browser client cannot
+          // observe comments, so a proxy that silently keeps a dead upstream
+          // open would otherwise look healthy forever. The payload is empty
+          // and carries no account or credential data.
+          res.write('event: heartbeat\ndata: {}\n\n');
+        }
+      }, AUTH_STREAM_HEARTBEAT_MS);
+      const unrefHeartbeat = (heartbeat as { unref?: () => void }).unref;
+      if (typeof unrefHeartbeat === 'function') unrefHeartbeat.call(heartbeat);
+
+      // Do not poll authentication. Re-check once when the session's existing
+      // idle/absolute expiry is reached, then re-arm against the fresh record
+      // if another request has legitimately extended the idle window.
+      const armExpiry = (currentSession: typeof session) => {
+        const expiresAt = Math.min(
+          Date.parse(currentSession.idleExpiresAt),
+          Date.parse(currentSession.expiresAt),
+        );
+        const delay = Number.isFinite(expiresAt) ? expiresAt - Date.now() : 0;
+        expiry = setTimeout(async () => {
+          expiry = null;
+          if (released || res.writableEnded) return;
+          try {
+            const fresh = token ? await findSessionByToken(store, token) : null;
+            if (!fresh) {
+              res.end();
+              return;
+            }
+            armExpiry(fresh);
+          } catch {
+            res.end();
+          }
+        }, Math.max(1_000, Math.min(delay + 1_000, 2_147_483_647)));
+        const unrefExpiry = (expiry as { unref?: () => void }).unref;
+        if (typeof unrefExpiry === 'function') unrefExpiry.call(expiry);
+      };
+      armExpiry(current);
+    } catch (e) {
+      release();
+      if (!res.headersSent) next(e);
+      else if (!res.writableEnded) res.end();
     }
   });
 
@@ -442,7 +617,19 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
   router.post('/logout', noStore, async (req, res, next) => {
     try {
       const token = readSessionToken(req);
-      if (token) await revokeSession(store, token);
+      if (token) {
+        // Capture the session before revoking it, so a same-profile tab that
+        // shares this cookie can be notified without an account-wide event.
+        const session = await findSessionByToken(store, token);
+        const revoked = await revokeSession(store, token);
+        if (revoked && session) {
+          await publishAuthInvalidation(authEvents, {
+            userId: session.userId,
+            sessionId: session.sessionId,
+            reason: 'sessions-revoked',
+          });
+        }
+      }
       clearSessionCookie(res);
       res.status(204).end();
     } catch (e) {
@@ -452,7 +639,15 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
 
   router.post('/logout-all', auth, csrf, noStore, async (req: AuthedRequest, res, next) => {
     try {
-      await revokeAllSessions(store, req.auth!.userId);
+      const userId = req.auth!.userId;
+      const revoked = await revokeAllSessions(store, userId);
+      if (revoked > 0) {
+        await publishAuthInvalidation(authEvents, {
+          userId,
+          sessionId: null,
+          reason: 'sessions-revoked',
+        });
+      }
       clearSessionCookie(res);
       res.status(204).end();
     } catch (e) {
@@ -693,6 +888,14 @@ export function createAuthRouter({ store, email, google }: AuthRouterDeps): Rout
         }
         throw e;
       }
+      // Publish only after the write lease has completed the password update,
+      // session revocation, and token invalidation. A failed/reused/expired
+      // token never reaches this point.
+      await publishAuthInvalidation(authEvents, {
+        userId: account.userId,
+        sessionId: null,
+        reason: 'password-reset',
+      });
       // The reset request may carry the browser's old session cookie. Clear it
       // here as well as revoking the server record so this browser is visibly
       // signed out before the client broadcasts the event to other tabs.

@@ -35,7 +35,10 @@ scoped to the signed-in account. A local IndexedDB path remains for automated te
   simulation that ranks average daily efficiency; never real people.
 - **Accounts** — Google-only registration, Argon2id password sign-in,
   single-use Brevo email links for password recovery and email verification,
-  server-side sessions, account export and deletion.
+  server-side sessions, account export and deletion. Same-profile tabs
+  synchronize through BroadcastChannel/storage events; independently
+  authenticated profiles and devices receive server-pushed session
+  invalidation over an authenticated SSE stream.
 - **Valid empty accounts** — a fully onboarded account with no playlists or
   learning records receives the canonical empty state and a welcome dashboard,
   not a fabricated failure. A pending Google registration is sent back to
@@ -73,6 +76,64 @@ progressGameTracker/
   silently falls back to browser-only state for an authenticated account.
 - Secrets live server-side only (`backend/.env`, never committed). Google,
   Brevo, and MongoDB credentials are never sent to the browser.
+
+### Authentication invalidation
+
+LearnQuest deliberately uses two notification scopes:
+
+| Scope | Mechanism | Use |
+|---|---|---|
+| Same browser profile | BroadcastChannel, then a storage-event fallback | Immediate tab-to-tab sign-out, sign-in, reset, and deletion UI sync |
+| Separate profiles, browsers, devices | Authenticated Server-Sent Events at `GET /api/auth/events` | Account-wide revocation during **Sign out all** and successful password reset |
+
+The SSE endpoint is authenticated only by the existing HttpOnly session
+cookie. It accepts no token, account id, or email in the URL, and its only
+client-visible message is:
+
+```text
+event: auth-invalidated
+data: {"type":"auth-invalidated","reason":"sessions-revoked"}
+```
+
+The allowed reasons are `sessions-revoked` and `password-reset`. No user id,
+session id, cookie, CSRF token, email, username, reset token, or password is
+included. A normal sign out targets only the captured server session; sign-out
+all and a successful password reset target the account only after the existing
+server-side revocation succeeds. Receiving clients run the same canonical
+signed-out transition as a local sign-out, close the stream, and never call
+logout again.
+
+Cross-instance fanout does not rely on an in-process emitter. One bounded
+MongoDB capped collection, `lq_auth_events` (1 MiB / 5,000 documents), holds
+internal routing records. Each backend process opens exactly one tailable-await
+cursor, independent of its number of connected clients, and dispatches only
+events published after each subscription was created. The API revalidates the
+session after subscribing, so a revocation that happened just before the
+stream existed is still caught. This works on a standalone local MongoDB and on
+Atlas replica sets without Redis, a new broker, change streams, or a polling
+loop. New subscriptions receive a lightweight `: connected` comment; idle
+connections receive a named `heartbeat` event with an empty `{}` payload every
+25 seconds. The heartbeat is deliberately an event rather than only an SSE
+comment: the browser cannot observe comments, so a proxy that silently keeps a
+dead upstream connection open would otherwise look healthy forever. The client
+treats 70 seconds without a heartbeat as a dead stream, closes it, and reconnects
+with capped backoff. Neither the heartbeat nor the reconnect delay contains
+account data.
+
+If the database or notification bus is temporarily unavailable, session
+revocation remains authoritative: the client discovers it on reconnect or its
+next authenticated request. The stream connection limit is 20 per account and
+1,000 per backend process. Duplicate connections are closed on sign-out,
+invalidated-session reconnect, and process shutdown.
+
+The stream is deliberately outside the general 30-request-per-minute JSON API
+budget, but it has its own 60 connection attempts per minute per IP. The server
+advertises `retry: 30000`, and the client closes a failed native EventSource and
+reopens with capped backoff (3 s, 5 s, 10 s, 20 s, 40 s, then 60 s). A single
+provider therefore keeps at most one live stream and cannot turn a proxy outage
+into a tight request loop. A temporary rate limit must never make the Account →
+Security screen claim that the session list is empty, and `Retry-After` is
+respected instead of retried immediately.
 
 ## Technology
 
@@ -148,6 +209,7 @@ Backend (`backend/.env` — create from `backend/.env.example`, never commit):
 | `YOUTUBE_API_KEY` | **Secret.** Server-side only | _(optional)_ |
 | `CACHE_TTL_SEC` | Metadata cache TTL | `600` |
 | `CACHE_MAX_ENTRIES` | Metadata cache size cap | `50` |
+| `RATE_LIMIT_PER_MIN` | General JSON API requests per IP per minute; authenticated SSE has a separate connection budget | `30` |
 | `MONGODB_URI` | **Secret.** MongoDB connection string | _(required)_ |
 | `MONGODB_DB_NAME` | Database name | `learnquest` |
 | `LQ_USER_DATA_STORE` | `legacy` (`lq_data_*`) or `unified` (`lq_user_data`); no automatic fallback | `legacy` |
@@ -214,6 +276,9 @@ Run each from its own directory (`frontend/` or `backend/`):
 | `npm run start` | _(backend)_ Serve the built API (`node dist/server.js`) |
 | `npm run preview` | _(frontend)_ Preview the production build locally |
 | `npm run migrate:user-data -- --help` | _(backend)_ Versioned `lq_data_*` → `lq_user_data` migration. Dry-run by default; `--apply --confirm lq-data-to-user-data-v1` is only for an owner-approved maintenance window after a backup. |
+| `npm run test:browser` | _(frontend)_ Same-profile real-browser BroadcastChannel/storage scenarios; starts an isolated Vite server and uses Playwright Chromium. |
+| `npm run test:browser:auth-invalidation` | _(frontend)_ Cross-profile, cross-browser, and password-reset scenarios over real authenticated SSE. Starts an ephemeral local MongoDB, the real Express/Mongo-event-bus backend, Vite, Chromium contexts, and Firefox when installed. Set `LQ_MONGOD` if `mongod` is not on `PATH`. |
+| `LQ_TEST_MONGO_URI=mongodb://127.0.0.1:27017 npx vitest run tests/auth-events.mongo.integration.test.ts` | _(backend)_ Real two-instance MongoDB fanout rehearsal using two app instances and separate event buses. |
 
 ## Production deployment
 
@@ -249,6 +314,43 @@ Run each from its own directory (`frontend/` or `backend/`):
   build `npm run build`, output `dist`. Keep `frontend/vercel.json` at the
   project root so the rewrite is applied. Do not configure a direct
   `*.vercel.app` → `*.onrender.com` API origin with the current cookie policy.
+- **SSE through the same-origin proxy:** `GET /api/auth/events` uses the same
+  Vercel `/api/*` rewrite and the same first-party HttpOnly cookie as every
+  other API call. The existing CSP `connect-src 'self'` already permits it.
+  The backend sets `Cache-Control: no-cache, no-store, no-transform`,
+  `X-Accel-Buffering: no`, `retry: 30000`, and a 25-second heartbeat to
+  discourage buffering and idle timeouts.
+- **Deployment check:** external rewrites must stream the response rather than
+  buffer it. On 2026-11-01 the public deployment still served the pre-SSE build:
+  `https://learn-quest-one.vercel.app/api/auth/events` and the direct Render
+  URL both returned `404 {"error":"Not found."}`, and the production JavaScript
+  bundle contained the same-profile `lq-auth-sync-v2` channel but no SSE client.
+  Cross-profile invalidation therefore could not work in production regardless
+  of the local test results. After an authorized deployment, verify a `200`
+  `text/event-stream` through the Vercel rewrite, a heartbeat, reconnect, and
+  the three revocation actions before declaring production support. If the live
+  proxy buffers the stream, serve the frontend and API through one same-origin
+  proxy/function (or a same-site custom-domain layout) instead of weakening
+  `Secure`, `HttpOnly`, or `SameSite`.
+- **Render implications:** each authenticated tab holds one long-lived SSE
+  connection while visible. That is intentional and bounded (20 per account,
+  1,000 per process), but it counts against the service's connection capacity
+  and keeps a free/starter instance awake instead of spinning down. No new
+  paid service is required. If the service is scaled to multiple instances,
+  the MongoDB-backed event bus fans out to clients on every instance; if it is
+  restarted or spins down, clients reconnect and the server revalidates their
+  session before continuing. Configure MongoDB permissions to allow
+  `createCollection`, `find`, and `insert` on `lq_auth_events`; the collection
+  is created automatically as capped (1 MiB / 5,000 documents). No change
+  stream, replica-set-only feature, new environment variable, or new runtime
+  dependency is used.
+- **Live verification boundary:** the multi-instance fanout test and the
+  real-browser cross-profile/cross-browser tests run locally against real
+  MongoDB/Express/SSE. The public Vercel/Render deployment was not redeployed
+  for this change. Its `/api/auth/events` route returned 404 and its bundle
+  lacked the SSE client, so production streaming, Render connection limits,
+  and live latency still require an owner-authorized deploy check. The local
+  tests prove the implementation; they do not prove the deployed application.
 
 ## Data persistence and privacy
 
@@ -296,6 +398,11 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 ## Limitations
 
+- Server-pushed invalidation only reaches a connected, running client. A
+  browser tab that is closed, suspended, offline, or a terminated mobile app
+  receives no notification; server-side session revocation remains
+  authoritative and the signed-out state is discovered on reconnect or the next
+  authenticated request. Background push notifications are not implemented.
 - Live MongoDB, Google, and Brevo integrations require real credentials and
   network access; the automated suites use in-memory fakes. The production
   proxy/session chain, Render Node `24.22.1` runtime, live email delivery, and
@@ -342,6 +449,9 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Totals look wrong | Confirm range endpoints and unresolved flags; content duration ≠ study time |
 | Port conflict (`EADDRINUSE`) | Stop the other process or change `PORT` in `backend/.env` |
 | Frontend can't reach backend | Check the chosen topology in [Production deployment](#production-deployment): same-origin `/api` proxy or same-site custom domains. For custom domains, verify `VITE_API_BASE_URL` (no trailing slash or `/api` suffix, then redeploy) and `CORS_ORIGIN`. A `*.vercel.app` → `*.onrender.com` direct API URL fails authentication because the Lax cookie is cross-site |
+| Another profile/device did not update after **Sign out all** | Confirm the other client is open and authenticated, then check the browser Network panel for a `200 text/event-stream` request to `/api/auth/events`. A `404` means that build was not deployed with the SSE route. A proxy that buffers external rewrites, a MongoDB user lacking `lq_auth_events` permissions, or a backend restart can interrupt delivery; the revoked session still fails on the next request. Reconnect/reload revalidates and signs it out |
+| Account → Security says “rate-limiting requests” | The request was a genuine 429 from the general API limiter, not a session failure. The screen preserves the last loaded list, disables Refresh until `Retry-After` expires, and clears the notice afterwards. If it repeats under normal use, inspect the Network panel for duplicate `/api/account/sessions` calls or an SSE reconnect loop; do not raise or disable the limiter blindly |
+| `STREAM_LIMIT` or repeated SSE reconnects | Close excess LearnQuest tabs for the account (20-stream cap) or check the backend process total (1,000). The client advertises a 30-second retry and uses capped exponential backoff, so reconnects should not form a tight loop. Reconnects are expected after redeploys, free-tier spin-down, or network changes; the client revalidates the session on every reconnect |
 | Node version warning on Render | Remove/raise a dashboard `NODE_VERSION` override; the repo pins 24.22.1 |
 
 ## Documentation
