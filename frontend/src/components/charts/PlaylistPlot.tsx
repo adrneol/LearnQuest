@@ -6,7 +6,21 @@ import { useChartTheme } from './theme.js';
 
 export const AXIS_WIDTH = 48;
 export const RIGHT_MARGIN = 16;
+const TOP = 11;
+const BOTTOM = 2;
+const X_AXIS_HEIGHT = 30;
 const number = new Intl.NumberFormat('en', { maximumSignificantDigits: 4, useGrouping: false });
+
+function plotTicks(floor: number, ceiling: number, unit: number) {
+  const ticks = niceTicks((ceiling - floor) / unit).map((tick) => floor + tick * unit);
+  ticks[ticks.length - 1] = Math.max(ceiling, ticks.at(-1) ?? 1);
+  return ticks;
+}
+
+export function markHeight(mark: ChartMark, height: number, floor: number, ceiling: number, unit: number) {
+  const top = plotTicks(floor, ceiling, unit).at(-1) ?? 1;
+  return TOP + (1 - ((mark.max ?? floor) - floor) / (top - floor)) * Math.max(0, height - TOP - BOTTOM - X_AXIS_HEIGHT);
+}
 
 export const PlaylistPlot = memo(function PlaylistPlot({ marks, width, height, ceiling, floor, unit, metric, selected }: {
   marks: ChartMark[]; width: number; height: number; ceiling: number; floor: number;
@@ -26,16 +40,15 @@ export const PlaylistPlot = memo(function PlaylistPlot({ marks, width, height, c
       alternate: alternate ? mark.value : null,
     };
   });
-  const ticks = niceTicks((ceiling - floor) / unit).map((tick) => floor + tick * unit);
-  ticks[ticks.length - 1] = Math.max(ceiling, ticks.at(-1) ?? 1);
+  const ticks = plotTicks(floor, ceiling, unit);
   const xTicks = axisIndices(data.length, width - AXIS_WIDTH - RIGHT_MARGIN);
   const bandWidth = (width - AXIS_WIDTH - RIGHT_MARGIN) / Math.max(1, data.length);
   if (width <= AXIS_WIDTH + RIGHT_MARGIN || height <= 0) return null;
   return (
     <div aria-hidden="true" className="pointer-events-none">
-      <ComposedChart width={width} height={height} data={data} margin={{ top: 11, right: RIGHT_MARGIN, bottom: 2, left: 0 }}>
+      <ComposedChart width={width} height={height} data={data} margin={{ top: TOP, right: RIGHT_MARGIN, bottom: BOTTOM, left: 0 }}>
         <CartesianGrid vertical={false} stroke={theme.GRID_STROKE} />
-        <XAxis dataKey="index" scale="band" type="category" interval={0} ticks={xTicks}
+        <XAxis dataKey="index" scale="band" type="category" interval={0} ticks={xTicks} height={X_AXIS_HEIGHT}
           tickLine={false} axisLine={{ stroke: theme.AXIS_LINE }}
           tick={({ y, payload }: { y: number; payload: { value: number } }) => {
             const index = payload.value;

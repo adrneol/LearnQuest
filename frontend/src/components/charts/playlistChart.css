@@ -1,0 +1,43 @@
+.lq-chart-tooltip {
+  position: fixed;
+  inset: 0 auto auto 0;
+  z-index: 24;
+  visibility: hidden;
+  pointer-events: none;
+  width: max-content;
+  max-width: min(15.5rem, calc(100vw - 1rem));
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 12%);
+  padding: .45rem .65rem;
+  font-size: .8125rem;
+  line-height: 1.35;
+}
+.lq-chart-tooltip-meta { color: var(--text-muted); font-size: .75rem; }
+.lq-chart-tooltip-value { margin-top: .2rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.lq-chart-tooltip-value span { display: block; font-size: .75rem; font-weight: 400; color: var(--text-muted); }
+
+.lq-chart-table-scroll { overflow-x: auto; overscroll-behavior-inline: contain; border-block: 1px solid var(--border); }
+.lq-chart-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .875rem; line-height: 1.4; }
+.lq-chart-table--cumulative { min-width: 28rem; }
+.lq-chart-table col:first-child { width: 3.75rem; }
+.lq-chart-table col:nth-child(n+3) { width: 5.25rem; }
+.lq-chart-table th, .lq-chart-table td { padding: .5rem .4rem; vertical-align: middle; border-block-end: 1px solid var(--border); }
+.lq-chart-table thead { background: var(--surface-soft); color: var(--text-muted); text-align: left; }
+.lq-chart-table tbody th { text-align: left; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lq-chart-table .lq-chart-number { text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.lq-chart-table tbody tr:nth-child(even) { background: var(--surface-soft); }
+.lq-chart-table tbody tr:hover, .lq-chart-table tbody tr:focus-within { background: var(--surface-hover); }
+.lq-chart-table tbody tr[data-selected] { background: var(--selected); }
+.lq-chart-table tbody tr[data-selected] th { box-shadow: inset 3px 0 var(--focus); }
+.lq-chart-table .lq-chart-row-title { display: block; width: 100%; padding: .15rem 0; text-align: left; overflow-wrap: anywhere; }
+.lq-chart-table .lq-chart-row-title:hover { text-decoration: underline; text-underline-offset: .2em; }
+
+@media (min-width: 48rem) {
+  .lq-chart-table col:first-child { width: 6rem; }
+  .lq-chart-table col:nth-child(n+3) { width: 8rem; }
+  .lq-chart-table th, .lq-chart-table td { padding-inline: 1rem; }
+}

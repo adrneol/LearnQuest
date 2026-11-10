@@ -83,3 +83,29 @@ The fixtures exercise browser geometry, wheel and emulated touch, keyboard inspe
 The first browser review hit a Player focus assertion that expected exactly 2 px. The observed ring was 3 px. The updated check verifies a single solid ring at least 2 px wide with at least 2 px of offset, and the exact visual baseline passed on the follow-up run. The chart checks verify real SVG label-to-bar alignment, 25 and 55 range starts, endpoint inspection, missing and unavailable entries, touch and wheel panning, ordinary vertical scrolling, theme changes, and paginated table access.
 
 The accessibility review used the [Vercel Web Interface Guidelines](https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md) alongside manual capture review and the isolated browser checks.
+
+## Phase C.1 precision inspection
+
+- The tooltip and lower strip use the same typed, formatted inspection record. The strip prefers keyboard inspection, then pointer preview, then the pin. The pin uses occurrence identity or group boundary identities. Hover never replaces it. Click, Enter or Space pins. Escape clears the preview. Touch taps inspect individual marks and still drill into groups.
+- Placement uses the chart's band center and rendered Y scale, the measured tooltip, and the visual viewport. It tries adjacent sides and rejects collisions with the sticky header and compass. On narrow screens it favors less overlap with the plot. If every candidate collides, the lower strip still presents the value.
+- The table keeps semantic row and column headers, subtle row banding, right-aligned tabular durations, and exact unavailable states. It renders 25 or 50 rows at a time. Title cells stay compact even when a selected title opens in a full-width disclosure. Find and Show chart selection navigate within the table. Selecting a row pins the exact occurrence without scrolling the page to the chart.
+- Only the wider cumulative table has its own horizontal scroll area at narrow widths. Hover stays local, keeps the memoized Recharts subtree unchanged, and avoids live-region announcements. Keyboard inspection and deliberate pins update the accessible status.
+
+The synchronized Chromium suite passed all 10 entries. It covered six widths
+from 320 to 1920 px, six dataset sizes from 1 to 5,000, both themes, the
+cumulative scroller, exact group values, touch, and switching playlists. The
+2,000-entry probe took 413 ms for 12 Playwright pointer moves plus two paint
+frames, with zero SVG subtree mutations and no document scroll. This is a
+browser automation observation, not a frame-rate or device latency guarantee.
+
+The frontend baseline passed 489 tests. The focused rerun after synchronization
+passed 34, including the two new inspection-model cases. Typecheck and build
+passed. Lint reported zero errors and four existing warnings. The backend was
+outside the C.1 implementation and verification scope.
+
+The combined Chromium run passed 43 of 45 entries. The compass dial check and
+its parent suite failed in that run. The existing dial assertions passed in a
+focused retry together with both Library references. The dial test now waits
+for input delivery and measures current geometry after switching sections.
+That final focused dial run passed both the case and its parent suite.
+Navigation implementation stayed unchanged.

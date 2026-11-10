@@ -1,9 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Minus, Plus } from 'lucide-react';
 import { formatSecondsHHMMSS as time } from '../../domain/duration/duration.js';
 import { usePointerGesture } from '../navigation/usePointerGesture.js';
 import { Btn, inputCls } from '../ui/ui.js';
-import { AXIS_WIDTH, PlaylistPlot, RIGHT_MARGIN } from './PlaylistPlot.js';
+import { AXIS_WIDTH, markHeight, PlaylistPlot, RIGHT_MARGIN } from './PlaylistPlot.js';
+import { inspectionFor, markKey, resolvePin, type ChartInspection, type MarkKey } from './chartInspection.js';
+import { PlaylistTable } from './PlaylistTable.js';
+import { PlaylistTooltip } from './PlaylistTooltip.js';
 import { chartMarks, clampViewport, markBudget, positionIndex, type ChartMark, type PlaylistMetric, type PlaylistPoint, type Viewport } from './playlistSeries.js';
 
 interface Props {
@@ -15,28 +18,16 @@ interface Props {
   heightClass: string;
 }
 
-const unavailable = {
-  deleted: 'deleted video',
-  private: 'private video',
-  notFound: 'video not found',
-  regionRestricted: 'region restricted',
-};
-
-function duration(point: PlaylistPoint) {
-  if (point.durationSec !== null) return time(point.durationSec);
-  const reason = point.unresolvedReason;
-  if (reason && Object.hasOwn(unavailable, reason)) return `Unavailable (${unavailable[reason as keyof typeof unavailable]})`;
-  return point.videoId ? 'Unresolved' : 'Unavailable (missing entry)';
-}
-
 export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, heightClass }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const jump = useRef<HTMLInputElement>(null);
   const instructions = useId();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [detail, setDetail] = useState<Viewport | null>(null);
-  const [selected, setSelected] = useState<string>();
-  const [hovered, setHovered] = useState<number>();
+  const [pinnedMark, setPinnedMark] = useState<MarkKey>();
+  const [focusedMark, setFocusedMark] = useState<string>();
+  const [hoveredMark, setHoveredMark] = useState<string>();
+  const pointerType = useRef<string>();
   const [localScale, setLocalScale] = useState(false);
   const [invalid, setInvalid] = useState(false);
   const drag = useRef<{ x: number; width: number; window: Viewport } | null>(null);
@@ -57,11 +48,33 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
     : fullMax;
   const unit = ceiling - floor >= 3600 ? 3600 : ceiling - floor >= 180 ? 60 : 1;
   const units = unit === 3600 ? 'hours' : unit === 60 ? 'minutes' : 'seconds';
-  const selectedIndex = useMemo(() => data.findIndex((point) => point.id === selected), [data, selected]);
+  const pinned = useMemo(() => pinnedMark ? resolvePin(data, pinnedMark, metric) : undefined, [data, metric, pinnedMark]);
+  const selectedIndex = pinned?.start ?? -1;
   const active = marks.findIndex((mark) => selectedIndex >= mark.start && selectedIndex < mark.end);
-  const preview = hovered !== undefined ? marks[hovered] : undefined;
   const chosen = active >= 0 ? marks[active] : undefined;
   const aggregate = marks.some((mark) => mark.end - mark.start > 1);
+  const durationGroups = useMemo(() => metric === 'cumulative' && aggregate
+    ? chartMarks(data, { start: window.start, length: window.length }, budget, 'duration') : marks,
+    [metric, aggregate, data, window.start, window.length, budget, marks]);
+  const visibleInspections = useMemo(() => marks.map((mark, index) => inspectionFor(mark, durationGroups[index], metric)),
+    [marks, durationGroups, metric]);
+  const focusIndex = visibleInspections.findIndex((item) => item.id === focusedMark);
+  const hoverIndex = visibleInspections.findIndex((item) => item.id === hoveredMark);
+  const transientIndex = focusIndex >= 0 ? focusIndex : hoverIndex;
+  const preview = visibleInspections[transientIndex];
+  const displayed = preview ?? pinned?.inspection;
+  const announcement = visibleInspections[focusIndex] ?? pinned?.inspection;
+  const stateLabel = focusIndex >= 0 ? 'Keyboard' : displayed && displayed.id === pinned?.inspection.id ? 'Pinned' : 'Preview';
+  const anchor = preview && plotWidth > 0 ? {
+    x: AXIS_WIDTH + (transientIndex + .5) * plotWidth / marks.length,
+    y: markHeight(marks[transientIndex], size.height, floor, ceiling, unit),
+  } : undefined;
+
+  useEffect(() => {
+    const valid = (id: string | undefined) => visibleInspections.some((item) => item.id === id) ? id : undefined;
+    setFocusedMark(valid);
+    setHoveredMark(valid);
+  }, [visibleInspections]);
 
   useLayoutEffect(() => {
     const node = ref.current;
@@ -94,21 +107,43 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
         const next = clampViewport(count, previous.start + steps, previous.length);
         return next.start === previous.start ? previous : next;
       });
-      setHovered(undefined);
+      setHoveredMark(undefined);
+      setFocusedMark(undefined);
     };
     node.addEventListener('wheel', pan, { passive: false });
     return () => node.removeEventListener('wheel', pan);
   }, [hasDetail, window.length, count, plotWidth]);
 
-  function show(start: number, length: number) {
+  useEffect(() => {
+    if (!hoveredMark || pointerType.current !== 'touch') return;
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !ref.current?.contains(event.target)) setHoveredMark(undefined);
+    };
+    document.addEventListener('pointerdown', dismiss, true);
+    return () => document.removeEventListener('pointerdown', dismiss, true);
+  }, [hoveredMark]);
+
+  const show = useCallback((start: number, length: number) => {
     const next = clampViewport(count, start, length);
     setDetail((previous) => previous?.start === next.start && previous.length === next.length ? previous : next);
-    setHovered(undefined);
-  }
+    setHoveredMark(undefined);
+    setFocusedMark(undefined);
+  }, [count]);
+
+  const selectPoint = useCallback((index: number, center = false) => {
+    setPinnedMark({ first: data[index].id });
+    setHoveredMark(undefined);
+    setFocusedMark(undefined);
+    if (center || !marks.some((mark) => mark.start === index && mark.end === index + 1)) {
+      const length = Math.min(count, markBudget(plotWidth, 23));
+      show(index - Math.floor(length / 2), length);
+    }
+  }, [data, marks, count, plotWidth, show]);
 
   function activate(mark: ChartMark) {
-    setSelected(mark.first.id);
-    if (mark.end - mark.start > 1) show(mark.start, mark.end - mark.start);
+    const group = mark.end - mark.start > 1;
+    setPinnedMark(markKey(mark));
+    if (group) show(mark.start, mark.end - mark.start);
   }
 
   const gesture = usePointerGesture({
@@ -130,8 +165,8 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
 
   if (!first || !last) return <p className="py-8 text-sm text-[var(--text-muted)]">{emptyHint}</p>;
 
-  const indexAt = (x: number, left: number) => {
-    const offset = x - left - AXIS_WIDTH;
+  const indexAt = (x: number) => {
+    const offset = x - AXIS_WIDTH;
     return offset < 0 || offset >= plotWidth ? undefined : Math.floor(offset / plotWidth * marks.length);
   };
   const pageBy = (direction: number) => show(window.start + direction * window.length, window.length);
@@ -146,8 +181,8 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
       <div className="flex flex-wrap items-center justify-between gap-x-3">
         <p className="text-xs text-[var(--text-muted)]">{caption}</p>
         <Btn variant="quiet" onClick={() => {
-          setSelected(undefined);
-          setHovered(undefined);
+          setHoveredMark(undefined);
+          setFocusedMark(undefined);
           if (detail) { setDetail(null); setLocalScale(false); }
           else show(0, Math.min(count, markBudget(plotWidth, 23)));
         }}>{detail ? 'Return to full overview' : 'Explore individual videos'}</Btn>
@@ -170,33 +205,53 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
         Axis in {units} {aggregate ? '· Min–max per group. Select a group to zoom.' : '· One mark per video.'}
         {marks.some((mark) => mark.unresolved > 0) && ' × Unresolved.'}
         {detail && localScale && ` Visible-range scale starts at ${time(floor)}.`}
-        {' Use ← →, Home or End to inspect, and Enter to select.'}
+        {' Use ← →, Home or End to inspect, and Enter or Space to pin.'}
         {detail && ' Focus the plot to pan with Shift+wheel.'}
       </p>
       <div ref={ref} role="region" aria-label={ariaLabel} aria-describedby={instructions} tabIndex={0}
-        className={`${heightClass} min-w-0 touch-pan-y select-none`}
+        className={`${heightClass} relative min-w-0 touch-pan-y select-none`}
         {...gesture}
-        onFocus={() => { if (!chosen) setSelected(first.id); }}
+        onFocus={(event) => {
+          if (event.currentTarget.matches(':focus-visible')) setFocusedMark(visibleInspections[Math.max(0, active)]?.id);
+        }}
+        onBlur={() => setFocusedMark(undefined)}
+        onPointerDown={(event) => {
+          pointerType.current = event.pointerType;
+          setFocusedMark(undefined);
+          if (event.pointerType === 'touch') setHoveredMark(undefined);
+          gesture.onPointerDown(event);
+        }}
         onPointerMove={(event) => {
           gesture.onPointerMove(event);
-          if (event.pointerType === 'mouse' && !event.buttons) setHovered(indexAt(event.clientX, event.currentTarget.getBoundingClientRect().left));
+          if (event.pointerType === 'mouse' && !event.buttons) {
+            pointerType.current = 'mouse';
+            const index = indexAt(event.nativeEvent.offsetX);
+            setHoveredMark(index === undefined ? undefined : visibleInspections[index]?.id);
+          }
         }}
-        onPointerLeave={() => setHovered(undefined)}
+        onPointerLeave={(event) => { if (event.pointerType !== 'touch') setHoveredMark(undefined); }}
         onClick={(event) => {
-          const index = indexAt(event.clientX, event.currentTarget.getBoundingClientRect().left);
-          if (index !== undefined && marks[index]) activate(marks[index]);
+          const index = indexAt(event.nativeEvent.offsetX);
+          if (index === undefined || !marks[index]) return;
+          const mark = marks[index];
+          activate(mark);
+          if (pointerType.current === 'touch' && mark.end === mark.start + 1) setHoveredMark(visibleInspections[index].id);
         }}
         onKeyDown={(event) => {
+          const current = focusIndex >= 0 ? focusIndex : active;
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? marks.length - 1
-            : event.key === 'ArrowRight' ? Math.min(active + 1, marks.length - 1)
-            : event.key === 'ArrowLeft' ? Math.max(0, active - 1) : undefined;
-          if (next !== undefined && marks[next]) {
+            : event.key === 'ArrowRight' ? Math.min(current + 1, marks.length - 1)
+            : event.key === 'ArrowLeft' ? Math.max(0, current - 1) : undefined;
+          if (event.key === 'Escape') {
+            setHoveredMark(undefined);
+            setFocusedMark(undefined);
+          } else if (next !== undefined && marks[next]) {
             event.preventDefault();
-            setHovered(undefined);
-            setSelected(marks[next].first.id);
-          } else if (event.key === 'Enter' && chosen) {
+            setHoveredMark(undefined);
+            setFocusedMark(visibleInspections[next].id);
+          } else if ((event.key === 'Enter' || event.key === ' ') && marks[current]) {
             event.preventDefault();
-            activate(chosen);
+            activate(marks[current]);
           } else if (detail && (event.key === 'PageUp' || event.key === 'PageDown')) {
             event.preventDefault();
             pageBy(event.key === 'PageUp' ? -1 : 1);
@@ -204,10 +259,23 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
         }}>
         <PlaylistPlot marks={marks} width={size.width} height={size.height} floor={floor} ceiling={ceiling}
           unit={unit} metric={metric} selected={active < 0 ? undefined : active} />
+        {preview && anchor && (
+          <>
+            <span aria-hidden="true" className={`pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-[var(--focus)] ${focusIndex >= 0 ? 'border-2' : 'border'}`}
+              style={{ left: anchor.x, top: anchor.y }} />
+            <PlaylistTooltip inspection={preview} plot={ref} {...anchor} />
+          </>
+        )}
       </div>
-      <div className="min-h-10 rounded-md bg-[var(--surface-soft)] px-3 py-2 text-xs">
-        {preview ? <Inspection mark={preview} metric={metric} /> : chosen ? <Inspection mark={chosen} metric={metric} /> : 'Select or focus the chart to inspect values.'}
-        <span className="sr-only" role="status">{chosen && <Inspection mark={chosen} metric={metric} />}</span>
+      <div data-chart-inspector className="min-h-10 break-words rounded-md bg-[var(--surface-soft)] px-3 py-2 text-xs">
+        {displayed ? (
+          <>
+            <span aria-hidden="true" className="mr-2 text-[var(--text-muted)]">{stateLabel}</span>
+            {' '}
+            <Inspection item={displayed} />
+          </>
+        ) : 'Select a mark to keep its details here.'}
+        <span className="sr-only" role="status">{announcement && <Inspection item={announcement} />}</span>
       </div>
       <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => {
         event.preventDefault();
@@ -216,61 +284,20 @@ export function PlaylistChart({ data, metric, ariaLabel, caption, emptyHint, hei
         const found = data[index]?.pos === position;
         setInvalid(!found);
         if (!found) return;
-        setSelected(data[index].id);
-        const length = Math.min(count, markBudget(plotWidth, 23));
-        show(index - Math.floor(length / 2), length);
+        selectPoint(index, true);
       }}>
         <input ref={jump} aria-label="Video position" type="number" step={1} required min={data[0].pos} max={data[count - 1].pos}
           aria-invalid={invalid} onChange={() => setInvalid(false)} className={`${inputCls} max-w-32`} placeholder="Position" />
         <Btn type="submit" variant="quiet">Jump to video</Btn>
         {invalid && <span role="status" className="text-xs text-[var(--danger)]">That position is outside this selection or missing.</span>}
       </form>
-      <PlaylistTable data={data} metric={metric} />
+      <PlaylistTable data={data} metric={metric} selectedIndex={selectedIndex} groupEnd={pinned?.end} onInspect={selectPoint} />
     </section>
   );
 }
 
-function Inspection({ mark, metric }: { mark: ChartMark; metric: PlaylistMetric }) {
-  if (mark.end - mark.start > 1) {
-    return <><b>Videos {mark.first.pos}–{mark.last.pos}</b> · {mark.end - mark.start} entries · {mark.unresolved} unresolved
-      {mark.min !== null && <> · {metric === 'cumulative' ? 'Known subtotal bounds' : 'Duration min–max'} {time(mark.min)}–{time(mark.max!)}</>}
-      {metric === 'cumulative' && <> · Boundary subtotals {time(mark.first.cumSec)} → {time(mark.last.cumSec)}</>}
-    </>;
-  }
-  const point = mark.first;
-  return <><b>Video #{point.pos}</b> · {point.title} · {duration(point)}
-    {metric === 'cumulative' && <> · Known subtotal {time(point.cumSec)}{point.incomplete ? ' (incomplete)' : ''}</>}
-    {point.done && ' · Completed'}</>;
-}
-
-function PlaylistTable({ data, metric }: { data: readonly PlaylistPoint[]; metric: PlaylistMetric }) {
-  const [open, setOpen] = useState(false);
-  const [page, setPage] = useState(0);
-  const pages = Math.ceil(data.length / 25);
-  const current = Math.min(page, pages - 1);
-  return (
-    <details className="text-sm" onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
-      {open && (
-        <>
-          <div className="overflow-x-auto">
-            <table className="lq-data-table w-full text-left">
-              <caption className="sr-only">Exact playlist values in hours, minutes and seconds</caption>
-              <thead><tr><th scope="col">Position</th><th scope="col">Video</th><th scope="col">Duration</th>
-                {metric === 'cumulative' && <th scope="col">Known subtotal</th>}</tr></thead>
-              <tbody>{data.slice(current * 25, (current + 1) * 25).map((point) => (
-                <tr key={point.id}><th scope="row">#{point.pos}</th><td>{point.title}</td><td>{duration(point)}</td>
-                  {metric === 'cumulative' && <td>{time(point.cumSec)}{point.incomplete && ' (incomplete)'}</td>}</tr>
-              ))}</tbody>
-            </table>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Btn variant="quiet" disabled={current === 0} onClick={() => setPage(current - 1)}>Previous rows</Btn>
-            <span role="status" className="text-xs">Page {current + 1} of {pages}</span>
-            <Btn variant="quiet" disabled={current >= pages - 1} onClick={() => setPage(current + 1)}>Next rows</Btn>
-          </div>
-        </>
-      )}
-    </details>
-  );
+function Inspection({ item }: { item: ChartInspection }) {
+  return <><b>{item.heading}</b>{item.detail && ` · ${item.detail}`}
+    {' · '}{item.valueLabel && item.valueLabel + ' '}{item.value}
+    {item.subtotal && ` · ${item.subtotal}`}{item.completed && ' · Completed'}</>;
 }

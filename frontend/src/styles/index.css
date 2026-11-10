@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "../components/navigation/navigation.css";
+@import "../components/charts/playlistChart.css";
 
 /* Tailwind's dark: variant keys off our data-theme attribute (not media
    query), so two-theme status tints work without a second stylesheet. */

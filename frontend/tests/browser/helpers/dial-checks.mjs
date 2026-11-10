@@ -112,29 +112,35 @@ export async function checkDial(t, fixture, review) {
     await panel(page).waitFor();
     await page.clock.runFor(200);
     const dial = page.locator('.lq-dial');
-    const bounds = await dial.boundingBox();
-    assert.ok(bounds);
-    const x = bounds.x + bounds.width / 2;
-    const y = bounds.y + bounds.height / 2;
     const start = -Math.PI / 2;
-    const point = (angle, radius = bounds.width * .43) =>
-      [x + radius * Math.cos(angle), y + radius * Math.sin(angle)];
     const learn = panel(page).getByRole('button', { name: 'Learn', exact: true });
     const insights = panel(page).getByRole('button', { name: 'Insights', exact: true });
     await capture(page, review, 'dial-learn');
     await panel(page).getByRole('button', { name: 'All pages' }).focus();
-    await page.mouse.move(x, y);
+    await dial.hover();
     await page.mouse.wheel(0, 100);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.equal(await learn.getAttribute('aria-pressed'), 'true', 'Wheel selection requires dial focus');
     await learn.focus();
+    await dial.hover();
     const beforeRotation = await page.evaluate(() => scrollY);
     await page.mouse.wheel(0, 100);
     await page.waitForFunction(() => document.querySelector('[data-slot="1"]')?.getAttribute('aria-pressed') === 'true');
     await learn.press('Home');
+    await page.waitForFunction(() => document.querySelector('[data-slot="0"]')?.getAttribute('aria-pressed') === 'true');
+    // Returning to Learn changes the panel height. Use the dial's new bounds
+    // after the panel's ResizeObserver has positioned it for the drag.
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const dragBounds = await dial.boundingBox();
+    assert.ok(dragBounds);
+    const point = (angle, radius = dragBounds.width * .43) => [
+      dragBounds.x + dragBounds.width / 2 + radius * Math.cos(angle),
+      dragBounds.y + dragBounds.height / 2 + radius * Math.sin(angle),
+    ];
     await page.mouse.move(...point(start));
     await page.mouse.down();
     for (let step = 1; step <= 12; step++) await page.mouse.move(...point(start + step * Math.PI / 18));
-    await page.mouse.move(...point(start + 2 * Math.PI / 3, bounds.width * .58));
+    await page.mouse.move(...point(start + 2 * Math.PI / 3, dragBounds.width * .58));
     await page.mouse.up();
     assert.equal(await page.evaluate(() => scrollY), beforeRotation);
     assert.equal(await insights.getAttribute('aria-pressed'), 'true');

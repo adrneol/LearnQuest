@@ -110,6 +110,21 @@ frames. Renderer resource figures include the page, so they are not isolated
 component measurements. The 2,000- and 5,000-entry fixtures exercise the
 visualization subsystem without changing production import limits.
 
+## Precision chart inspection
+
+```powershell
+cd frontend
+$env:LQ_BROWSER_EXECUTABLE = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+node --test tests/browser/chart-polish.browser.mjs
+```
+
+The isolated Chromium suite exercises synchronized tooltip and strip content,
+pinning, focus priority, dataset changes, touch, the compass, and table
+navigation from 1 to 5,000 synthetic entries at six widths. It writes reviewed
+captures to `frontend/test-results/visual/phase-c1`. The hover performance
+check records pointer-action time and asserts that hover causes zero mutations
+inside the chart SVG.
+
 The existing authentication browser scripts remain separate. These fixtures
 exercise the local learning workspace; they do not establish production
 cookie, OAuth, playback, or database behavior.
