@@ -81,19 +81,34 @@ npm --prefix frontend run test:regressions
 npm --prefix frontend run test:browser:regressions
 ```
 
-These opt-in commands assert the desired behavior and currently exit nonzero.
+The Vitest command remains intentionally red for the cases below. The browser
+command is a focused runner for the now-passing CHART-2 case, also exercised by
+the ordinary browser baseline. CHART-1 moved into the ordinary frontend suite.
 Assertion failures show unresolved defects; setup errors and timeouts are test
-infrastructure failures, not evidence of a defect. Move each corrected case
-into the ordinary baseline when its fix lands.
+infrastructure failures, not evidence of a defect.
 
 | Cases | Expected behavior |
 | --- | --- |
-| CHART-1, CHART-2 | Highest tick covers the data; a range starting at 25 reports playlist position 25. |
 | ARENA-1, ARENA-2 | Completing a lesson preserves earlier qualifying evidence; a fixed run's dates agree with its displayed period. |
 | EXPORT-1 | Manifest file names agree with the archive contents. |
 
 Phase B moved NAV-1, NAV-2, and A11Y-2 to the browser baseline and A11Y-1 to
 the frontend Vitest baseline. The deferred cases above remain opt-in.
+
+## Playlist chart profiling
+
+```powershell
+cd frontend
+$env:LQ_BROWSER_EXECUTABLE = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+node --test tests/browser/chart-profile.browser.mjs
+```
+
+The profile uses synthetic IndexedDB fixtures from 1 to 5,000 entries and logs
+observed action-to-paint times, chart SVG descendants, renderer task time and
+heap size. The measured action includes Playwright overhead and two paint
+frames. Renderer resource figures include the page, so they are not isolated
+component measurements. The 2,000- and 5,000-entry fixtures exercise the
+visualization subsystem without changing production import limits.
 
 The existing authentication browser scripts remain separate. These fixtures
 exercise the local learning workspace; they do not establish production

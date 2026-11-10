@@ -1,5 +1,4 @@
 import { expect, it } from 'vitest';
-import { niceTicks } from '../../src/components/charts/PanChart.js';
 import {
   challengeWindowDates, computeArenaUserEvidence, createFixedChallenge, DEFAULT_CHALLENGE,
 } from '../../src/domain/competition/competition.js';
@@ -15,10 +14,6 @@ const snapshot: PlaylistSnapshot = {
   playlistId, title: 'Synthetic course', entries: [entry], reportedCount: 1,
   source: 'imported', fetchedAt: now.toISOString(), snapshotVersion: 2,
 };
-
-it('CHART-1: the highest duration tick covers the longest lesson', () => {
-  expect(niceTicks(12).at(-1)).toBeGreaterThanOrEqual(12);
-});
 
 it('ARENA-1: completing a lesson later preserves its earlier qualifying playback day', () => {
   const dayOne = Date.parse('2026-11-01T12:00:00Z');

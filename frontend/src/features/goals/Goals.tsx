@@ -123,7 +123,7 @@ export function Goals() {
               <Btn variant="quiet" className="lq-icon-button lq-delete-trigger" aria-label={'Delete goal ' + g.label} onClick={() => s.deleteFlexGoal(g.id)}><Trash2 size={16} aria-hidden="true" /></Btn>
             </div>
             <p className="mt-1 font-mono text-sm">{displayCurrent(g.metric, current)} / {formatGoalTarget(g.metric, g.target)} · {p.remaining > 0 ? `${displayCurrent(g.metric, p.remaining)} to go` : 'done'}</p>
-            <div className="mt-1"><ProgressBar pct={Math.min(100, p.pct)} tone={p.status === 'achieved' || p.status === 'exceeded' ? 'emerald' : 'neutral'} /></div>
+            <div className="mt-1"><ProgressBar label="Goal progress" pct={Math.min(100, p.pct)} tone={p.status === 'achieved' || p.status === 'exceeded' ? 'emerald' : 'neutral'} /></div>
             {g.achievedAt && <p className="mt-1 flex items-center gap-1 text-xs text-emerald-800 dark:text-emerald-300"><Trophy size={12} /> Achieved {new Date(g.achievedAt).toLocaleString()} — exact earning activity above. No duplicate completion events.</p>}
             {p.status === 'missed' && <p className="mt-1 text-xs text-[var(--text-muted)]">Missed — adjust the target or set a fresh goal. Past progress is kept.</p>}
           </Card>

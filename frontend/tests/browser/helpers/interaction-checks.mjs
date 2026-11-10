@@ -21,10 +21,14 @@ export async function checkInteractions(t, fixture, review) {
     await notes.scrollIntoViewIfNeeded();
     await capture(record, review, 'player-record');
     await notes.focus();
-    assert.deepEqual(await notes.evaluate((element) => {
+    const focusStyle = await notes.evaluate((element) => {
       const style = getComputedStyle(element);
-      return [style.outlineStyle, style.outlineWidth, style.boxShadow];
-    }), ['solid', '2px', 'none']);
+      return { style: style.outlineStyle, width: parseFloat(style.outlineWidth),
+        offset: parseFloat(style.outlineOffset), shadow: style.boxShadow };
+    });
+    assert.equal(focusStyle.style, 'solid');
+    assert.ok(focusStyle.width >= 2 && focusStyle.offset >= 2, JSON.stringify(focusStyle));
+    assert.equal(focusStyle.shadow, 'none');
     await notes.fill('Synthetic learning note');
     await capture(record, review, 'player-editing');
 

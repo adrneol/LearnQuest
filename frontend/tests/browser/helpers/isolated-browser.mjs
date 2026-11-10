@@ -147,7 +147,7 @@ export async function startBrowserFixture(t) {
   return {
     browserVersion: browser.version(),
     async open(test, { width = 1440, height = 900, theme = 'dark', route = 'learn', touch = false,
-      cloud = false, motion = false, resolvedDurations = false } = {}) {
+      cloud = false, motion = false, resolvedDurations = false, entryCount, entries, alternateEntries } = {}) {
       const context = await browser.newContext({
         viewport: { width, height }, deviceScaleFactor: 1, locale: 'en-US',
         timezoneId: 'UTC', colorScheme: theme, reducedMotion: motion ? 'no-preference' : 'reduce', serviceWorkers: 'block', hasTouch: touch,
@@ -175,7 +175,29 @@ export async function startBrowserFixture(t) {
       test.after(() => assert.deepEqual(errors, [], 'Unexpected browser or application console errors'));
       await page.clock.install({ time: new Date(fixedTime) });
       await page.goto(`${origin}/__fixture__`, { waitUntil: 'domcontentloaded' });
-      const localState = resolvedDurations ? structuredClone(state) : state;
+      const localState = resolvedDurations || entryCount !== undefined || entries || alternateEntries ? structuredClone(state) : state;
+      if (entryCount !== undefined) {
+        const playlist = localState.playlists[playlistId];
+        playlist.entries = Array.from({ length: entryCount }, (_, index) => ({
+          ...state.playlists[playlistId].entries[index % 150],
+          position: index + 1, entryId: `profile-${index + 1}`,
+          durationSec: index === Math.floor(entryCount / 2) && entryCount > 8 ? 90001
+            : index === 2 ? null : (index % 7 + 1) * 73,
+        }));
+        playlist.reportedCount = entryCount;
+      }
+      if (entries) {
+        localState.playlists[playlistId].entries = entries;
+        localState.playlists[playlistId].reportedCount = entries.length;
+      }
+      if (alternateEntries) {
+        const alternateId = 'PLbrowserfixture0002';
+        localState.playlists[alternateId] = {
+          ...localState.playlists[playlistId], playlistId: alternateId, title: 'Alternate synthetic playlist',
+          entries: alternateEntries, reportedCount: alternateEntries.length,
+        };
+        localState.meta[alternateId] = { ...localState.meta[playlistId] };
+      }
       if (resolvedDurations) {
         const entry = localState.playlists[playlistId].entries[2];
         entry.durationSec = 219;

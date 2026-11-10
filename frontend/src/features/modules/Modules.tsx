@@ -130,7 +130,7 @@ export function Modules() {
               }}><Pencil size={14} /><span className="text-xs">videos</span></Btn>
               <Btn onClick={() => s.deleteModule(m.id)} variant="quiet" className="lq-icon-button lq-delete-trigger" aria-label={`Delete ${m.name}`}><Trash2 size={16} aria-hidden="true" /></Btn>
             </div>
-            <ProgressBar pct={m.positions.length ? (done / m.positions.length) * 100 : 0} tone="cyan" />
+            <ProgressBar label="Module completion" pct={m.positions.length ? (done / m.positions.length) * 100 : 0} tone="cyan" />
             <p className="mt-1 text-xs text-[var(--text-faint)]">Positions: {m.positions.slice(0, 20).join(', ')}{m.positions.length > 20 ? ` … +${m.positions.length - 20}` : ''}</p>
           </Card>
         );

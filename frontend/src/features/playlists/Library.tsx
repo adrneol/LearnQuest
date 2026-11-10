@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, ChevronLeft, ChevronRight, ExternalLink, CheckCircle2, Circle, BookmarkPlus } from 'lucide-react';
-import { ResponsiveContainer, Tooltip, BarChart, Bar, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { ProgressDonut } from '../../components/charts/ProgressDonut.js';
 import {
   formatSecondsHHMMSS, formatHuman, validateRange, rangeDuration, selectionDuration,
@@ -14,13 +13,10 @@ import { Dropdown } from '../../components/ui/Dropdown.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import { DurationBars } from '../../components/charts/DurationBars.js';
 import { CumulativeLine } from '../../components/charts/CumulativeLine.js';
-import type { RangePoint } from '../../components/charts/theme.js';
-import { useChartTheme, positionTicks } from '../../components/charts/theme.js';
-import { PanChart, niceTicks } from '../../components/charts/PanChart.js';
+import { playlistPoints, rangePoints } from '../../components/charts/playlistSeries.js';
 
 export function Library() {
   const s = useStore();
-  const { TICK, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const N = snap?.entries.length ?? 0;
   const [q, setQ] = useState('');
@@ -31,7 +27,6 @@ export function Library() {
   const [end, setEnd] = useState(8);
   const [chartView, setChartView] = useState<'bars' | 'cumulative'>('bars');
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [distMode, setDistMode] = useState<'overview' | 'detail'>('overview');
   const PER = 25;
 
   useEffect(() => {
@@ -57,15 +52,10 @@ export function Library() {
     return sortEntries(list, sort);
   }, [snap, q, filter, sort, progressIndex]);
 
-  if (!snap) return <Empty title="No active playlist" hint="Add one to explore videos and ranges." />;
+  const points = useMemo(() => snap ? playlistPoints(snap.playlistId, snap.entries, progressIndex) : [], [snap, progressIndex]);
+  const chartData = useMemo(() => rangePoints(points, start, end), [points, start, end]);
 
-  const distData = snap ? snap.entries.filter((e) => e.durationSec !== null).map((e) => ({ pos: e.position, min: +((e.durationSec! / 60).toFixed(1)) })) : [];
-  const distMaxEntry = distData.length;
-  const distMaxVal = Math.max(...distData.map((d) => d.min), 1);
-  const distYMax = niceTicks(distMaxVal, 4).slice(-1)[0];
-  const distYTickValues = niceTicks(distMaxVal);
-  const distYTicks = [...distYTickValues].reverse().map(String);
-  const distOverviewTicks = distMaxEntry <= 25 ? 0 : Math.min(Math.max(Math.floor(distMaxEntry / 14), 5), 9);
+  if (!snap) return <Empty title="No active playlist" hint="Add one to explore videos and ranges." />;
 
   const pages = Math.max(1, Math.ceil(rows.length / PER));
   // Clamp (never a blank page after filtering/playlist switch shrinks the list)
@@ -84,29 +74,6 @@ export function Library() {
 
   const selEntries = snap.entries.filter((e) => selected.has(e.position));
   const sel = selEntries.length ? selectionDuration(selEntries) : null;
-  // One record per actual playlist position in the range — never binned,
-  // never averaged. Unresolved entries contribute 0 to the running total and
-  // are flagged separately (the range is then labelled incomplete).
-  let cumSec = 0;
-  const chartData: RangePoint[] = range
-    ? snap.entries
-      .filter((e) => e.position >= start && e.position <= end)
-      .map((e) => {
-        cumSec += e.durationSec ?? 0;
-        const done = isProgressComplete(progressIndex.get(e.position));
-        return {
-          pos: e.position,
-          title: e.title,
-          min: e.durationSec !== null ? +(e.durationSec / 60).toFixed(1) : 0,
-          cumMin: +(cumSec / 60).toFixed(1),
-          durationSec: e.durationSec,
-          cumSec,
-          done,
-          unresolved: e.durationSec === null,
-        };
-      })
-    : [];
-
   const applyPreset = (which: 'full' | 'first' | 'middle' | 'last') => {
     const width = Math.min(8, N);
     if (which === 'full') {
@@ -228,9 +195,9 @@ export function Library() {
                 ))}
               </div>
               {chartView === 'bars' ? (
-                <DurationBars data={chartData} heightClass="h-52" />
+                <DurationBars key={`${snap.playlistId}:${snap.fetchedAt}:${start}:${end}`} data={chartData} heightClass="h-52" />
               ) : (
-                <CumulativeLine data={chartData} heightClass="h-52" />
+                <CumulativeLine key={`${snap.playlistId}:${snap.fetchedAt}:${start}:${end}`} data={chartData} heightClass="h-52" />
               )}
             </div>
           </div>
@@ -412,46 +379,8 @@ export function Library() {
 
       <Card className="lq-workflow-section">
         <h2 className="lq-section-title">Distribution & composition</h2>
-        <p className="text-[11px] text-[var(--text-faint)]">Bars: minutes per video across the whole playlist (every resolved entry) · Pie: completed vs remaining videos</p>
-        <div className="grid min-w-0 gap-3 md:grid-cols-2">
-          <div className="h-52 min-w-0">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <p className="text-[11px] font-semibold text-[var(--text-muted)]">Minutes per video</p>
-              <button
-                type="button"
-                onClick={() => setDistMode((m) => (m === 'overview' ? 'detail' : 'overview'))}
-                aria-pressed={distMode === 'detail'}
-                className="text-[11px] font-semibold text-[var(--text-muted)] underline underline-offset-2 hover:text-[var(--text)]"
-              >
-                {distMode === 'overview' ? 'Explore individual videos' : 'Return to full overview'}
-              </button>
-            </div>
-            <div className="h-[calc(100%-1.25rem)]">
-              <PanChart count={distMaxEntry} mode={distMode} yTicks={distYTicks} ariaLabel="Minutes per video distribution">
-                {(distInnerWidth) => (
-                  <ResponsiveContainer width="100%" height="100%">
-                    {distMode === 'overview' ? (
-                      <BarChart data={distData} margin={{ top: 4, right: 8, bottom: 16, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
-                        <XAxis dataKey="pos" tick={TICK} ticks={positionTicks(1, snap.entries.length, distOverviewTicks)} minTickGap={8} axisLine={false} tickLine={false} />
-                        <YAxis tick={TICK} width={36} axisLine={false} tickLine={false} domain={[0, distYMax]} ticks={distYTickValues} />
-                        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
-                        <Bar dataKey="min" fill={SERIES.steel} radius={[2, 2, 0, 0]} maxBarSize={Math.max(2, Math.floor((distInnerWidth / Math.max(distMaxEntry, 1)) * 0.7))} />
-                      </BarChart>
-                    ) : (
-                      <BarChart data={distData} margin={{ top: 4, right: 0, bottom: 16, left: 44 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
-                        <XAxis dataKey="pos" tick={TICK} ticks={positionTicks(1, snap.entries.length, 0)} minTickGap={8} axisLine={false} tickLine={false} />
-                        <YAxis hide domain={[0, distYMax]} />
-                        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
-                        <Bar dataKey="min" fill={SERIES.steel} radius={[2, 2, 0, 0]} maxBarSize={10} />
-                      </BarChart>
-                    )}
-                  </ResponsiveContainer>
-                )}
-              </PanChart>
-            </div>
-          </div>
+        <div className="grid min-w-0 items-start gap-3 md:grid-cols-2">
+          <DurationBars key={`${snap.playlistId}:${snap.fetchedAt}`} data={points} heightClass="h-52" ariaLabel="Playlist duration distribution" />
           <DonePie />
         </div>
       </Card>

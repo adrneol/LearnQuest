@@ -1,5 +1,5 @@
+import { EvidenceChart } from '../../components/charts/EvidenceChart.js';
 import { useMemo, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import {
   contentEfficiency, playbackUtilization, compareWindows,
   formatHuman, summarizeSegments, calendarWindowDates,
@@ -11,11 +11,9 @@ import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { Card, Empty } from '../../components/ui/ui.js';
-import { useChartTheme } from '../../components/charts/theme.js';
 
 export function Efficiency() {
   const s = useStore();
-  const { TICK, AXIS_LABEL, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const [scope, setScope] = useState<string>('all');
   const [src, setSrc] = useState<EvidenceFilter>('all');
@@ -79,7 +77,7 @@ export function Efficiency() {
       for (const arr of uBy.values()) du += summarizeSegments(arr).uniqueSec;
       const df = focusByDay.get(dk) ?? 0;
       const de = contentEfficiency({ uniqueContentSec: Math.round(du), focusedSec: df });
-      days.push({ day: dk.slice(5), eff: de !== null ? +de.toFixed(1) : null, uniqueMin: Math.round(du / 60), focusMin: Math.round(df / 60) });
+      days.push({ day: dk.slice(5), eff: de, uniqueMin: Math.round(du / 60), focusMin: Math.round(df / 60) });
     }
     const overall = contentEfficiency({ uniqueContentSec: Math.round(unique), focusedSec: focus });
     // trend: last 7 vs previous 7 daily unique minutes
@@ -229,17 +227,8 @@ export function Efficiency() {
       <Card>
         <h3 className="lq-section-title">Daily throughput (14 days, {tz})</h3>
         <p className="text-[11px] text-[var(--text-faint)]">Learning throughput in percent per day; gaps mean no measurable ratio that day (never zero-filled)</p>
-        <div className="h-52 min-w-0">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={model.days} margin={{ top: 8, right: 12, bottom: 20, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-              <XAxis dataKey="day" tick={TICK} interval={1} label={{ value: 'day (MM-DD)', position: 'insideBottom', offset: -14, fontSize: 11, fill: AXIS_LABEL.fill }} />
-              <YAxis tick={TICK} width={48} label={{ value: '%', angle: -90, position: 'insideLeft', fontSize: 11, fill: AXIS_LABEL.fill }} />
-              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [v === null ? 'n/a' : `${v}%`, 'throughput']} />
-              <Line type="monotone" dataKey="eff" stroke={SERIES.primary} strokeWidth={2} dot={false} connectNulls={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+        <EvidenceChart title="Daily throughput" unit="Percent" heightClass="h-52"
+          data={model.days.map((day) => ({ label: day.day, value: day.eff }))} />
         <p className="mt-1 text-xs text-[var(--text-muted)]">
           Last 7 days vs previous 7 days, unique content: {formatHuman(model.trend.recent)} vs {formatHuman(model.trend.previous)}
           ({model.trend.meaningful

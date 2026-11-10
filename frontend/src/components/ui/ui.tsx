@@ -40,7 +40,7 @@ export function Field({ label, children }: { label: string; children: React.Reac
 
 export const inputCls = 'lq-input';
 
-export function ProgressBar({ pct, tone = 'neutral', className = '' }: { pct: number; tone?: 'neutral' | 'cyan' | 'emerald'; className?: string }) {
+export function ProgressBar({ pct, label, tone = 'neutral', className = '' }: { pct: number; label: string; tone?: 'neutral' | 'cyan' | 'emerald'; className?: string }) {
   const color = tone === 'emerald' ? 'bg-emerald-500' : tone === 'cyan' ? 'bg-cyan-500' : 'bg-[var(--text)]';
   const safe = Math.max(0, Math.min(100, pct));
   const reduced = (() => {
@@ -51,7 +51,7 @@ export function ProgressBar({ pct, tone = 'neutral', className = '' }: { pct: nu
     return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   })();
   return (
-    <div className={`h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-soft)] ${className}`} role="progressbar" aria-valuenow={Math.round(safe)} aria-valuemin={0} aria-valuemax={100}>
+    <div className={`h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-soft)] ${className}`} role="progressbar" aria-label={label} aria-valuenow={Math.round(safe)} aria-valuemin={0} aria-valuemax={100}>
       <div className={`h-full rounded-full ${color}`} style={{ width: `${safe}%`, transition: reduced ? 'none' : 'width 400ms ease' }} />
     </div>
   );

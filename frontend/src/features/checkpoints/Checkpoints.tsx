@@ -139,7 +139,7 @@ export function Checkpoints() {
                 {rp.done}/{rp.count} videos · {r.isComplete ? `${formatSecondsHHMMSS(r.totalSec)} total` : 'duration incomplete'} {c.completedAt ? '· ✓ complete' : ''}
                 {!auto ? <span className="ml-1 text-[var(--text-faint)]">· custom name</span> : null}
               </p>
-              <div className="mt-1"><ProgressBar pct={rp.count ? (rp.done / rp.count) * 100 : 0} tone={c.completedAt ? 'emerald' : 'neutral'} /></div>
+              <div className="mt-1"><ProgressBar label="Checkpoint completion" pct={rp.count ? (rp.done / rp.count) * 100 : 0} tone={c.completedAt ? 'emerald' : 'neutral'} /></div>
             </>
           );
         } catch {

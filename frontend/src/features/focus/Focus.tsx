@@ -1,6 +1,6 @@
+import { EvidenceChart } from '../../components/charts/EvidenceChart.js';
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, CheckCircle2, Trash2, Coffee, SkipForward } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import {
   formatHuman, computePlaylistProgress, sessionsNeeded, dateKeyInTimezone, calendarWindowDates,
   attributeFocusByDay, isProgressComplete,
@@ -14,7 +14,6 @@ import { notify } from '../../services/notifications/notify.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import { Btn, Field, inputCls } from '../../components/ui/ui.js';
-import { useChartTheme } from '../../components/charts/theme.js';
 
 const TIMER_STORAGE_KEY_V1 = 'lq-focus-timer-v1';
 const TIMER_STORAGE_PREFIX = 'lq-focus-timer-v2:';
@@ -86,7 +85,6 @@ function persistTimer(key: string, state: FocusTimerState, note = '', manualMin:
 
 export function Focus() {
   const s = useStore();
-  const { TICK, AXIS_LABEL, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const storageKey = focusStorageKey(s.mode, s.authUser?.userId ?? null);
   const storageKeyRef = useRef(storageKey);
   storageKeyRef.current = storageKey;
@@ -638,17 +636,8 @@ export function Focus() {
         <section aria-labelledby="focus-planned-heading" className="lq-workflow-section">
           <h3 id="focus-planned-heading" className="lq-section-title">Planned vs actual</h3>
           <p className="text-[11px] text-[var(--text-faint)]">Focused minutes: target vs recorded (pauses excluded)</p>
-          <div className="h-44">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={[{ name: 'Planned', v: Math.round(planned) }, { name: 'Actual', v: Math.round(actual) }]} margin={{ top: 8, right: 8, bottom: 4, left: -8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-                <XAxis dataKey="name" tick={TICK} />
-                <YAxis tick={TICK} label={{ value: 'min', angle: -90, position: 'insideLeft', fontSize: 11, fill: AXIS_LABEL.fill }} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'focused']} />
-                <Bar dataKey="v" fill={SERIES.emerald} radius={[4, 4, 0, 0]} maxBarSize={64} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <EvidenceChart title="Planned and recorded focus" unit="Minutes" kind="bar"
+            data={[{ label: 'Planned', value: planned }, { label: 'Actual', value: actual }]} />
         </section>
         <section aria-labelledby="focus-history-heading" className="lq-workflow-section">
           <h3 id="focus-history-heading" className="lq-section-title">Sessions</h3>
@@ -710,11 +699,14 @@ function WeeklyReview({ days }: { days: { day: string; sec: number; key: string 
   return (
     <div className="text-sm">
       <p>{formatHuman(total)} focused · {vids} videos completed · {cps} checkpoints.</p>
-      <div className="mt-2 flex gap-1" role="img" aria-label="Study calendar, last 7 days">
+      <div className="mt-2 flex gap-1" aria-hidden="true">
         {days.map((d) => (
           <div key={d.key} title={`${d.key}: ${formatHuman(d.sec)}`} className={`h-8 flex-1 rounded ${d.sec === 0 ? 'bg-[var(--surface-soft)]' : d.sec < 900 ? 'bg-emerald-900' : d.sec < 3600 ? 'bg-emerald-600' : 'bg-emerald-400'}`} />
         ))}
       </div>
+      <ul className="sr-only" aria-label="Study calendar, last 7 days">
+        {days.map((day) => <li key={day.key}>{day.key} · {formatHuman(day.sec)}</li>)}
+      </ul>
       <p className="mt-1 text-xs text-[var(--text-muted)]">Next week: aim for one more active day than this week. Missed days? Welcome back — progress is preserved.</p>
     </div>
   );

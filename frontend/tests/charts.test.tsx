@@ -4,7 +4,8 @@ import { Dropdown } from '../src/components/ui/Dropdown';
 import { DurationBars } from '../src/components/charts/DurationBars';
 import { CumulativeLine } from '../src/components/charts/CumulativeLine';
 import { CumulativeChart } from '../src/components/charts/CumulativeChart';
-import { tickInterval, type RangePoint } from '../src/components/charts/theme';
+import { tickInterval } from '../src/components/charts/theme';
+import type { PlaylistPoint } from '../src/components/charts/playlistSeries';
 
 const OPTS = [
   { value: '10', label: '10 min' },
@@ -66,12 +67,9 @@ describe('chart tick thinning (presentation only — data untouched)', () => {
   });
 });
 
-function point(pos: number, sec: number | null): RangePoint {
-  return {
-    pos, title: `Video ${pos}`, min: sec === null ? 0 : sec / 60,
-    cumMin: 0, durationSec: sec, cumSec: sec ?? 0,
-    done: false, unresolved: sec === null,
-  };
+function point(pos: number, sec: number | null): PlaylistPoint {
+  return { id: String(pos), pos, videoId: String(pos), title: `Video ${pos}`,
+    durationSec: sec, cumSec: sec ?? 0, done: false, incomplete: sec === null };
 }
 
 describe('chart empty states and captions', () => {
@@ -85,16 +83,17 @@ describe('chart empty states and captions', () => {
 
   it('bar view carries only its own units; line view only its own', () => {
     const { unmount } = render(<DurationBars data={[point(1, 60), point(2, null), point(3, 120)]} />);
-    expect(screen.getByText(/Video durations — minutes per video/)).toBeTruthy();
-    expect(screen.queryByText(/Cumulative minutes/)).toBeNull();
+    expect(screen.getByText('Video durations')).toBeTruthy();
+    expect(screen.getByText(/^Axis in seconds/)).toBeTruthy();
+    expect(screen.queryByText(/Cumulative duration within/)).toBeNull();
     unmount();
     render(<CumulativeLine data={[point(1, 60), point(2, null), point(3, 120)]} />);
-    expect(screen.getByText(/Cumulative minutes/)).toBeTruthy();
+    expect(screen.getByText(/Cumulative duration within the selected range/)).toBeTruthy();
     expect(screen.queryByText(/Video durations/)).toBeNull();
   });
 
   it('cumulative chart discloses incomplete metadata instead of hiding it', () => {
-    render(<CumulativeChart data={[{ pos: 1, hrs: 0.5, cumSec: 1800 }]} complete={false} />);
+    render(<CumulativeChart data={[point(1, 1800)]} complete={false} />);
     expect(screen.getByText(/incomplete metadata/)).toBeTruthy();
   });
 });

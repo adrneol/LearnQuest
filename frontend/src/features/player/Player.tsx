@@ -495,7 +495,7 @@ function PlayerInner() {
               {formatSecondsHHMMSS(Math.floor(cur))} / {dur !== null ? formatSecondsHHMMSS(dur) : '?'} · {rate}x · unique {formatSecondsHHMMSS(Math.floor(cov.uniqueSec))}
             </span>
           </div>
-          {dur !== null && dur > 0 && <ProgressBar pct={(cur / dur) * 100} tone="cyan" />}
+          {dur !== null && dur > 0 && <ProgressBar label="Lesson playback position" pct={(cur / dur) * 100} tone="cyan" />}
         </div>
         {err && (
           <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-200">

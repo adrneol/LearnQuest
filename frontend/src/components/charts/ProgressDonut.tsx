@@ -32,16 +32,19 @@ export function ProgressDonut({ done, total, heightClass = 'h-52', emptyHint }: 
     );
   }
   return (
-    <div className={heightClass}>
+    <figure className={`${heightClass} flex min-w-0 flex-col`}>
+      <div className="min-h-0 flex-1" aria-hidden="true">
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
-          <Pie data={[{ name: 'Done', value: done }, { name: 'Remaining', value: total - done }]} dataKey="value" nameKey="name" outerRadius={70} label>
+          <Pie data={[{ name: 'Done', value: done }, { name: 'Remaining', value: total - done }]} dataKey="value" nameKey="name" outerRadius="86%" innerRadius="63%" isAnimationActive={false}>
             <Cell fill={SERIES.emerald} />
             <Cell fill={SERIES.slate} />
           </Pie>
-          <Tooltip contentStyle={TOOLTIP_STYLE} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} isAnimationActive={false} />
         </PieChart>
       </ResponsiveContainer>
-    </div>
+      </div>
+      <figcaption className="text-center text-xs tabular-nums">{done} completed · {total - done} remaining</figcaption>
+    </figure>
   );
 }

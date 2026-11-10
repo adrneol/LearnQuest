@@ -1,5 +1,6 @@
+import { useMemo } from 'react';
+import { EvidenceChart } from '../../components/charts/EvidenceChart.js';
 import { Play, Flame, CheckCircle2 } from 'lucide-react';
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
 import {
   formatSecondsHHMMSS, formatHuman, computePlaylistProgress, computeRangeProgress,
   snapshotCompleteness, sumEntries, rangeDuration, computeStreak,
@@ -10,14 +11,14 @@ import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
 import { ProgressBar, Empty } from '../../components/ui/ui.js';
 import { CumulativeChart } from '../../components/charts/CumulativeChart.js';
-import { useChartTheme } from '../../components/charts/theme.js';
+import { playlistPoints } from '../../components/charts/playlistSeries.js';
 import { PlaylistManager } from './PlaylistManager.js';
 
 export function Dashboard() {
   const s = useStore();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
-  const { TICK, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const todayKey = useDayTick(s.prefs.timezone);
+  const cum = useMemo(() => snap ? playlistPoints(snap.playlistId, snap.entries) : [], [snap]);
   if (!snap) return <Empty title="No active playlist" hint="Add a playlist to see your learning journey." />;
   const prog = computePlaylistProgress(snap, s.progress);
   const comp = snapshotCompleteness(snap);
@@ -45,17 +46,8 @@ export function Dashboard() {
 
   // weekly trend (last 7 calendar days in tz, DST-safe)
   const weekKeys = calendarWindowDates(7, s.prefs.timezone);
-  const days: { day: string; min: number }[] = weekKeys.map((k) => ({
-    day: k.slice(5),
-    min: Math.round((focusByDay.get(k) ?? 0) / 60),
-  }));
-  const weekMin = days.reduce((a, d) => a + d.min, 0);
-  // cumulative content curve — one record per position, resolved durations only
-  let acc = 0;
-  const cum = snap.entries.map((e) => {
-    acc += e.durationSec ?? 0;
-    return { pos: e.position, hrs: +(acc / 3600).toFixed(2), cumSec: acc };
-  });
+  const days = weekKeys.map((key) => ({ label: key.slice(5), value: (focusByDay.get(key) ?? 0) / 60 }));
+  const weekMin = days.reduce((sum, item) => sum + Math.round(item.value), 0);
 
   const resumeUrl = prog.nextPosition
     ? (() => {
@@ -103,7 +95,7 @@ export function Dashboard() {
             </div>
           </dl>
           <div className="mt-2 space-y-1.5">
-            <ProgressBar pct={prog.durationPct ?? prog.countPct} tone={prog.durationPct !== null ? 'cyan' : 'neutral'} />
+            <ProgressBar label="Course progress" pct={prog.durationPct ?? prog.countPct} tone={prog.durationPct !== null ? 'cyan' : 'neutral'} />
             {prog.durationPct !== null ? (
               <p className="text-xs text-[var(--text-muted)]">{prog.durationPct.toFixed(1)}% of resolved content duration completed ({prog.countPct.toFixed(1)}% by count)</p>
             ) : (
@@ -112,7 +104,7 @@ export function Dashboard() {
           </div>
 
           <div className="mt-5 border-t border-[var(--border)] pt-4">
-            <CumulativeChart data={cum} heightClass="h-56 xl:h-72" complete={comp.isComplete} />
+            <CumulativeChart key={`${snap.playlistId}:${snap.fetchedAt}`} data={cum} heightClass="h-56 xl:h-72" complete={comp.isComplete} />
           </div>
         </section>
 
@@ -125,7 +117,7 @@ export function Dashboard() {
                 <p className="mt-2 font-mono text-2xl tabular-nums text-[var(--text)]">
                   {formatHuman(todaySec)}<span className="text-sm font-sans text-[var(--text-muted)]"> / {formatHuman(goal.targetFocusSec)}</span>
                 </p>
-                <ProgressBar pct={goal.targetFocusSec ? (todaySec / goal.targetFocusSec) * 100 : 0} tone="emerald" className="mt-1.5" />
+                <ProgressBar label="Daily focus goal" pct={goal.targetFocusSec ? (todaySec / goal.targetFocusSec) * 100 : 0} tone="emerald" className="mt-1.5" />
                 <p className="mt-1.5 text-xs text-[var(--text-muted)]">
                   {todaySec >= goal.targetFocusSec ? 'Goal met.' : `${formatHuman(Math.max(0, goal.targetFocusSec - todaySec))} to go.`}
                   {goal.targetCount ? ` ${todayCompleted}/${goal.targetCount} videos today.` : ''} Min viable: {formatHuman(goal.minViableSec)}.
@@ -138,20 +130,10 @@ export function Dashboard() {
               <Flame size={13} className="shrink-0 text-amber-700 dark:text-amber-400" aria-hidden />
               <span><b className="text-[var(--text)]">{streak}</b>-day streak · <b className="text-[var(--text)]">{weekMin}</b> min this week</span>
             </p>
-            <figure className="mt-3 min-w-0">
-              <div className="h-24">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={days} margin={{ top: 4, right: 20, bottom: 0, left: -8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
-                  <XAxis dataKey="day" tick={TICK} interval={1} axisLine={false} tickLine={false} />
-                  <YAxis tick={TICK} allowDecimals={false} width={40} axisLine={false} tickLine={false} />
-                  <Tooltip cursor={{ stroke: GRID_STROKE }} contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'focus']} />
-                  <Line type="monotone" dataKey="min" stroke={SERIES.primary} strokeWidth={1.75} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-              </div>
-              <figcaption className="text-xs text-[var(--text-muted)]">Focused minutes · last 7 days</figcaption>
-            </figure>
+            <div className="mt-3">
+              <EvidenceChart title="Focused study in the last 7 days" unit="Focused minutes" data={days} heightClass="h-28"
+                describe={(value) => formatSecondsHHMMSS(Math.round(value * 60))} />
+            </div>
           </section>
 
           <section className="border-t border-[var(--border)] pt-3">
@@ -263,7 +245,7 @@ function NextCheckpoint({ id }: { id: string }) {
     <div className="mt-2 text-sm">
       <p className="font-semibold text-[var(--text)]">{c.label} <span className="font-normal text-[var(--text-muted)]">({c.start}–{c.end})</span></p>
       <p className="mt-0.5 text-xs text-[var(--text-muted)]">{rp.remaining} videos left{rp.totalSec !== null ? ` · ${formatHuman(rp.totalSec - (rp.doneSec ?? 0))} remaining` : ''}.</p>
-      <div className="mt-1.5"><ProgressBar pct={rp.count ? (rp.done / rp.count) * 100 : 0} tone="cyan" /></div>
+      <div className="mt-1.5"><ProgressBar label="Next checkpoint progress" pct={rp.count ? (rp.done / rp.count) * 100 : 0} tone="cyan" /></div>
     </div>
   );
 }
