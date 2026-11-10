@@ -116,7 +116,7 @@ export function Efficiency() {
   if (!snap && scope !== 'all') return <Empty title="No active playlist" hint="Learning throughput needs recorded playback and focus sessions." />;
 
   return (
-    <div className="space-y-4">
+    <div className="lq-workflow">
       <Card>
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="mr-auto text-base font-bold">Learning throughput</h2>
@@ -225,6 +225,7 @@ export function Efficiency() {
         )}
       </Card>
 
+      <div className="lq-workflow-columns" data-layout="companion">
       <Card>
         <h3 className="lq-section-title">Daily throughput (14 days, {tz})</h3>
         <p className="text-[11px] text-[var(--text-faint)]">Learning throughput in percent per day; gaps mean no measurable ratio that day (never zero-filled)</p>
@@ -248,7 +249,7 @@ export function Efficiency() {
         </p>
       </Card>
 
-      <Card>
+      <Card className="lq-workflow-band">
         <h3 className="lq-section-title">By playlist</h3>
         {model.perPl.map((p) => (
           <p key={p.id} className="mt-1 text-xs text-[var(--text)]">
@@ -256,6 +257,7 @@ export function Efficiency() {
           </p>
         ))}
       </Card>
+      </div>
     </div>
   );
 }

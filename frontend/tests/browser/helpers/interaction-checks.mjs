@@ -102,9 +102,15 @@ export async function checkInteractions(t, fixture, review) {
     await expectFocus(trigger);
     assert.ok(await page.getByRole('radio', { name: 'Light', exact: true }).isChecked());
 
+    await page.getByRole('button', { name: 'Open navigation' }).press('Enter');
+    const navigation = page.getByRole('navigation', { name: 'Workspace navigation' });
+    await navigation.waitFor();
     await page.getByRole('radio', { name: 'Light', exact: true }).focus();
     await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    assert.ok(await navigation.isVisible());
     await trigger.click();
+    await navigation.waitFor({ state: 'detached' });
     assert.equal(await page.getByRole('menuitemradio', { name: 'Dark', exact: true }).getAttribute('aria-checked'), 'true');
     await page.getByRole('menuitemradio', { name: 'System', exact: true }).click();
     await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });

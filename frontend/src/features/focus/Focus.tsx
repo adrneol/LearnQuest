@@ -525,9 +525,10 @@ export function Focus() {
   const actual = (focusByDay.get(todayKey) ?? 0) / 60;
 
   return (
-    <div className="space-y-6">
-      <section aria-labelledby="focus-timer-heading" className="pt-1">
-        <h2 id="focus-timer-heading" className="text-xs font-semibold text-[var(--text-muted)]">Focus timer</h2>
+    <div className="lq-workflow">
+      <div className="lq-workflow-columns" data-layout="study">
+      <section aria-labelledby="focus-timer-heading" className="lq-card">
+        <h2 id="focus-timer-heading" className="lq-section-title">Focus timer</h2>
         {(recovered || recoveredReview) && timer.phase === 'paused' && (
           <div className="mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">
             <p>
@@ -541,7 +542,7 @@ export function Focus() {
           </div>
         )}
         {lockNotice && <p role="alert" className="mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">{lockNotice}</p>}
-        <p className="mt-2 text-center font-mono text-6xl font-semibold tabular-nums tracking-tight text-[var(--text)] sm:text-7xl" aria-live="off">{fmtClock(activeSec)}</p>
+        <p className="mt-2 text-center font-mono text-[clamp(2.8rem,7vw,4.5rem)] font-semibold tabular-nums tracking-tight text-[var(--text)]" aria-live="off">{fmtClock(activeSec)}</p>
         <p className="mt-1 text-center text-xs text-[var(--text-muted)]">
           {fmtClock(wallSec)} elapsed · active intervals only · pauses excluded
         </p>
@@ -594,9 +595,9 @@ export function Focus() {
         </details>
       </section>
 
-      <section aria-labelledby="focus-today-heading" className="border-t border-[var(--border)] pt-5">
+      <section aria-labelledby="focus-today-heading" className="lq-card lq-workflow-band">
         <h3 id="focus-today-heading" className="lq-section-title">Today</h3>
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-2 grid grid-cols-2 gap-2">
           <NumberField label="Daily study goal (min)" value={targetMin} onCommit={setTargetMin} min={5} max={720} error={goalError} />
           <NumberField label="Minimum daily goal (min)" value={minViable} onCommit={setMinViable} min={1} max={720} />
           <div>
@@ -631,9 +632,10 @@ export function Focus() {
           return null;
         })()}
       </section>
+      </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <section aria-labelledby="focus-planned-heading" className="border-t border-[var(--border)] pt-4">
+      <div className="lq-workflow-columns" data-layout="balanced">
+        <section aria-labelledby="focus-planned-heading" className="lq-workflow-section">
           <h3 id="focus-planned-heading" className="lq-section-title">Planned vs actual</h3>
           <p className="text-[11px] text-[var(--text-faint)]">Focused minutes: target vs recorded (pauses excluded)</p>
           <div className="h-44">
@@ -648,7 +650,7 @@ export function Focus() {
             </ResponsiveContainer>
           </div>
         </section>
-        <section aria-labelledby="focus-history-heading" className="border-t border-[var(--border)] pt-4">
+        <section aria-labelledby="focus-history-heading" className="lq-workflow-section">
           <h3 id="focus-history-heading" className="lq-section-title">Sessions</h3>
           {s.sessions.length === 0 ? <p className="text-xs text-[var(--text-faint)]">No sessions yet.</p> : (
             <ul className="mt-1 max-h-44 space-y-1 overflow-auto text-xs">
@@ -666,7 +668,7 @@ export function Focus() {
         </section>
       </div>
 
-      <section aria-labelledby="focus-weekly-heading" className="border-t border-[var(--border)] pt-5">
+      <section aria-labelledby="focus-weekly-heading" className="lq-workflow-section">
         <h3 id="focus-weekly-heading" className="lq-section-title">Weekly review</h3>
         <WeeklyReview days={week} />
       </section>

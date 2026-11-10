@@ -187,15 +187,9 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
   const canReview = !(lastReviewToday && !activeReviewFlag);
 
   return (
-    <Card>
+    <Card aria-labelledby="player-learning-record-title">
       <div className="flex flex-wrap items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-bold">Learning record · #{entry.position}</h3>
-          <p className="text-[11px] text-[var(--text-faint)]">
-            Persistent notes for this exact playlist entry. Saved separately from the pause-note above
-            (which is written only when the video ends).
-          </p>
-        </div>
+        <h2 id="player-learning-record-title" tabIndex={-1} className="lq-section-title mr-auto">Learning record · #{entry.position}</h2>
         <span
           className={`rounded-full px-2 py-1 text-[11px] ${record?.needsRevision ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200' : lastIso ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300' : 'bg-[var(--surface-soft)] text-[var(--text-muted)]'}`}
           role="status"
@@ -209,6 +203,10 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
               : 'Not reviewed yet'}
         </span>
       </div>
+      <p className="mt-1 max-w-[65ch] text-xs text-[var(--text-muted)]">
+        Persistent notes for this exact playlist entry. Saved separately from the pause-note above
+        (which is written only when the video ends).
+      </p>
 
       {record?.needsRevision && lastIso && (
         <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-2 text-[11px] text-amber-800 dark:text-amber-100">

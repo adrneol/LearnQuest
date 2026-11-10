@@ -81,19 +81,19 @@ export function Modules() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="lq-workflow">
       <Card>
-        <h2 className="lq-section-title">Modules <span className="font-normal text-[var(--text-muted)]">(optional grouping over playlist positions)</span></h2>
-        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <h2 className="lq-section-title">Create a module</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">An optional grouping over playlist positions.</p>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
           <input className={inputCls} placeholder="Module name (you choose — never auto-assigned)" value={name} onChange={(e) => setName(e.target.value)} aria-label="Module name" />
           <input className={inputCls} placeholder={`Positions, e.g. 1-8, 10 (1–${snap.entries.length})`} value={positions} onChange={(e) => setPositions(e.target.value)} aria-label="Module positions" />
           <Btn variant="primary" className="w-full whitespace-nowrap sm:w-auto" onClick={create} disabled={!name.trim()}><Plus size={14} /> Create</Btn>
         </div>
         {err && <p className="mt-1 text-sm text-red-800 dark:text-red-300">{err}</p>}
-      </Card>
       {mods.length === 0 && (
-        <Card>
-          <h3 className="lq-section-title">What is a module?</h3>
+        <details className="lq-workflow-section mt-3">
+          <summary className="cursor-pointer text-sm font-semibold">What is a module?</summary>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
             A module is a group of playlist videos <i>you</i> define — e.g. “JavaScript Fundamentals” or “Practice
             Exercises”. LearnQuest never claims to know a playlist's real syllabus; modules only group what you assign.
@@ -104,15 +104,16 @@ export function Modules() {
             <li>Press <b>Create</b> — progress, rename, reassign, and reorder controls appear on each module card.</li>
           </ol>
           <p className="mt-1 text-xs text-[var(--text-faint)]">Videos may stay unassigned. Nothing is created until you press Create — no fake chapters.</p>
-        </Card>
+        </details>
       )}
+      </Card>
       {mods.map((m, idx) => {
         const entries = snap.entries.filter((e) => m.positions.includes(e.position));
         const sum = sumEntries(entries);
         const progressIndex = buildEntryProgressIndex(snap, s.progress);
         const done = m.positions.filter((p) => isProgressComplete(progressIndex.get(p))).length;
         return (
-          <Card key={m.id}>
+          <Card key={m.id} className="lq-workflow-section">
             <div className="flex flex-wrap items-center gap-2">
               <p className="mr-auto font-semibold">{m.name} <span className="text-xs font-normal text-[var(--text-muted)]">· {m.positions.length} videos · {done} done · {sum.isComplete ? formatSecondsHHMMSS(sum.totalSec) : `${formatSecondsHHMMSS(sum.totalSec)} +?`}</span></p>
               <Btn onClick={() => s.moveModule(m.id, -1)} disabled={idx === 0} aria-label={`Move ${m.name} up`}><ChevronUp size={14} /></Btn>

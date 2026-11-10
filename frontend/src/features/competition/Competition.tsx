@@ -217,8 +217,8 @@ export function Competition() {
   const unavailable = playlistBasis.totalSec === null || (fixed !== null && !arenaSnap);
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="lq-workflow">
+      <Card className="lq-workflow-band">
         <p className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface-soft)] p-2 text-center text-xs font-bold tracking-wide text-[var(--text-muted)]">
           FICTIONAL SIMULATION — all {effectiveCfg.cohortSize - 1} opponents are generated locally from seed {effectiveCfg.seed}. No real people, no real leaderboard.
         </p>
@@ -251,7 +251,7 @@ export function Competition() {
           ) : (
             <>
               <Card>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-col items-start gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                   <div className="min-w-0 flex-1">
                     <h3 className="lq-section-title">{fixed ? 'Private fixed run' : 'Practice simulation'}</h3>
                     <p className="text-[11px] text-[var(--text-faint)]">
@@ -355,7 +355,7 @@ export function Competition() {
                 </p>
               </Card>
 
-              <div className="grid min-w-0 gap-4 md:grid-cols-3">
+              <div className="lq-workflow-columns" data-layout="context">
                 <Card>
                   <h3 className="lq-section-title">My Arena score</h3>
                   <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">Window {windowName} · {s.prefs.timezone}</p>
@@ -406,7 +406,7 @@ export function Competition() {
                   )}
                 </Card>
 
-                <Card className="min-w-0 md:col-span-2">
+                <Card>
                   <h3 className="lq-section-title">
                     Leaderboard — Arena v2 · {windowName}{paused && ' (paused)'}
                   </h3>
@@ -463,7 +463,7 @@ export function Competition() {
                 </Card>
               </div>
 
-              <Card>
+              <Card className="lq-workflow-section">
                 <details className="text-xs text-[var(--text)]">
                   <summary className="cursor-pointer font-semibold text-[var(--text)]">How ranking works</summary>
                   <div className="mt-2 grid gap-3 sm:grid-cols-2">

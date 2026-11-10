@@ -56,10 +56,11 @@ export function Goals() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="lq-workflow">
       <Card>
-        <h2 className="lq-section-title">Flexible goals <span className="font-normal text-[var(--text-muted)]">(achieved only by real activity — never by timers)</span></h2>
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        <h2 className="lq-section-title">Flexible goals</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">Progress comes from recorded learning activity. Choose a metric, target, and playlist scope.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <Dropdown
             label="Metric"
             value={metric}
@@ -96,10 +97,12 @@ export function Goals() {
             onChange={setPid}
           />
         </div>
-        <label className="mt-2 flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={dated} onChange={(e) => setDated(e.target.checked)} /> Due today ({today}); uncheck for open-ended
-        </label>
-        <div className="mt-2"><Btn variant="primary" onClick={create}><Plus size={14} /> Create goal</Btn></div>
+        <div className="lq-workflow-tools mt-3 justify-between">
+          <label className="flex min-h-10 items-center gap-2 text-sm">
+            <input type="checkbox" checked={dated} onChange={(e) => setDated(e.target.checked)} /> Due today ({today}); uncheck for open-ended
+          </label>
+          <Btn variant="primary" onClick={create}><Plus size={14} /> Create goal</Btn>
+        </div>
         {errs.map((e) => <p key={e} className="mt-1 text-xs text-red-800 dark:text-red-300">{e}</p>)}
       </Card>
 
@@ -111,7 +114,7 @@ export function Goals() {
         });
         const p = goalProgress(g, current, { todayKey: today });
         return (
-          <Card key={g.id}>
+          <Card key={g.id} className="lq-workflow-section">
             <div className="flex flex-wrap items-center gap-2">
               <p className="mr-auto font-semibold">{g.label}</p>
               <StatusBadge status={p.status} />

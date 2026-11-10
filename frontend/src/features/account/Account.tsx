@@ -25,14 +25,14 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
   const user = s.authUser;
   if (!user) {
     return (
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-6">
+      <div className="lq-card lq-workflow-band">
         <h1 id="account-page-title" tabIndex={-1} className="text-lg font-bold text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">This browser has no account</h1>
-        <p className="mt-2 text-sm text-[var(--text-muted)]">
+        <p className="mt-2 max-w-[65ch] text-sm text-[var(--text-muted)]">
           Local mode keeps all learning data in this browser's IndexedDB. Profile,
           password, email verification, sessions and devices only exist for
           LearnQuest cloud accounts (production).
         </p>
-        <p className="mt-2 text-sm text-[var(--text-muted)]">
+        <p className="lq-workflow-section mt-3 max-w-[65ch] text-sm text-[var(--text-muted)]">
           To export, back up, restore, or clear your local data, use Reports.
           Deployed LearnQuest accounts are managed from Settings and from this page once signed in.
         </p>
@@ -57,8 +57,8 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
   };
 
   return (
-    <div className="space-y-4">
-      <Card className="border-[var(--border-strong)]">
+    <div className="lq-workflow">
+      <Card className="lq-workflow-band">
         <div className="flex flex-wrap items-center gap-3">
           <span className="grid h-11 w-11 place-items-center rounded-lg bg-[var(--surface-hover)] text-sm font-bold text-[var(--text)]">
             {(user.displayName || user.username || user.email).slice(0, 2).toUpperCase()}
@@ -589,8 +589,9 @@ function SecuritySection() {
   };
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="lq-workflow">
+      <Card className="lq-workflow">
+        <section>
         <h2 className="lq-section-title">Password</h2>
         <p className="mt-1 text-xs text-[var(--text-muted)]">At least 12 characters. Current password required if one is set; otherwise Google re-verification.</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -611,9 +612,9 @@ function SecuritySection() {
         <Btn variant="primary" className="mt-3" onClick={changePassword} disabled={passwordBusy || newPassword.length < 12 || (user.hasPassword && !currentPassword)}>
           {user.hasPassword ? 'Change password' : 'Set password'}
         </Btn>
-      </Card>
+        </section>
 
-      <Card>
+        <section className="lq-workflow-section">
         <h2 className="lq-section-title">Email address</h2>
         <p className="mt-1 text-xs text-[var(--text-muted)]">
           <b className="text-[var(--text)]">{user.email}</b> is your verified email. LearnQuest changes it only through
@@ -629,6 +630,7 @@ function SecuritySection() {
             Linking Google for the first time requires a recent sign-in. If this session is older, sign in again first.
           </p>
         )}
+        </section>
       </Card>
 
       <Card>

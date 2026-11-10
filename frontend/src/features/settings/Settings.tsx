@@ -46,20 +46,22 @@ export function Settings() {
   const configured = health.ok && health.hasKey;
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="lq-workflow">
+      <Card className="lq-workflow">
+        <section>
         <h2 className="lq-section-title">Appearance</h2>
         <ThemeOptions />
-      </Card>
+        </section>
 
-      <Card>
+        <section className="lq-workflow-section">
         <h2 className="lq-section-title">Preferences</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div>
+        <div className="mt-3 grid items-start gap-4 sm:grid-cols-2">
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold">Learning and display</h3>
+            <div>
             <TimezonePicker value={s.prefs.timezone} onChange={(tz) => s.setPrefs({ timezone: tz })} />
             <p className="mt-1 text-[11px] text-[var(--text-faint)]">Aggregation only — stored UTC events are never rewritten.</p>
-          </div>
-          <div className="space-y-3">
+            </div>
             <Field label={`Verified completion threshold: ${Math.round(s.settings.verifiedThreshold * 100)}%`}>
               <input
                 type="range" min={50} max={100} step={5}
@@ -68,6 +70,12 @@ export function Settings() {
                 className="w-full accent-zinc-900 dark:accent-zinc-100" aria-label="Verified completion threshold"
               />
             </Field>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} className="accent-zinc-900 dark:accent-zinc-100" /> Reduce motion
+            </label>
+          </div>
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold">Session timing</h3>
             <NumberField
               label="Default session length (min)"
               value={s.prefs.sessionLenMin}
@@ -89,14 +97,13 @@ export function Settings() {
               min={1}
               max={600}
             />
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} className="accent-zinc-900 dark:accent-zinc-100" /> Reduce motion
-            </label>
           </div>
         </div>
+        </section>
       </Card>
 
-      <Card>
+      <div className="lq-workflow-columns" data-layout="balanced">
+      <Card className="lq-workflow-section">
         <div className="flex items-center justify-between gap-2">
           <h2 className="lq-section-title">Backend connection</h2>
           <button onClick={() => checkApiHealth().then(setHealth)} className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]">
@@ -129,7 +136,7 @@ export function Settings() {
         )}
       </Card>
 
-      <Card>
+      <Card className="lq-workflow-section">
         <h2 className="lq-section-title">Data &amp; privacy</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
           {s.mode === 'cloud'
@@ -137,6 +144,7 @@ export function Settings() {
             : 'Your data stays in this browser (IndexedDB). Export a backup before clearing browser data.'}
         </p>
       </Card>
+      </div>
     </div>
   );
 }

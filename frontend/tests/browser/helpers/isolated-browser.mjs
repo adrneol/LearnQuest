@@ -56,6 +56,10 @@ function cloudReply(path, motion) {
     },
   } };
   if (path === '/api/ready' || path === '/api/health') return { body: { ok: true, hasKey: true } };
+  if (path === '/api/account/sessions') return { body: { sessions: [{
+    sessionId: 'synthetic-current-session', current: true, userAgent: 'Fixture browser',
+    createdAt: fixedTime, lastSeenAt: fixedTime, idleExpiresAt: '2026-11-11T12:00:00Z', expiresAt: '2026-11-17T12:00:00Z',
+  }] } };
   if (path === '/api/account/delete') return { status: 503, body: { error: 'Synthetic deletion failure. Retry later.' } };
   return { status: 404, body: { error: 'No fixture response for this request.' } };
 }
@@ -142,7 +146,8 @@ export async function startBrowserFixture(t) {
 
   return {
     browserVersion: browser.version(),
-    async open(test, { width = 1440, height = 900, theme = 'dark', route = 'learn', touch = false, cloud = false, motion = false } = {}) {
+    async open(test, { width = 1440, height = 900, theme = 'dark', route = 'learn', touch = false,
+      cloud = false, motion = false, resolvedDurations = false } = {}) {
       const context = await browser.newContext({
         viewport: { width, height }, deviceScaleFactor: 1, locale: 'en-US',
         timezoneId: 'UTC', colorScheme: theme, reducedMotion: motion ? 'no-preference' : 'reduce', serviceWorkers: 'block', hasTouch: touch,
@@ -161,9 +166,21 @@ export async function startBrowserFixture(t) {
       page.setDefaultTimeout(8_000);
       const errors = [];
       page.on('pageerror', (error) => errors.push(error.message));
-      test.after(() => assert.deepEqual(errors, [], 'Unexpected uncaught browser errors'));
+      page.on('console', (message) => {
+        // This fixture intentionally blocks YouTube and simulates API failures.
+        if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) {
+          errors.push(message.text());
+        }
+      });
+      test.after(() => assert.deepEqual(errors, [], 'Unexpected browser or application console errors'));
       await page.clock.install({ time: new Date(fixedTime) });
       await page.goto(`${origin}/__fixture__`, { waitUntil: 'domcontentloaded' });
+      const localState = resolvedDurations ? structuredClone(state) : state;
+      if (resolvedDurations) {
+        const entry = localState.playlists[playlistId].entries[2];
+        entry.durationSec = 219;
+        delete entry.unresolvedReason;
+      }
       await page.evaluate(async ({ state, theme }) => {
         localStorage.setItem('lq-theme', theme);
         await new Promise((resolve, reject) => {
@@ -178,7 +195,7 @@ export async function startBrowserFixture(t) {
             tx.onabort = () => { db.close(); reject(tx.error); };
           };
         });
-      }, { state, theme });
+      }, { state: localState, theme });
       await page.goto(`${origin}/${cloud ? '?cloud-fixture' : ''}#/${route}`, { waitUntil: 'domcontentloaded' });
       return page;
     },

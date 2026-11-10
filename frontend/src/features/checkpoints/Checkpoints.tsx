@@ -54,66 +54,67 @@ export function Checkpoints() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-2">
+    <div className="lq-workflow">
+      <div className="lq-workflow-columns" data-layout="companion">
         <Card>
-          <h2 className="flex items-center gap-1.5 text-sm font-bold"><Target size={16} /> Checkpoint</h2>
-          <p className="mt-1 text-xs text-[var(--text-muted)]">
-            A learning milestone over an inclusive video range. Progress is tracked, completion is recognized when the full eligible range is done, and the established milestone/XP behavior applies.
+          <h2 className="lq-section-title">New checkpoint <span className="font-normal text-[var(--text-muted)]">(one range within 1–{N})</span></h2>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:items-end">
+            <Field label="Video range">
+              <input
+                className={inputCls}
+                value={rangeText}
+                onChange={(e) => { setRangeText(e.target.value); setTouched(true); }}
+                placeholder="1-8"
+                aria-label="Video range"
+                inputMode="text"
+              />
+            </Field>
+            <Field label="Custom name (optional)">
+              <input
+                className={inputCls}
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                placeholder="e.g. JavaScript fundamentals"
+                aria-label="Custom checkpoint name (optional)"
+                maxLength={200}
+              />
+            </Field>
+            <Btn variant="primary" onClick={create} disabled={!parsed.ok}>
+              <Plus size={14} /> Add checkpoint
+            </Btn>
+          </div>
+          <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5 text-sm">
+            {parsed.ok ? (
+              <>
+                <p className="text-[var(--text)]">This will create <b>{previewName}</b> for videos <b>{parsed.range.start}–{parsed.range.end}</b> inclusive ({parsed.range.end - parsed.range.start + 1} video{parsed.range.end - parsed.range.start === 0 ? '' : 's'}).</p>
+                <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">Saved name: {previewName}. A custom name replaces the generated label; the range is not entered twice.</p>
+              </>
+            ) : (
+              <p className={`text-xs ${touched ? 'text-amber-800 dark:text-amber-200' : 'text-[var(--text-faint)]'}`}>
+                {touched ? parsed.error : 'Type a range such as 1-8, 9–16, or one position such as 103. The display name is generated automatically.'}
+              </p>
+            )}
+          </div>
+          <p className="mt-2 text-[11px] text-[var(--text-faint)]">
+            Accepted: <span className="font-mono">1-8</span>, <span className="font-mono">1 – 8</span>, <span className="font-mono">1–8</span>, <span className="font-mono">103</span>.
+            Reversed, fractional, negative, malformed, or out-of-bounds ranges are rejected without clamping.
           </p>
         </Card>
-        <Card>
-          <h2 className="flex items-center gap-1.5 text-sm font-bold"><Library size={16} /> Saved range</h2>
-          <p className="mt-1 text-xs text-[var(--text-muted)]">
-            A reusable duration/range calculation saved from Library. It does not independently represent completion or award milestone XP.
-          </p>
-        </Card>
-      </div>
-
-      <Card>
-        <h2 className="lq-section-title">New checkpoint <span className="font-normal text-[var(--text-muted)]">(one range within 1–{N})</span></h2>
-        <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:items-end">
-          <Field label="Video range">
-            <input
-              className={inputCls}
-              value={rangeText}
-              onChange={(e) => { setRangeText(e.target.value); setTouched(true); }}
-              placeholder="1-8"
-              aria-label="Video range"
-              inputMode="text"
-            />
-          </Field>
-          <Field label="Custom name (optional)">
-            <input
-              className={inputCls}
-              value={customName}
-              onChange={(e) => setCustomName(e.target.value)}
-              placeholder="e.g. JavaScript fundamentals"
-              aria-label="Custom checkpoint name (optional)"
-              maxLength={200}
-            />
-          </Field>
-          <Btn variant="primary" onClick={create} disabled={!parsed.ok}>
-            <Plus size={14} /> Add checkpoint
-          </Btn>
-        </div>
-        <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5 text-sm">
-          {parsed.ok ? (
-            <>
-              <p className="text-[var(--text)]">This will create <b>{previewName}</b> for videos <b>{parsed.range.start}–{parsed.range.end}</b> inclusive ({parsed.range.end - parsed.range.start + 1} video{parsed.range.end - parsed.range.start === 0 ? '' : 's'}).</p>
-              <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">Saved name: {previewName}. A custom name replaces the generated label; the range is not entered twice.</p>
-            </>
-          ) : (
-            <p className={`text-xs ${touched ? 'text-amber-800 dark:text-amber-200' : 'text-[var(--text-faint)]'}`}>
-              {touched ? parsed.error : 'Type a range such as 1-8, 9–16, or one position such as 103. The display name is generated automatically.'}
+        <aside className="lq-card lq-workflow-band lq-workflow" aria-label="Checkpoint and saved range guide">
+          <section>
+            <h2 className="flex items-center gap-1.5 text-sm font-bold"><Target size={16} /> Checkpoint</h2>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              A learning milestone over an inclusive video range. Progress is tracked, completion is recognized when the full eligible range is done, and the established milestone/XP behavior applies.
             </p>
-          )}
-        </div>
-        <p className="mt-2 text-[11px] text-[var(--text-faint)]">
-          Accepted: <span className="font-mono">1-8</span>, <span className="font-mono">1 – 8</span>, <span className="font-mono">1–8</span>, <span className="font-mono">103</span>.
-          Reversed, fractional, negative, malformed, or out-of-bounds ranges are rejected without clamping.
-        </p>
-      </Card>
+          </section>
+          <section className="lq-workflow-section">
+            <h2 className="flex items-center gap-1.5 text-sm font-bold"><Library size={16} /> Saved range</h2>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              A reusable duration/range calculation saved from Library. It does not independently represent completion or award milestone XP.
+            </p>
+          </section>
+        </aside>
+      </div>
 
       {list.length === 0 && (
         <Card>
@@ -145,7 +146,7 @@ export function Checkpoints() {
           body = <p className="text-xs text-amber-800 dark:text-amber-300">Needs review — playlist length changed (now N={N}). Edit or delete; original {c.start}–{c.end} preserved.</p>;
         }
         return (
-          <Card key={c.id}>
+          <Card key={c.id} className="lq-workflow-section">
             <div className="flex flex-wrap items-center gap-2">
               <p className="mr-auto min-w-0 truncate font-semibold">{c.label} <span className="text-xs font-normal text-[var(--text-muted)]">({c.start}–{c.end})</span></p>
               <Btn title="Rename checkpoint" onClick={async () => { const l = await promptDialog({ title: 'Rename checkpoint', initial: c.label }); if (l && l.trim()) s.renameCheckpoint(c.id, l.trim()); }}><Pencil size={14} /></Btn>
@@ -157,7 +158,7 @@ export function Checkpoints() {
         );
       })}
 
-      <Card>
+      <Card className="lq-workflow-section">
         <h3 className="flex items-center gap-1.5 text-sm font-bold"><Library size={15} /> Saved ranges ({ranges.length})</h3>
         <p className="mt-1 text-xs text-[var(--text-faint)]">
           These are duration calculations saved from Library. They are not checkpoints, do not track completion here, and do not award milestone XP.

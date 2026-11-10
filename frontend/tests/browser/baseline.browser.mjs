@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { startBrowserFixture, waitForLibrary } from './helpers/isolated-browser.mjs';
 import { checkShell } from './helpers/shell-checks.mjs';
 import { checkInteractions } from './helpers/interaction-checks.mjs';
+import { checkDial } from './helpers/dial-checks.mjs';
 
 const mode = process.env.LQ_VISUAL_MODE ?? 'smoke';
 assert.ok(['smoke', 'review', 'verify', 'update'].includes(mode), 'LQ_VISUAL_MODE must be smoke, review, verify, or update');
@@ -62,5 +63,6 @@ test('isolated browser baseline', { timeout: 480_000 }, async (t) => {
     });
   }
   await checkShell(t, fixture, mode === 'review');
+  await checkDial(t, fixture, mode === 'review');
   await checkInteractions(t, fixture, mode === 'review');
 });

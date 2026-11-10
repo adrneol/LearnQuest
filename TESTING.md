@@ -36,10 +36,19 @@ Library on desktop/dark and phone/light. It waits for charts and fonts, advances
 the browser clock through chart animation, then compares captures from two
 independent contexts for stability.
 
-The browser baseline also checks the skip link, drawer focus and resize cleanup,
-contrast in both themes, and keyboard theme switching. It visits all 15
-destinations at 1440px and 320px, plus Dashboard, Library, Analytics, Settings,
-and Account at 1024px, 768px, and 390px.
+The browser baseline also checks the skip link, navigation focus and resize
+cleanup, contrast in both themes, and keyboard theme switching. It visits all 15
+destinations at 1440px and 320px, plus Dashboard, Library, Player, Analytics,
+Focus, Settings, and Account at 1920px, 1024px, 768px, and 390px. Separate fixtures
+exercise Arena practice and signed-in Account security on desktop and mobile.
+Review mode captures the route tour under `test-results/visual/phase-b5-cohesion`.
+
+The dial checks cover angular snapping, immediate section selection, search,
+route history, reduced motion, focus return, and touch dragging, cancellation,
+reload, and landscape resizing. Dock placement is a browser-local edge and
+normalized vertical position. The scroll-isolation check exercises the list
+with wheel, touch, and keyboard input, including both boundaries. It verifies
+that the document still scrolls outside the open navigation and after dismissal.
 
 The interaction checks cover the Player's calendar and notes, Revision toolbar
 alignment and Enter submission, theme changes through Account and Settings,
@@ -61,9 +70,9 @@ them. The default `smoke` mode checks repeatability without reading or writing
 references.
 
 Set `LQ_VISUAL_MODE=review` to write candidates and representative route captures
-to `frontend/test-results/visual` without replacing any references. The Phase B
-references record the shared playlist bar, navigation rail, page title,
-contrast tokens, and condensed range controls.
+to `frontend/test-results/visual` without replacing any references. The Phase B.5
+route and interaction captures are in `frontend/test-results/visual/phase-b5`.
+The Library references record the new editorial layout and collapsed dock.
 
 ## Known defects
 

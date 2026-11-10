@@ -66,20 +66,20 @@ export function Dashboard() {
 
   return (
     <div className="min-w-0">
-      {/* ——— Learning focus: playlist + progress ———————————————— */}
-      <section className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1.9fr)_minmax(17rem,1fr)]">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-start gap-3">
-            {snap.thumbnail && <img src={snap.thumbnail} alt="" className="h-14 w-24 shrink-0 rounded object-cover" />}
+      <div className="lq-workflow-columns" data-layout="companion">
+        <section className="lq-dashboard-course" aria-labelledby="dashboard-course-title">
+          <p className="lq-dashboard-kicker mb-2">Active course</p>
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap">
+            {snap.thumbnail && <img src={snap.thumbnail} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" />}
             <div className="min-w-0 flex-1">
-              <h2 className="text-xl font-bold tracking-tight text-[var(--text)] text-balance">{s.meta[snap.playlistId]?.customTitle ?? snap.title}</h2>
+              <h2 id="dashboard-course-title" className="text-xl font-bold tracking-tight text-balance lg:text-2xl">{s.meta[snap.playlistId]?.customTitle ?? snap.title}</h2>
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                 {snap.entries.length} videos · {comp.resolved} resolved · {snap.source} · {comp.isComplete ? 'complete total' : 'incomplete total'}
               </p>
             </div>
             {resumeUrl ? (
-              <a href={resumeUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-3.5 py-2 text-sm font-semibold text-[var(--accent-text)] transition-colors hover:bg-[var(--accent-hover)]">
-                <Play size={15} /> Resume #{prog.nextPosition}
+              <a href={resumeUrl} target="_blank" rel="noreferrer" className="lq-button lq-button--primary">
+                <Play size={15} aria-hidden="true" /> Resume #{prog.nextPosition}
               </a>
             ) : wholePlaylistDone ? (
               <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">Course complete</span>
@@ -88,27 +88,20 @@ export function Dashboard() {
             )}
           </div>
 
-          {/* Progress block: one line of glanceable numbers, one track. */}
-          <div className="mt-5 flex flex-wrap items-end gap-x-8 gap-y-4">
-            <figure>
-              <dl className="flex items-baseline gap-2">
-                <dt className="order-2 text-xs text-[var(--text-muted)]">videos</dt>
-                <dd className="order-1 font-mono text-3xl font-semibold tabular-nums text-[var(--text)]">{prog.completedCount}<span className="text-lg text-[var(--text-faint)]">/{prog.n}</span></dd>
-              </dl>
-            </figure>
-            <figure>
-              <dl className="flex items-baseline gap-2">
-                <dt className="order-2 text-xs text-[var(--text-muted)]">content done</dt>
-                <dd className="order-1 font-mono text-3xl font-semibold tabular-nums text-[var(--text)]">{prog.completedSec !== null ? formatSecondsHHMMSS(prog.completedSec) : '—'}</dd>
-              </dl>
-            </figure>
-            <figure className="min-w-[9rem]">
-              <dl className="flex items-baseline gap-2">
-                <dt className="order-2 text-xs text-[var(--text-muted)]">remaining</dt>
-                <dd className="order-1 font-mono text-3xl font-semibold tabular-nums text-[var(--text)]">{prog.remainingSec !== null ? formatSecondsHHMMSS(prog.remainingSec) : `${prog.remainingCount} vid`}</dd>
-              </dl>
-            </figure>
-          </div>
+          <dl className="lq-dashboard-stats">
+            <div>
+              <dt>Videos complete</dt>
+              <dd>{prog.completedCount}<span className="text-[var(--text-muted)]">/{prog.n}</span></dd>
+            </div>
+            <div>
+              <dt>Content done</dt>
+              <dd>{prog.completedSec !== null ? formatSecondsHHMMSS(prog.completedSec) : '—'}</dd>
+            </div>
+            <div>
+              <dt>Remaining</dt>
+              <dd>{prog.remainingSec !== null ? formatSecondsHHMMSS(prog.remainingSec) : `${prog.remainingCount} vid`}</dd>
+            </div>
+          </dl>
           <div className="mt-2 space-y-1.5">
             <ProgressBar pct={prog.durationPct ?? prog.countPct} tone={prog.durationPct !== null ? 'cyan' : 'neutral'} />
             {prog.durationPct !== null ? (
@@ -118,14 +111,13 @@ export function Dashboard() {
             )}
           </div>
 
-          {/* Cumulative progress curve — the chart is the hero, not a widget. */}
-          <div className="mt-5">
-            <CumulativeChart data={cum} heightClass="h-56" complete={comp.isComplete} />
+          <div className="mt-5 border-t border-[var(--border)] pt-4">
+            <CumulativeChart data={cum} heightClass="h-56 xl:h-72" complete={comp.isComplete} />
           </div>
-        </div>
+        </section>
 
-        {/* ——— Today: goal, current checkpoint, streak —————— */}
-        <aside className="min-w-0 space-y-6 border-t border-[var(--border)] pt-6 lg:border-t-0 lg:border-l lg:pl-6 lg:pt-0">
+        <aside className="lq-dashboard-activity space-y-4" aria-labelledby="dashboard-activity-title">
+          <h2 id="dashboard-activity-title" className="lq-dashboard-kicker">Learning activity</h2>
           <section>
             <h3 className="text-sm font-semibold text-[var(--text)]">Today</h3>
             {goal ? (
@@ -146,9 +138,10 @@ export function Dashboard() {
               <Flame size={13} className="shrink-0 text-amber-700 dark:text-amber-400" aria-hidden />
               <span><b className="text-[var(--text)]">{streak}</b>-day streak · <b className="text-[var(--text)]">{weekMin}</b> min this week</span>
             </p>
-            <div className="mt-3 h-24 min-w-0">
+            <figure className="mt-3 min-w-0">
+              <div className="h-24">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={days} margin={{ top: 4, right: 4, bottom: 0, left: -8 }}>
+                <LineChart data={days} margin={{ top: 4, right: 20, bottom: 0, left: -8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
                   <XAxis dataKey="day" tick={TICK} interval={1} axisLine={false} tickLine={false} />
                   <YAxis tick={TICK} allowDecimals={false} width={40} axisLine={false} tickLine={false} />
@@ -156,11 +149,12 @@ export function Dashboard() {
                   <Line type="monotone" dataKey="min" stroke={SERIES.primary} strokeWidth={1.75} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
-              <p className="mt-1 text-[10px] text-[var(--text-faint)]">Focused minutes · last 7 days</p>
-            </div>
+              </div>
+              <figcaption className="text-xs text-[var(--text-muted)]">Focused minutes · last 7 days</figcaption>
+            </figure>
           </section>
 
-          <section className="border-t border-[var(--border)] pt-5">
+          <section className="border-t border-[var(--border)] pt-3">
             <h3 className="text-sm font-semibold text-[var(--text)]">Next milestone</h3>
             {nextCp ? (
               <NextCheckpoint id={nextCp.id} />
@@ -169,7 +163,7 @@ export function Dashboard() {
             )}
           </section>
 
-          <section className="border-t border-[var(--border)] pt-5">
+          <section className="border-t border-[var(--border)] pt-3">
             <h3 className="text-sm font-semibold text-[var(--text)]">XP &amp; achievements</h3>
             <p className="mt-1.5 font-mono text-2xl tabular-nums text-[var(--text)]">
               {s.xp.reduce((a, e) => a + e.points, 0)}<span className="ml-1 text-xs font-sans text-[var(--text-muted)]">XP</span>
@@ -185,10 +179,10 @@ export function Dashboard() {
             </ul>
           </section>
         </aside>
-      </section>
+      </div>
 
-      {/* ——— Details below the fold ——————————————— */}
-      <section className="mt-6 border-t border-[var(--border)] pt-5">
+      <div className="lq-dashboard-secondary">
+      <section className="lq-workflow-section">
         <h3 className="text-sm font-semibold text-[var(--text)]">Totals &amp; custom ranges</h3>
         <div className="mt-3 grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <dl>
@@ -223,7 +217,7 @@ export function Dashboard() {
       </section>
 
       {recent.length > 0 && (
-        <section className="mt-6 border-t border-[var(--border)] pt-5">
+        <section className="lq-workflow-section">
           <h3 className="text-sm font-semibold text-[var(--text)]">Recent accomplishments</h3>
           <ul className="mt-2 divide-y divide-[var(--border)] text-sm">
             {recent.map(({ entry }) => (
@@ -236,8 +230,9 @@ export function Dashboard() {
           </ul>
         </section>
       )}
+      </div>
 
-      <PlaylistManager />
+      <div className="mt-6"><PlaylistManager /></div>
     </div>
   );
 }

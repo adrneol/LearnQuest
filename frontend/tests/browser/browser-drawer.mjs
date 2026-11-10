@@ -9,9 +9,9 @@ for (const theme of ['dark', 'light']) {
   await ctx.addInitScript((t) => { try { localStorage.setItem('lq-theme', t); } catch {} }, theme);
   const page = await ctx.newPage();
   await page.goto(`${BASE}/#/dash`, { waitUntil: 'domcontentloaded' });
-  await page.click('[aria-label="Open menu"]');
-  await page.waitForTimeout(600);
-  await page.screenshot({ path: join(OUT, `390x844-${theme}_drawer.png`) });
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('navigation', { name: 'Workspace navigation' }).waitFor();
+  await page.screenshot({ path: join(OUT, `390x844-${theme}_navigation.png`), animations: 'disabled' });
   await ctx.close();
 }
 await browser.close();

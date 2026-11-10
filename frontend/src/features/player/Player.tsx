@@ -467,18 +467,35 @@ function PlayerInner() {
   const currentKey = entry ? entryKey(snap.playlistId, entry) : `${snap.playlistId}::${pos}`;
 
   return (
-    <>
-    <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,26rem)]">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 className="font-mono text-lg tabular-nums font-semibold text-[var(--text)]">#{pos}</h2>
-          <p className="min-w-0 basis-full break-words text-sm font-medium text-[var(--text)]" title={entry?.title}>{entry?.title}</p>
-          <span className="text-[11px] text-[var(--text-faint)]">
+    <div className="lq-workflow">
+    <div className="lq-workflow-columns" data-layout="study">
+      <section className="lq-card lq-card--compact" aria-labelledby="player-lesson-title">
+        <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="font-mono text-xs tabular-nums text-[var(--text-muted)]">#{pos}</span>
+          <span className="text-xs text-[var(--text-muted)]">
             {completion === 'verified' ? 'verified' : completion === 'manual' ? 'manual complete' : completion === 'in-progress' ? 'in progress' : completion === 'needs-revision' ? 'needs revision' : completion === 'unavailable' ? 'unavailable' : 'not started'}
           </span>
-        </div>
-        <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-black ring-1 ring-[var(--border)]">
+          <h2 id="player-lesson-title" className="min-w-0 basis-full break-words text-lg font-semibold">{entry?.title || `Lesson #${pos}`}</h2>
+        </header>
+        <div className="aspect-video w-full overflow-hidden rounded-lg bg-black ring-1 ring-[var(--border)]">
           <div ref={mountRef} className="h-full w-full" />
+        </div>
+        <div className="lq-player-playback mt-2">
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Playback controls">
+            <div className="flex gap-2">
+              <Btn variant="primary" onClick={play} disabled={state === 'error' || !entry?.videoId}><Play size={14} /> Play</Btn>
+              <Btn onClick={pause}><Pause size={14} /> Pause</Btn>
+            </div>
+            <div className="flex gap-2">
+              <Btn onClick={() => go(pos - 1)} disabled={pos <= 1} aria-label="Previous lesson"><SkipBack size={14} /></Btn>
+              <Btn onClick={() => go(pos + 1)} disabled={pos >= N} aria-label="Next lesson"><SkipForward size={14} /></Btn>
+              <Btn onClick={enqueue} aria-label="Queue this lesson"><ListPlus size={14} /></Btn>
+            </div>
+            <span className="w-full break-words font-mono text-xs text-[var(--text-muted)] xl:ml-auto xl:w-auto">
+              {formatSecondsHHMMSS(Math.floor(cur))} / {dur !== null ? formatSecondsHHMMSS(dur) : '?'} · {rate}x · unique {formatSecondsHHMMSS(Math.floor(cov.uniqueSec))}
+            </span>
+          </div>
+          {dur !== null && dur > 0 && <ProgressBar pct={(cur / dur) * 100} tone="cyan" />}
         </div>
         {err && (
           <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-200">
@@ -498,25 +515,12 @@ function PlayerInner() {
             )}
           </div>
         )}
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Btn variant="primary" onClick={play} disabled={state === 'error' || !entry?.videoId}><Play size={14} /> Play</Btn>
-          <Btn onClick={pause}><Pause size={14} /> Pause</Btn>
-          <Btn onClick={() => go(pos - 1)} disabled={pos <= 1} aria-label="Previous lesson"><SkipBack size={14} /></Btn>
-          <Btn onClick={() => go(pos + 1)} disabled={pos >= N} aria-label="Next lesson"><SkipForward size={14} /></Btn>
-          <Btn onClick={enqueue} title="Queue this lesson"><ListPlus size={14} /></Btn>
-          <span className="w-full break-words font-mono text-xs text-[var(--text-muted)] sm:ml-auto sm:w-auto">
-            {formatSecondsHHMMSS(Math.floor(cur))} / {dur !== null ? formatSecondsHHMMSS(dur) : '?'} · {rate}x · unique {formatSecondsHHMMSS(Math.floor(cov.uniqueSec))}
-          </span>
-        </div>
-        {dur !== null && dur > 0 && (
-          <div className="mt-2"><ProgressBar pct={(cur / dur) * 100} tone="cyan" /></div>
-        )}
-      </div>
+      </section>
 
-      <aside className="min-w-0 space-y-5 border-t border-[var(--border)] pt-5 lg:border-t-0 lg:border-l lg:pl-5 lg:pt-0">
+      <aside className="lq-card lq-workflow-band lq-workflow" aria-labelledby="player-actions-title">
         <section>
-          <h3 className="lq-section-title">This lesson</h3>
-          <div className="mt-2 grid grid-cols-2 gap-2">
+          <h2 id="player-actions-title" className="lq-section-title">This lesson</h2>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2 sm:items-end">
             <NumberField
               label={`Jump to position (1–${N})`}
               value={pos}
@@ -560,9 +564,14 @@ function PlayerInner() {
           <p className="mt-2 text-[11px] text-[var(--text-faint)]">
             Completion verified at {Math.round(s.settings.verifiedThreshold * 100)}% unique coverage (Settings). Seeks never credit skipped spans; buffering never counts.
           </p>
+          {entry && (
+            <Btn variant="quiet" className="mt-2" onClick={() => document.getElementById('player-learning-record-title')?.focus()}>
+              Open learning record
+            </Btn>
+          )}
         </section>
 
-        <section className="border-t border-[var(--border)] pt-4">
+        <section className="lq-workflow-section">
           <div className="flex items-center justify-between gap-2">
             <h3 className="lq-section-title">Queue ({queue.length})</h3>
             {queue.length > 0 && (
@@ -585,6 +594,6 @@ function PlayerInner() {
     </div>
 
     {entry && <PlayerLearningRecord entry={entry} />}
-    </>
+    </div>
   );
 }

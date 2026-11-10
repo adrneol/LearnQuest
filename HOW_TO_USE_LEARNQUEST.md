@@ -98,8 +98,7 @@ Google Cloud immediately and update the replacement in Render.
   and the token is removed from the address bar immediately. Resetting signs
   out all existing sessions.
 - The **account menu at the top-right of the main header** opens Profile,
-  Account settings, Security & sessions, export, and sign-out. It is not in
-  the sidebar.
+  Account settings, Security & sessions, export, appearance, and sign-out.
 - **Security & sessions** lists active devices, lets you sign out other
   devices or all devices, change your password, and verify a new email address
   with a single-use link sent to that new address. The old email stays active
@@ -163,9 +162,20 @@ registration is not shown as a completed dashboard.
   clear message.
 
 ### Select and switch playlists
-Use the **Active playlist** dropdown (sidebar, or mobile header). Switching
+Use the **Active playlist** dropdown in the main header. Switching
 only changes the view — every playlist's progress, modules, and history are
 kept separately and never mixed.
+
+### Navigate the workspace
+
+Open the compass dock to see destinations for Learn, Insights, or Manage.
+Select a mark, drag around the dial, or use the arrow keys to switch sections
+immediately. Use **All pages** to search across sections. Escape returns to
+the dial or collapses the dock.
+
+Drag the collapsed dock to either screen edge and release it at your preferred
+height. **Dock position** inside the dial offers edge buttons, a keyboard
+adjustable position slider, and a reset. The browser remembers your placement.
 
 ## B. Studying and tracking
 

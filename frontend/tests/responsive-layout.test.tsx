@@ -69,12 +69,11 @@ describe('responsive Library and Player text containment', () => {
       PlayerState: { PLAYING: 1, PAUSED: 2, BUFFERING: 3, ENDED: 0 },
     };
     render(<StoreProvider><Player /></StoreProvider>);
-    const title = await screen.findByText(LONG_TITLE);
+    const title = await screen.findByRole('heading', { name: LONG_TITLE });
     expect(title.className).toContain('break-words');
     expect(title.className).not.toContain('truncate');
     const telemetry = screen.getByText(/unique 0:00:00/);
     expect(telemetry.className).toContain('break-words');
-    expect(telemetry.className).toContain('w-full');
-    expect(telemetry.className).toContain('sm:w-auto');
+    expect(telemetry).toHaveClass('w-full', 'xl:w-auto');
   });
 });

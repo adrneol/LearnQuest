@@ -174,8 +174,8 @@ export function HistoryView() {
   const videoCov = videoSegs.length ? summarizeSegments(videoSegs) : null;
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="lq-workflow">
+      <Card className="lq-workflow-band">
         <h2 className="lq-section-title">Study history <span className="font-normal text-[var(--text-muted)]">({tz})</span></h2>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {(['today', 'yesterday', 'week', 'month', 'all', 'custom'] as Preset[]).map((p) => (
@@ -266,8 +266,8 @@ export function HistoryView() {
         )}
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
+      <div className="lq-workflow-columns" data-layout="study">
+        <Card className="lq-workflow-section">
           <h3 className="lq-section-title">Per-video history ({rangeLabel})</h3>
           <div className="mt-1 flex gap-2">
             <NumberField
@@ -437,7 +437,7 @@ function ManualEntry({ onSaved }: { onSaved?: (dateKey: string) => string }) {
   };
 
   return (
-    <Card>
+    <Card className="lq-workflow-section">
       <h3 className="lq-section-title">Self-reported entry <span className="font-normal text-[var(--text-muted)]">(pre-tracking history)</span></h3>
       <div className="mt-2 grid grid-cols-2 gap-2">
         <Dropdown

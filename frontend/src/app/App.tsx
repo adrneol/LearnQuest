@@ -1,9 +1,5 @@
 import React, { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import {
-  LayoutDashboard, ListVideo, Clapperboard, ChartLine, BookOpen, Target, CheckCircle2,
-  Timer as TimerIcon, Gauge, Swords, RefreshCw, History, BarChart3, Settings as SettingsIcon,
-  X, Check, Menu, PanelLeftClose, PanelLeftOpen, UserRound, BookOpenCheck,
-} from 'lucide-react';
+import { X, Check, BookOpenCheck } from 'lucide-react';
 import { useStore } from './store';
 import { PlaylistSwitcher, Onboarding } from '../features/playlists/Playlists';
 import { Player } from '../features/player/Player';
@@ -12,7 +8,9 @@ import { Goals } from '../features/goals/Goals';
 import { Checkpoints } from '../features/checkpoints/Checkpoints';
 import { Settings } from '../features/settings/Settings';
 import { Notifier } from '../components/layout/Notifier';
-import { DialogHost, lockPageScroll } from '../components/ui/dialog';
+import { DialogHost } from '../components/ui/dialog';
+import { NavigationDock } from '../components/navigation/NavigationDock';
+import { destinations, groupForRoute, routeGroups, routeIds } from './routes';
 import { Btn, Skeleton } from '../components/ui/ui';
 import { Account } from '../features/account/Account';
 import { AccountMenu, type AccountSection } from '../features/account/AccountMenu';
@@ -84,52 +82,6 @@ export class AppErrorBoundary extends React.Component<
   }
 }
 
-interface NavItem {
-  id: Tab;
-  label: string;
-  icon: React.ReactNode;
-}
-
-const GROUPS: { title: string; items: NavItem[] }[] = [
-  {
-    title: 'Learn',
-    items: [
-      { id: 'dash', label: 'Dashboard', icon: <LayoutDashboard size={17} /> },
-      { id: 'learn', label: 'Library', icon: <ListVideo size={17} /> },
-      { id: 'player', label: 'Player', icon: <Clapperboard size={17} /> },
-    ],
-  },
-  {
-    title: 'Plan',
-    items: [
-      { id: 'goals', label: 'Goals', icon: <Target size={17} /> },
-      { id: 'checks', label: 'Checkpoints', icon: <CheckCircle2 size={17} /> },
-      { id: 'focus', label: 'Focus', icon: <TimerIcon size={17} /> },
-    ],
-  },
-  {
-    title: 'Insights',
-    items: [
-      { id: 'analytics', label: 'Analytics', icon: <ChartLine size={17} /> },
-      { id: 'efficiency', label: 'Efficiency', icon: <Gauge size={17} /> },
-      { id: 'history', label: 'History', icon: <History size={17} /> },
-      { id: 'revise', label: 'Revision', icon: <RefreshCw size={17} /> },
-    ],
-  },
-  {
-    title: 'Manage',
-    items: [
-      { id: 'modules', label: 'Modules', icon: <BookOpen size={17} /> },
-      { id: 'competition', label: 'Arena', icon: <Swords size={17} /> },
-      { id: 'reports', label: 'Reports', icon: <BarChart3 size={17} /> },
-      { id: 'settings', label: 'Settings', icon: <SettingsIcon size={17} /> },
-    ],
-  },
-];
-
-const ACCOUNT_ITEM: NavItem = { id: 'account', label: 'Account', icon: <UserRound size={17} /> };
-const destinations = GROUPS.flatMap(({ items }) => items);
-const ALL_IDS = new Set<Tab>(destinations.map(({ id }) => id));
 const PAGE_DESCRIPTIONS: Record<Exclude<Tab, 'account'>, string> = {
   dash: 'Pick up where you left off and see what’s next.',
   learn: 'Find lessons, compare durations, and save ranges to study.',
@@ -151,7 +103,7 @@ function tabFromHash(): Tab | null {
   const h = window.location.hash.replace(/^#\/?/, '');
   if (!h) return 'dash';
   if (/^account(?:\/|$)/.test(h)) return 'account';
-  return ALL_IDS.has(h as Tab) ? h as Tab : null;
+  return routeIds.has(h as Tab) ? h as Tab : null;
 }
 
 function followInApp(event: React.MouseEvent<HTMLAnchorElement>, navigate: () => void) {
@@ -166,37 +118,12 @@ function focusSection(id: string) {
   target?.scrollIntoView?.({ block: 'start' });
 }
 
-function Brand({ compact = false }: { compact?: boolean }) {
+function Brand() {
   return (
     <div className="lq-brand" translate="no">
-      <span className="lq-brand-mark" aria-hidden="true"><BookOpenCheck size={20} strokeWidth={1.7} /></span>
-      {!compact && <span>LearnQuest</span>}
+      <span className="lq-brand-mark" aria-hidden="true"><BookOpenCheck size={21} strokeWidth={1.65} /></span>
+      <span>LearnQuest</span>
     </div>
-  );
-}
-
-function WorkspaceNav({ tab, compact = false, onNavigate }: {
-  tab: Tab; compact?: boolean; onNavigate: (tab: Tab) => void;
-}) {
-  const item = ({ id, label, icon }: NavItem) => (
-    <li key={id}>
-      <a href={`#/${id}`} className="lq-nav-link" aria-current={tab === id ? 'page' : undefined}
-        title={compact ? label : undefined} onClick={(event) => followInApp(event, () => onNavigate(id))}>
-        <span className="lq-nav-icon" aria-hidden="true">{icon}</span>
-        <span className={compact ? 'sr-only' : 'truncate'}>{label}</span>
-      </a>
-    </li>
-  );
-  return (
-    <nav aria-label="Sections" className="lq-navigation">
-      {GROUPS.map(({ title, items }) => (
-        <div key={title} className="lq-nav-group">
-          {!compact && <p className="lq-nav-label">{title}</p>}
-          <ul aria-label={title}>{items.map(item)}</ul>
-        </div>
-      ))}
-      <ul aria-label="Account" className="lq-nav-account">{item(ACCOUNT_ITEM)}</ul>
-    </nav>
   );
 }
 
@@ -306,14 +233,8 @@ function CloudConflictBanner() {
 function AppInner() {
   const s = useStore();
   const [tab, setTab] = useState<Tab>(() => tabFromHash() ?? 'dash');
-  const [drawer, setDrawer] = useState(false);
   const [accountSection, setAccountSection] = useState<AccountSection>(() => accountSectionFromHash());
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lq-nav-collapsed') === '1');
-  const menuBtnRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
-  const sidebarRef = useRef<HTMLElement>(null);
-  const drawerRef = useRef<HTMLDivElement>(null);
-  const closeBtnRef = useRef<HTMLButtonElement>(null);
   const lastTabRef = useRef<Tab | null>(null);
   const isAccountPage = tab === 'account';
 
@@ -323,7 +244,6 @@ function AppInner() {
       if (next === null) return; // Ordinary document anchors are not routes.
       setTab(next);
       setAccountSection(accountSectionFromHash());
-      setDrawer(false);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -331,7 +251,6 @@ function AppInner() {
 
   const go = useCallback((t: Tab) => {
     setTab(t);
-    setDrawer(false);
     if (tabFromHash() !== t) window.location.hash = `/${t}`;
     window.scrollTo({ top: 0 });
   }, []);
@@ -339,15 +258,10 @@ function AppInner() {
   const goAccount = useCallback((section: AccountSection) => {
     setAccountSection(section);
     setTab('account');
-    setDrawer(false);
     const target = `#/account/${section}`;
     if (window.location.hash !== target) window.location.hash = target;
     window.scrollTo({ top: 0 });
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem('lq-nav-collapsed', collapsed ? '1' : '0');
-  }, [collapsed]);
 
   // Mobile header height drives sticky offsets (Revision toolbar/scroll).
   useEffect(() => {
@@ -367,55 +281,6 @@ function AppInner() {
       document.documentElement.style.removeProperty('--lq-mobile-header-h');
     };
   }, [s.ready, s.loadError]);
-
-  useLayoutEffect(() => {
-    if (!drawer || !s.ready || s.loadError) return;
-    const desktop = window.matchMedia?.('(min-width: 64rem)');
-    if (desktop?.matches) {
-      setDrawer(false);
-      return;
-    }
-    const opener = menuBtnRef.current;
-    const sidebar = sidebarRef.current;
-    const background = Array.from(document.querySelectorAll<HTMLElement>('[data-app-background]:not([inert])'));
-    for (const el of background) el.setAttribute('inert', '');
-    const unlockScroll = lockPageScroll();
-    closeBtnRef.current?.focus();
-
-    const onBreakpoint = (event: MediaQueryListEvent) => {
-      if (event.matches) setDrawer(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setDrawer(false);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const panel = drawerRef.current;
-      const links = panel?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]');
-      if (!panel || !links?.length) return;
-      const first = links[0];
-      const last = links[links.length - 1];
-      const active = document.activeElement;
-      if (!panel.contains(active) || (event.shiftKey ? active === first : active === last)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      }
-    };
-    desktop?.addEventListener('change', onBreakpoint);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      desktop?.removeEventListener('change', onBreakpoint);
-      document.removeEventListener('keydown', onKey);
-      unlockScroll();
-      for (const el of background) el.removeAttribute('inert');
-      const returnTarget = desktop?.matches
-        ? sidebar?.querySelector<HTMLElement>('[aria-current="page"]')
-        : opener;
-      returnTarget?.focus({ preventScroll: true });
-    };
-  }, [drawer, s.ready, s.loadError]);
 
   useLayoutEffect(() => {
     if (!s.ready || s.loadError) return;
@@ -466,13 +331,12 @@ function AppInner() {
 
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const pageTitle = isAccountPage ? 'Account' : destinations.find(({ id }) => id === tab)?.label ?? 'Dashboard';
-  const pageGroup = GROUPS.find(({ items }) => items.some(({ id }) => id === tab))?.title ?? 'Account';
+  const pageGroup = routeGroups[groupForRoute(tab)].title;
 
   return (
     <div
       data-reduced-motion={s.prefs.reducedMotion ? 'true' : 'false'}
       data-page={isAccountPage ? 'account' : 'workspace'}
-      data-compact={collapsed}
       className="lq-shell"
     >
       <a data-app-background href="#main-content" className="lq-skip"
@@ -480,44 +344,12 @@ function AppInner() {
         Skip to main content
       </a>
 
-      <aside ref={sidebarRef} data-app-background className="lq-sidebar" aria-label="Primary">
-        <div className="lq-sidebar-head"><Brand compact={collapsed} /></div>
-        <WorkspaceNav tab={tab} compact={collapsed} onNavigate={go} />
-        <div className="lq-sidebar-foot">
-          <Btn variant="quiet" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-expanded={!collapsed} onClick={() => setCollapsed((value) => !value)} className="w-full">
-            {collapsed ? <PanelLeftOpen size={17} aria-hidden="true" /> : <><PanelLeftClose size={17} aria-hidden="true" /> Collapse sidebar</>}
-          </Btn>
-        </div>
-      </aside>
-
-      {drawer && (
-        <div className="lq-drawer-layer" role="presentation">
-          <div className="lq-drawer-overlay" aria-hidden="true" onClick={() => setDrawer(false)} />
-          <div id="workspace-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Menu" className="lq-drawer">
-            <div className="lq-drawer-head">
-              <Brand />
-              <Btn variant="quiet" ref={closeBtnRef} aria-label="Close menu" onClick={() => setDrawer(false)} className="w-11 px-0">
-                <X size={19} aria-hidden="true" />
-              </Btn>
-            </div>
-            <WorkspaceNav tab={tab} onNavigate={go} />
-          </div>
-        </div>
-      )}
+      <NavigationDock tab={tab} onNavigate={go} />
 
       <div data-app-background className="lq-workspace">
         <header ref={headerRef} className="lq-topbar">
           <div className="lq-topbar-inner">
-            <Btn ref={menuBtnRef} variant="quiet" aria-label="Open menu" aria-expanded={drawer}
-              aria-controls={drawer ? 'workspace-drawer' : undefined} aria-haspopup="dialog"
-              onClick={() => setDrawer(true)} className="lq-menu-toggle">
-              <Menu size={20} aria-hidden="true" />
-            </Btn>
-            <p className="lq-topbar-location">
-              <span className="lg:hidden">{pageTitle}</span>
-              <span className="hidden lg:inline">{pageGroup}</span>
-            </p>
+            <Brand />
             {!isAccountPage && <div className="lq-topbar-playlist"><PlaylistSwitcher /></div>}
             <div className="lq-topbar-actions">
               <SyncIndicator />
@@ -526,9 +358,11 @@ function AppInner() {
           </div>
         </header>
 
-        <main id="main-content" tabIndex={-1} className="lq-main" aria-labelledby={isAccountPage ? 'account-page-title' : 'workspace-page-title'}>
+        <main id="main-content" tabIndex={-1} className="lq-main" data-route={tab}
+          aria-labelledby={isAccountPage ? 'account-page-title' : 'workspace-page-title'}>
           {!isAccountPage && (
             <div className="lq-page-heading">
+              <span className="lq-page-group">{pageGroup}</span>
               <h1 id="workspace-page-title" tabIndex={-1}>{pageTitle}</h1>
               <p>{PAGE_DESCRIPTIONS[tab]}</p>
             </div>

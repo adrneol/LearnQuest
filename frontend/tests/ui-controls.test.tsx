@@ -42,20 +42,25 @@ beforeEach(async () => {
   await db.clear('kv');
 });
 
-describe('navigation (no horizontal scroll pattern)', () => {
-  it('renders all 14 grouped destinations with active state', async () => {
+async function openPages() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Open navigation' }));
+  fireEvent.click(screen.getByRole('button', { name: 'All pages' }));
+  return screen.getByRole('region', { name: 'All pages' });
+}
+
+describe('workspace navigation', () => {
+  it('renders all 15 grouped destinations with active state on demand', async () => {
     render(
       <StoreProvider>
         <App />
       </StoreProvider>,
     );
-    const nav = await screen.findByLabelText('Sections');
-    const labels = ['Dashboard', 'Library', 'Player', 'Goals', 'Checkpoints', 'Focus', 'Analytics', 'Efficiency', 'History', 'Revision', 'Modules', 'Arena', 'Reports', 'Settings'];
+    const nav = await openPages();
+    const labels = ['Dashboard', 'Library', 'Player', 'Goals', 'Checkpoints', 'Focus', 'Analytics', 'Efficiency', 'History', 'Revision', 'Modules', 'Arena', 'Reports', 'Settings', 'Account'];
     for (const l of labels) {
       expect(within(nav).getByRole('link', { name: l })).toBeTruthy();
     }
-    // grouped headings on desktop sidebar
-    expect(screen.getAllByText('Learn').length).toBeGreaterThanOrEqual(1);
+    for (const group of ['Learn', 'Insights', 'Manage']) expect(within(nav).getByRole('heading', { name: group })).toBeTruthy();
     // no horizontal-scroll nav container remains
     expect(document.querySelector('nav.overflow-x-auto')).toBeNull();
     // Dashboard is the active page
@@ -68,25 +73,36 @@ describe('navigation (no horizontal scroll pattern)', () => {
         <App />
       </StoreProvider>,
     );
-    const nav = await screen.findByLabelText('Sections');
+    const nav = await openPages();
     fireEvent.click(within(nav).getByRole('link', { name: 'Player' }));
     await waitFor(() => expect(window.location.hash).toBe('#/player'));
     expect(await screen.findByText(/No active playlist|Now playing/)).toBeTruthy();
     window.location.hash = '#/dash';
-    await waitFor(() => expect(within(nav).getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument());
+    const reopened = await openPages();
+    expect(within(reopened).getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('mobile drawer opens and closes with Escape', async () => {
+  it('shows section destinations immediately and Escape backs out of search before restoring focus', async () => {
     render(
       <StoreProvider>
         <App />
       </StoreProvider>,
     );
-    await screen.findByLabelText('Sections');
-    fireEvent.click(screen.getByLabelText('Open menu'));
-    expect(await screen.findByRole('dialog', { name: 'Menu' })).toBeTruthy();
-    fireEvent.keyDown(document, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull());
+    const dock = await screen.findByRole('button', { name: 'Open navigation' });
+    fireEvent.click(dock);
+    const panel = screen.getByRole('navigation', { name: 'Workspace navigation' });
+    expect(dock).toHaveAttribute('aria-expanded', 'true');
+    expect(panel).not.toHaveAttribute('aria-modal');
+    expect(document.body.style.overflow).not.toBe('hidden');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Insights', exact: true }));
+    expect(within(panel).getByRole('link', { name: 'Analytics' })).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'All pages' }));
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    expect(within(panel).getByRole('button', { name: 'Insights', exact: true })).toHaveFocus();
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    expect(screen.queryByRole('navigation', { name: 'Workspace navigation' })).toBeNull();
+    expect(dock).toHaveFocus();
   });
 });
 

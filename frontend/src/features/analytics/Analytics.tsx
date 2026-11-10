@@ -110,8 +110,8 @@ export function Analytics() {
   if (!snap || !data) return <Empty title="No active playlist" hint="Analytics respond to the active playlist and real activity." />;
 
   return (
-    <div className="min-w-0 space-y-4">
-      <div className="grid min-w-0 gap-4 md:grid-cols-2">
+    <div className="lq-workflow">
+      <section className="lq-workflow-columns" data-layout="balanced" aria-label="Playlist duration">
         <Card className="min-w-0">
           <h3 className="lq-section-title">Cumulative content</h3>
           <CumulativeChart data={data.cum} heightClass="h-52" complete={data.comp.isComplete} />
@@ -184,10 +184,10 @@ export function Analytics() {
             </div>
           </details>
         </Card>
-      </div>
+      </section>
 
-      <div className="grid min-w-0 gap-4 md:grid-cols-3">
-        <Card>
+      <section className="lq-workflow-section grid min-w-0 gap-4 md:grid-cols-3" aria-label="Learning activity and completion">
+        <Card className="lq-workflow-band">
           <h3 className="lq-section-title">Completed vs remaining</h3>
           <ProgressDonut done={data.prog.completedCount} total={data.prog.n} heightClass="h-44" />
           <p className="text-xs text-[var(--text-muted)]">{data.prog.completedCount}/{data.prog.n} videos · {data.prog.isDurationComplete && data.prog.completedSec !== null ? `${formatSecondsHHMMSS(data.prog.completedSec)} content done` : 'duration total incomplete — count shown'}.</p>
@@ -225,10 +225,10 @@ export function Analytics() {
             </table>
           </details>
         </Card>
-      </div>
+      </section>
 
-      <div className="grid min-w-0 gap-4 md:grid-cols-2">
-        <Card>
+      <div className="lq-workflow-columns" data-layout="balanced">
+        <Card className="lq-workflow-section">
           <h3 className="lq-section-title">Modules & learning quality</h3>
           {data.mods.length === 0 && <p className="text-xs text-[var(--text-faint)]">No modules yet — group playlist positions into chapters on the Modules tab (e.g. “Basics 1–8”). Analytics will summarize remaining work per module here.</p>}
           {data.mods.map((m) => (
@@ -238,7 +238,7 @@ export function Analytics() {
             Confidence rated on {data.confs} videos{data.avgConf !== null ? ` (avg ${data.avgConf.toFixed(1)}/5)` : ''} · {data.revOpen} with a current review signal (same queue rules as Revision). Mastery is evidence, not a single score.
           </p>
         </Card>
-        <Card>
+        <Card className="lq-workflow-section">
           <h3 className="lq-section-title">Insights (from recorded values)</h3>
           <ul className="mt-1 space-y-1.5 text-sm">
             {data.insights.map((i, k) => (

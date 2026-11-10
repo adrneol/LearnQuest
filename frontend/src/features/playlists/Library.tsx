@@ -136,10 +136,11 @@ export function Library() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="lq-workflow">
       <Card className="lq-card--compact">
         <h2 className="lq-section-title">Range explorer</h2>
-        <div className="mt-3 grid grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto]">
+        <div className="lq-workflow-tools mt-3">
+          <div className="grid w-full grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto]">
           <NumberField
             label={`Start (1–${N})`}
             value={start}
@@ -166,22 +167,23 @@ export function Library() {
             </Btn>
           </div>
         </div>
-        <p className="mt-2 text-xs text-[var(--text-faint)]">Session length only estimates the number of study blocks. Recorded durations stay the same.</p>
+        <p className="w-full text-xs text-[var(--text-muted)]">Session length only estimates the number of study blocks. Recorded durations stay the same.</p>
         {rangeErrMsg && <p className="mt-1 text-sm text-red-800 dark:text-red-300">{rangeErrMsg}</p>}
-        <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Range presets">
+        <div className="flex flex-wrap gap-1.5" aria-label="Range presets">
           {(['full', 'first', 'middle', 'last'] as const).map((p) => (
             <button
               key={p}
               onClick={() => applyPreset(p)}
-              className="min-h-9 rounded-[var(--radius-control)] bg-[var(--surface-soft)] px-2.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] pointer-coarse:min-h-11"
+              className="min-h-9 rounded-[var(--radius-control)] bg-[var(--surface)] px-2.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] pointer-coarse:min-h-11"
             >
               {p === 'full' ? `Full playlist (1–${N})` : p === 'first' ? 'First videos' : p === 'middle' ? 'Middle segment' : 'Final videos'}
             </button>
           ))}
         </div>
+        </div>
         {range && (
-          <div className="mt-3 grid min-w-0 items-start gap-3 border-t border-[var(--border)] pt-3 lg:grid-cols-[13.5rem_minmax(0,1fr)]">
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-[var(--radius-control)] bg-[var(--surface-soft)] p-3 text-sm min-[380px]:grid-cols-4 lg:grid-cols-2">
+          <div className="lq-workflow mt-4 gap-3">
+            <dl className="lq-library-summary text-sm" aria-label="Selected range summary">
               <div>
                 <dt className="text-[11px] text-[var(--text-faint)]">Videos {start}–{end}</dt>
                 <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.count}</dd>
@@ -198,23 +200,22 @@ export function Library() {
                 <dt className="text-[11px] text-[var(--text-faint)]">Unresolved</dt>
                 <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.unresolved}</dd>
               </div>
-              <div className="col-span-full">
+              <div>
                 <dt className="text-xs text-[var(--text-faint)]">Sessions of {s.prefs.sessionLenMin} min</dt>
                 <dd className="text-xs text-[var(--text-muted)]">≈{sessionsNeeded(range.totalSec, s.prefs.sessionLenMin * 60)} needed</dd>
               </div>
-              {!range.isComplete && (
-                <div className="col-span-full">
-                  <p className="text-xs text-amber-800 dark:text-amber-300">Incomplete — positions {range.unresolvedPositions.join(', ')} unresolved. Not a complete total.</p>
-                </div>
-              )}
-              <div className="col-span-full">
+              <div>
+                <dt>Completed</dt>
                 {(() => {
                   const rp = computeRangeProgress(snap, start, end, s.progress);
-                  return <p className="text-xs text-[var(--text-muted)]"><b>{rp.done}/{rp.count}</b> done{rp.doneSec !== null && rp.totalSec !== null ? ` · ${formatHuman(rp.totalSec - rp.doneSec)} left` : ''}.</p>;
+                  return <dd className="text-xs text-[var(--text-muted)]"><b>{rp.done}/{rp.count}</b> done{rp.doneSec !== null && rp.totalSec !== null ? ` · ${formatHuman(rp.totalSec - rp.doneSec)} left` : ''}.</dd>;
                 })()}
               </div>
             </dl>
-            <div className="min-w-0">
+            {!range.isComplete && (
+              <p className="text-xs text-amber-800 dark:text-amber-300">Incomplete — positions {range.unresolvedPositions.join(', ')} unresolved. Not a complete total.</p>
+            )}
+            <div className="lq-workflow-section pt-3">
               <div className="lq-segmented mb-2" role="group" aria-label="Chart view">
                 {(['bars', 'cumulative'] as const).map((v) => (
                   <button
@@ -244,7 +245,7 @@ export function Library() {
 
       <Card>
         <h2 className="lq-section-title mb-3">Lessons</h2>
-        <div className="flex flex-wrap items-end gap-2">
+        <div className="lq-workflow-tools">
           <div className="relative flex-1 min-w-[180px]">
             <Search aria-hidden="true" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search titles…" className={`${inputCls} pl-8`} aria-label="Search videos" />
@@ -409,7 +410,7 @@ export function Library() {
         </div>
       </Card>
 
-      <Card>
+      <Card className="lq-workflow-section">
         <h2 className="lq-section-title">Distribution & composition</h2>
         <p className="text-[11px] text-[var(--text-faint)]">Bars: minutes per video across the whole playlist (every resolved entry) · Pie: completed vs remaining videos</p>
         <div className="grid min-w-0 gap-3 md:grid-cols-2">

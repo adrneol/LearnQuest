@@ -68,21 +68,12 @@ export function Reports() {
   }, { done: 0, total: 0 });
 
   return (
-    <div className="space-y-4">
+    <div className="lq-workflow">
+      {msg && <p className="lq-alert lq-alert--info" role="status">{msg}</p>}
       <Card>
-        <h2 className="lq-section-title">Playlists ({allIds.length}) · combined {combined.done}/{combined.total} videos</h2>
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-          <input className={inputCls} placeholder="New playlist URL or ID" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="New playlist URL" />
-          <Btn variant="primary" onClick={() => add(false)} disabled={busy || !url.trim()}><Plus size={14} /> Add</Btn>
-          <Btn onClick={() => add(true)} disabled={busy || !snap}><RefreshCw size={14} /> Refresh active{snap ? ` (#${snap.entries.length})` : ''}</Btn>
-        </div>
-        {msg && <p className="mt-1 text-sm text-[var(--text)]">{msg}</p>}
-        <PlaylistTable ids={allIds} />
-      </Card>
-
-      <Card>
-        <h3 className="lq-section-title">Exports (same verified engine as dashboard — no PDFs)</h3>
-        <div className="mt-2 flex flex-wrap gap-2">
+        <h2 className="lq-section-title">Export and restore</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">Download a full backup or export individual reports as CSV.</p>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <Btn onClick={async () => download(`learnquest-backup-${Date.now()}.json`, await s.exportBackup())}><Download size={14} /> Backup JSON</Btn>
           <Btn disabled={!snap} onClick={() => snap && download(`${snap.playlistId}-videos.csv`, snapshotToCsv(snap, completedEntryKeys(snap, s.progress)))}><Download size={14} /> Videos CSV</Btn>
           <Btn disabled={!snap} onClick={() => {
@@ -104,7 +95,7 @@ export function Reports() {
             download('checkpoints.csv', toCsv(rows as any, ['label', 'start', 'end', 'totalSec', 'done', 'count', 'completedAt']), 'text/csv');
           }}><Download size={14} /> Checkpoints CSV</Btn>
         </div>
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+        <div className="lq-workflow-tools mt-3">
           <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm">
             <Upload size={14} /> Restore backup
             <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
@@ -154,9 +145,19 @@ export function Reports() {
         </div>
       </Card>
 
+      <Card>
+        <h2 className="lq-section-title">Playlists ({allIds.length}) · combined {combined.done}/{combined.total} videos</h2>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <input className={inputCls} placeholder="New playlist URL or ID" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="New playlist URL" />
+          <Btn variant="primary" onClick={() => add(false)} disabled={busy || !url.trim()}><Plus size={14} /> Add</Btn>
+          <Btn onClick={() => add(true)} disabled={busy || !snap}><RefreshCw size={14} /> Refresh active{snap ? ` (#${snap.entries.length})` : ''}</Btn>
+        </div>
+        <PlaylistTable ids={allIds} />
+      </Card>
+
       <OrphanReview />
 
-      <Card>
+      <Card className="lq-workflow-section">
         <h3 className="flex items-center gap-1.5 text-sm font-bold"><Settings2 size={15} /> Preferences</h3>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           <TimezonePicker value={s.prefs.timezone} onChange={(tz) => s.setPrefs({ timezone: tz })} />

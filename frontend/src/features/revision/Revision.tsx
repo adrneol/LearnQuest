@@ -221,7 +221,7 @@ export function Revision() {
     : [];
 
   return (
-    <div className="space-y-4">
+    <div className="lq-workflow">
       {/* Sticky controls: stays under the mobile header / app top while the
           lesson list scrolls, without creating a nested scroll container. */}
       <div
@@ -332,7 +332,7 @@ export function Revision() {
         )}
       </div>
 
-      <Card>
+      <Card className="lq-workflow-section">
         <details>
           <summary className="cursor-pointer text-sm font-semibold">How the revision queue works <span className="font-normal text-[var(--text-muted)]">(completion ≠ mastery)</span></summary>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
@@ -357,7 +357,7 @@ export function Revision() {
       </Card>
 
       {noQueue && mode === 'queue' && (
-        <Card>
+        <Card className="lq-workflow-band">
           <h3 className="text-sm font-bold">Queue clear — nothing needs revision right now</h3>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
             A blank queue means no lesson currently carries a review signal — not that your notes disappeared.
