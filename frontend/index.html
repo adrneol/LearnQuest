@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark" style="color-scheme: dark">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,21 +7,9 @@
     <meta name="description" content="Turn YouTube playlists into measurable, gamified learning journeys with exact duration analytics." />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c0d10" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f8" />
-    <script>
-      // Apply the saved theme before first paint so there is no flash of
-      // wrong theme. Keep this in sync with frontend/src/app/theme.ts.
-      try {
-        var pref = localStorage.getItem('lq-theme') || 'dark';
-        var resolved = pref;
-        if (pref === 'system') {
-          resolved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
-        }
-        document.documentElement.setAttribute('data-theme', resolved);
-        document.documentElement.style.colorScheme = resolved;
-      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
-    </script>
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17191c" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#e9ece9" />
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

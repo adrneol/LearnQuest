@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
@@ -29,6 +30,49 @@ const state = {
   prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, reducedMotion: true, minViableMin: 10 },
 };
 
+const user = {
+  userId: 'browser-fixture', username: 'fixture_learner', displayName: 'Fixture Learner',
+  email: 'fixture@example.invalid', onboardingComplete: true, timezone: 'UTC',
+  sessionLenMin: 25, breakMin: 5, minViableMin: 10,
+  createdAt: fixedTime, hasPassword: true, googleLinked: false,
+};
+
+function cloudReply(path, motion) {
+  if (path === '/api/auth/session') return { body: {
+    authenticated: true, user, csrfToken: 'synthetic-browser-fixture',
+    nodeEnv: 'production', authEnabled: true, setupRequired: false, missing: [],
+    configured: { mongodb: true, google: true, brevo: true, session: true, emailLinks: true, youtube: false },
+    cookieSecure: true, appOrigin: 'https://example.invalid', emailActionTtlMin: 30,
+  } };
+  if (path === '/api/account/data') return { body: {
+    ok: true, schemaVersion: 1, version: 0,
+    state: {
+      ...state, progress: {}, ranges: [], checkpoints: [], modules: [], sessions: [],
+      goals: {}, xp: [], achievements: {}, segments: [], playSessions: [], queue: {}, flexGoals: [],
+      prefs: { ...state.prefs, reducedMotion: !motion },
+      challenge: { seed: 20261013, cohortSize: 100, windowDays: 14, dailyCapHours: 6,
+        tierDist: { Ultra: 2, High: 8, Good: 20, Normal: 30, Average: 25, 'Below Average': 15 } },
+      challengeEnabled: false, rankHistory: [], settings: { verifiedThreshold: 0.9 },
+    },
+  } };
+  if (path === '/api/ready' || path === '/api/health') return { body: { ok: true, hasKey: true } };
+  if (path === '/api/account/delete') return { status: 503, body: { error: 'Synthetic deletion failure. Retry later.' } };
+  return { status: 404, body: { error: 'No fixture response for this request.' } };
+}
+
+// Select the store mode only in the fixture build. Cloud-mode requests are
+// intercepted in each isolated browser context and never leave loopback.
+const fixtureMode = {
+  name: 'learnquest-fixture-mode',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!id.endsWith('/src/main.tsx')) return;
+    assert.ok(code.includes('<StoreProvider>'));
+    return code.replace('<StoreProvider>',
+      '<StoreProvider mode={new URLSearchParams(location.search).has("cloud-fixture") ? "cloud" : "local"}>');
+  },
+};
+
 const contentType = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
@@ -42,12 +86,15 @@ export async function startBrowserFixture(t) {
   const result = await build({
     root, configFile: false, envFile: false, envDir: false,
     envPrefix: [], mode: 'test', logLevel: 'error',
-    plugins: [react(), tailwind()],
+    plugins: [fixtureMode, react(), tailwind()],
     build: { write: false, copyPublicDir: false, reportCompressedSize: false },
   });
   const files = new Map((Array.isArray(result) ? result : [result]).flatMap(({ output }) =>
     output.map((file) => [`/${file.fileName}`, file.type === 'asset' ? file.source : file.code])));
   assert.ok(files.has('/index.html'), 'Expected Vite to emit the app entry point');
+  files.set('/theme-init.js', await readFile(new URL('../../../public/theme-init.js', import.meta.url)));
+  const deploy = JSON.parse(await readFile(new URL('../../../vercel.json', import.meta.url), 'utf8'));
+  const csp = deploy.headers.flatMap(({ headers }) => headers).find(({ key }) => key === 'Content-Security-Policy').value;
 
   const server = createServer((req, res) => {
     const path = new URL(req.url, 'http://127.0.0.1').pathname;
@@ -63,6 +110,10 @@ export async function startBrowserFixture(t) {
       return;
     }
     res.setHeader('Content-Type', contentType[file.split('.').at(-1)] ?? 'application/octet-stream');
+    if (file === '/index.html') {
+      // Keep the deployed resource policy while serving the fixture over HTTP loopback.
+      res.setHeader('Content-Security-Policy', csp.replace(/; upgrade-insecure-requests$/, ''));
+    }
     res.end(body);
   });
   await new Promise((resolve, reject) => {
@@ -91,16 +142,20 @@ export async function startBrowserFixture(t) {
 
   return {
     browserVersion: browser.version(),
-    async open(test, { width = 1440, height = 900, theme = 'dark', route = 'learn' } = {}) {
+    async open(test, { width = 1440, height = 900, theme = 'dark', route = 'learn', touch = false, cloud = false, motion = false } = {}) {
       const context = await browser.newContext({
         viewport: { width, height }, deviceScaleFactor: 1, locale: 'en-US',
-        timezoneId: 'UTC', colorScheme: theme, reducedMotion: 'reduce', serviceWorkers: 'block',
+        timezoneId: 'UTC', colorScheme: theme, reducedMotion: motion ? 'no-preference' : 'reduce', serviceWorkers: 'block', hasTouch: touch,
       });
       test.after(() => context.close());
       await context.route('**/*', (request) => {
         const url = new URL(request.request().url());
-        return url.origin === origin && !url.pathname.startsWith('/api/')
-          ? request.continue() : request.abort('blockedbyclient');
+        if (url.origin !== origin) return request.abort('blockedbyclient');
+        if (!url.pathname.startsWith('/api/')) return request.continue();
+        if (!cloud) return request.abort('blockedbyclient');
+        if (url.pathname === '/api/auth/events') return request.fulfill({ status: 204 });
+        const reply = cloudReply(url.pathname, motion);
+        return request.fulfill({ status: reply.status ?? 200, json: reply.body });
       });
       const page = await context.newPage();
       page.setDefaultTimeout(8_000);
@@ -124,7 +179,7 @@ export async function startBrowserFixture(t) {
           };
         });
       }, { state, theme });
-      await page.goto(`${origin}/#/${route}`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${origin}/${cloud ? '?cloud-fixture' : ''}#/${route}`, { waitUntil: 'domcontentloaded' });
       return page;
     },
   };

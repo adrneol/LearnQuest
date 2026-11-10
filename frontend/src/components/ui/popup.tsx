@@ -15,6 +15,8 @@ interface Props {
   onClose: () => void;
   children: React.ReactNode;
   minHeight?: number;
+  maxHeight?: number;
+  minWidth?: number;
 }
 
 /**
@@ -23,7 +25,7 @@ interface Props {
  * Flips upward when room below is tight, clamps horizontally to the viewport,
  * and follows scroll/resize. Escape + outside interaction close it.
  */
-export function PopupShell({ anchor, open, onClose, children, minHeight = 200 }: Props) {
+export function PopupShell({ anchor, open, onClose, children, minHeight = 200, maxHeight = 320, minWidth = 180 }: Props) {
   const [pos, setPos] = useState<Pos | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
 
@@ -38,12 +40,12 @@ export function PopupShell({ anchor, open, onClose, children, minHeight = 200 }:
       const r = el.getBoundingClientRect();
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const width = Math.min(Math.max(r.width, 180), vw - 16);
+      const width = Math.min(Math.max(r.width, minWidth), vw - 16);
       const left = Math.max(8, Math.min(r.left, vw - width - 8));
       const below = vh - r.bottom - 8;
       const above = r.top - 8;
       const up = below < minHeight && above > below;
-      const maxH = Math.max(140, Math.min(320, (up ? above : below) - 4));
+      const maxH = Math.max(0, Math.min(maxHeight, (up ? above : below) - 4));
       setPos(
         up
           ? { top: null, bottom: Math.max(4, vh - r.top + 4), left, width, maxH }
@@ -90,7 +92,7 @@ export function PopupShell({ anchor, open, onClose, children, minHeight = 200 }:
     <div
       ref={shellRef}
       role="presentation"
-      className="fixed z-[70] overflow-hidden rounded-lg border border-[var(--border-strong)] bg-[var(--surface-strong)] shadow-2xl"
+      className="fixed z-[70] overflow-hidden rounded-[var(--radius-panel)] border border-[var(--border-strong)] bg-[var(--surface-strong)] shadow-[var(--elevation)]"
       style={{
         top: pos.top ?? undefined,
         bottom: pos.bottom ?? undefined,

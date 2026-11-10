@@ -226,7 +226,7 @@ export function Efficiency() {
       </Card>
 
       <Card>
-        <h3 className="text-sm font-bold">Daily throughput (14 days, {tz})</h3>
+        <h3 className="lq-section-title">Daily throughput (14 days, {tz})</h3>
         <p className="text-[11px] text-[var(--text-faint)]">Learning throughput in percent per day; gaps mean no measurable ratio that day (never zero-filled)</p>
         <div className="h-52 min-w-0">
           <ResponsiveContainer width="100%" height="100%">
@@ -249,7 +249,7 @@ export function Efficiency() {
       </Card>
 
       <Card>
-        <h3 className="text-sm font-bold">By playlist</h3>
+        <h3 className="lq-section-title">By playlist</h3>
         {model.perPl.map((p) => (
           <p key={p.id} className="mt-1 text-xs text-[var(--text)]">
             {p.title} · <span className="font-mono">{p.eff !== null ? `${p.eff.toFixed(1)}%` : 'n/a (no focused study in this evidence scope)'}</span>

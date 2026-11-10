@@ -58,7 +58,7 @@ export function Goals() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Flexible goals <span className="font-normal text-[var(--text-muted)]">(achieved only by real activity — never by timers)</span></h2>
+        <h2 className="lq-section-title">Flexible goals <span className="font-normal text-[var(--text-muted)]">(achieved only by real activity — never by timers)</span></h2>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           <Dropdown
             label="Metric"
@@ -117,7 +117,7 @@ export function Goals() {
               <StatusBadge status={p.status} />
               {!g.achievedAt && !g.paused && <Btn onClick={() => s.updateFlexGoal(g.id, { paused: true })}><Pause size={13} /> Pause</Btn>}
               {g.paused && <Btn onClick={() => s.updateFlexGoal(g.id, { paused: false })}><Play size={13} /> Resume</Btn>}
-              <Btn variant="danger" onClick={() => s.deleteFlexGoal(g.id)}><Trash2 size={13} /></Btn>
+              <Btn variant="quiet" className="lq-icon-button lq-delete-trigger" aria-label={'Delete goal ' + g.label} onClick={() => s.deleteFlexGoal(g.id)}><Trash2 size={16} aria-hidden="true" /></Btn>
             </div>
             <p className="mt-1 font-mono text-sm">{displayCurrent(g.metric, current)} / {formatGoalTarget(g.metric, g.target)} · {p.remaining > 0 ? `${displayCurrent(g.metric, p.remaining)} to go` : 'done'}</p>
             <div className="mt-1"><ProgressBar pct={Math.min(100, p.pct)} tone={p.status === 'achieved' || p.status === 'exceeded' ? 'emerald' : 'neutral'} /></div>

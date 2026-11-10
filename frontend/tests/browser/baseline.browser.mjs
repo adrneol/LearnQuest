@@ -4,16 +4,18 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { startBrowserFixture, waitForLibrary } from './helpers/isolated-browser.mjs';
+import { checkShell } from './helpers/shell-checks.mjs';
+import { checkInteractions } from './helpers/interaction-checks.mjs';
 
 const mode = process.env.LQ_VISUAL_MODE ?? 'smoke';
-assert.ok(['smoke', 'verify', 'update'].includes(mode), 'LQ_VISUAL_MODE must be smoke, verify, or update');
+assert.ok(['smoke', 'review', 'verify', 'update'].includes(mode), 'LQ_VISUAL_MODE must be smoke, review, verify, or update');
 const scenarios = [
   { name: 'library-desktop-dark', width: 1440, height: 900, theme: 'dark' },
   { name: 'library-mobile-light', width: 390, height: 844, theme: 'light' },
 ];
 
 // The suite budget includes a cold Vite build on a busy Windows host.
-test('isolated browser baseline', { timeout: 240_000 }, async (t) => {
+test('isolated browser baseline', { timeout: 480_000 }, async (t) => {
   const fixture = await startBrowserFixture(t);
   const target = `${process.platform}-${process.arch}-${fixture.browserVersion}`;
   for (const scenario of scenarios) {
@@ -47,12 +49,18 @@ test('isolated browser baseline', { timeout: 240_000 }, async (t) => {
         if (error.code !== 'ENOENT') throw error;
         throw new Error(`No visual baseline for ${target}; use the recorded browser/platform or review an explicit update.`);
       });
-      if (!actual.equals(expected)) {
+      if (mode === 'review' || !actual.equals(expected)) {
         const output = join('test-results', 'visual', target, `${scenario.name}-actual.png`);
         await mkdir(dirname(output), { recursive: true });
         await writeFile(output, actual);
-        assert.fail(`Visual baseline changed. Compare ${output} with ${baseline}.`);
+        if (mode === 'review') {
+          subtest.diagnostic(`${actual.equals(expected) ? 'Matches' : 'Differs from'} reference. Review ${output}.`);
+        } else {
+          assert.fail(`Visual baseline changed. Compare ${output} with ${baseline}.`);
+        }
       }
     });
   }
+  await checkShell(t, fixture, mode === 'review');
+  await checkInteractions(t, fixture, mode === 'review');
 });

@@ -4,7 +4,7 @@
  * Single source of truth for dark/light/system theme.
  * - Persisted in `localStorage` as `lq-theme` (`'dark' | 'light' | 'system'`).
  * - Applied to `<html data-theme>` and `color-scheme`.
- * - Initialized pre-paint by inline script in `index.html` to avoid FOUC.
+ * - Initialized before paint by the same-origin `theme-init.js` script.
  * - UI-only preference: not part of the server-persisted user data, so cloud
  *   sync never overwrites it. Per-device, like nav-collapsed.
  */
@@ -45,13 +45,12 @@ export function resolveTheme(pref: Theme): ResolvedTheme {
   return 'dark';
 }
 
-function applyResolved(resolved: ResolvedTheme) {
+function applyResolved(resolved: ResolvedTheme, animate = false) {
   try {
     const root = document.documentElement;
+    if (animate && root.dataset.theme !== resolved) root.dataset.themeTransition = 'true';
     root.dataset.theme = resolved;
     root.style.colorScheme = resolved;
-    // Keep React's StrictMode double-invoke idempotent.
-    root.dataset.themeResolved = resolved;
   } catch {
     /* document unavailable */
   }
@@ -63,35 +62,47 @@ export function setTheme(pref: Theme) {
   } catch {
     /* ignore */
   }
-  applyResolved(resolveTheme(pref));
-  // Notify React listeners (Settings, charts) without a full reload.
-  try {
-    window.dispatchEvent(new CustomEvent('lq:theme-change', { detail: { pref, resolved: resolveTheme(pref) } }));
-  } catch {
-    /* ignore */
-  }
+  publishTheme(pref);
+}
+
+let stopWatchingSystem: (() => void) | undefined;
+
+function publishTheme(pref: Theme) {
+  const resolved = resolveTheme(pref);
+  applyResolved(resolved, true);
+  window.dispatchEvent(new CustomEvent('lq:theme-change', { detail: { pref, resolved } }));
 }
 
 export function initTheme() {
   applyResolved(resolveTheme(getStoredTheme()));
+  stopWatchingSystem?.();
+  const system = window.matchMedia?.('(prefers-color-scheme: light)');
+  const onSystemChange = () => {
+    if (getStoredTheme() === 'system') publishTheme('system');
+  };
+  const onStorageChange = (event: StorageEvent) => {
+    if (event.key === THEME_KEY || event.key === null) publishTheme(getStoredTheme());
+  };
+  system?.addEventListener?.('change', onSystemChange);
+  window.addEventListener('storage', onStorageChange);
+  stopWatchingSystem = () => {
+    system?.removeEventListener?.('change', onSystemChange);
+    window.removeEventListener('storage', onStorageChange);
+  };
 }
 
 /** Hook-friendly subscribe: returns stored pref; caller re-renders on change. */
 export function subscribeTheme(listener: () => void): () => void {
   window.addEventListener('lq:theme-change', listener);
-  // `system` can flip when the OS flips while the tab is open.
-  const mq = window.matchMedia?.('(prefers-color-scheme: light)');
-  mq?.addEventListener?.('change', listener);
-  return () => {
-    window.removeEventListener('lq:theme-change', listener);
-    mq?.removeEventListener?.('change', listener);
-  };
+  return () => window.removeEventListener('lq:theme-change', listener);
 }
+
+const getResolvedTheme = () => resolveTheme(getStoredTheme());
 
 /** React hook: current theme pref + resolved theme + setter. */
 export function useTheme(): { pref: Theme; resolved: ResolvedTheme; setTheme: (t: Theme) => void } {
   const pref = useSyncExternalStore(subscribeTheme, getStoredTheme, () => 'dark' as Theme);
-  const resolved = resolveTheme(pref);
+  const resolved = useSyncExternalStore(subscribeTheme, getResolvedTheme, () => 'dark' as ResolvedTheme);
   return { pref, resolved, setTheme };
 }
 

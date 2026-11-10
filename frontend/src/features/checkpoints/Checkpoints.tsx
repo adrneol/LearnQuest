@@ -71,7 +71,7 @@ export function Checkpoints() {
       </div>
 
       <Card>
-        <h2 className="text-base font-bold">New checkpoint <span className="font-normal text-[var(--text-muted)]">(one range within 1–{N})</span></h2>
+        <h2 className="lq-section-title">New checkpoint <span className="font-normal text-[var(--text-muted)]">(one range within 1–{N})</span></h2>
         <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:items-end">
           <Field label="Video range">
             <input
@@ -150,7 +150,7 @@ export function Checkpoints() {
               <p className="mr-auto min-w-0 truncate font-semibold">{c.label} <span className="text-xs font-normal text-[var(--text-muted)]">({c.start}–{c.end})</span></p>
               <Btn title="Rename checkpoint" onClick={async () => { const l = await promptDialog({ title: 'Rename checkpoint', initial: c.label }); if (l && l.trim()) s.renameCheckpoint(c.id, l.trim()); }}><Pencil size={14} /></Btn>
               <Btn title="Edit checkpoint range" onClick={() => { void editRange(c); }}><Settings2 size={14} /></Btn>
-              <Btn variant="danger" title="Delete checkpoint" onClick={() => s.deleteCheckpoint(c.id)}><Trash2 size={14} /></Btn>
+              <Btn variant="quiet" className="lq-icon-button lq-delete-trigger" aria-label="Delete checkpoint" onClick={() => s.deleteCheckpoint(c.id)}><Trash2 size={16} aria-hidden="true" /></Btn>
             </div>
             <div className="mt-1">{body}</div>
           </Card>
@@ -166,7 +166,7 @@ export function Checkpoints() {
           <div key={r.id} className="flex items-center gap-2 border-t border-[var(--border)] py-1.5 text-sm">
             <span className="mr-auto truncate">{r.label} <span className="text-[var(--text-faint)]">({r.start}–{r.end})</span></span>
             <Btn onClick={async () => { const l = await promptDialog({ title: 'Rename saved range', initial: r.label }); if (l) s.renameRange(r.id, l); }}><Pencil size={13} /></Btn>
-            <Btn variant="danger" onClick={() => s.deleteRange(r.id)}><Trash2 size={13} /></Btn>
+            <Btn variant="quiet" className="lq-icon-button lq-delete-trigger" aria-label="Delete saved range" onClick={() => s.deleteRange(r.id)}><Trash2 size={16} aria-hidden="true" /></Btn>
           </div>
         ))}
         {ranges.length === 0 && <p className="mt-2 text-xs text-[var(--text-faint)]">No saved ranges yet. Open Library, choose a range, and save it as a reusable duration calculation.</p>}

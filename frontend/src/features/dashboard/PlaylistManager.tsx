@@ -97,24 +97,25 @@ export function PlaylistManager() {
 
   return (
     <Card>
-      <h2 className="flex items-center gap-1.5 text-sm font-bold"><Settings2 size={16} /> Your playlists</h2>
+      <h2 className="lq-section-title flex items-center gap-2"><Settings2 size={16} aria-hidden="true" /> Your playlists</h2>
       <p className="mt-1 text-xs text-[var(--text-faint)]">
         Remove a playlist from the dashboard (archived, all learning data kept) or permanently delete it and its attributable data.
         Archived playlists are excluded from this dashboard's active totals and the active-playlist selector.
       </p>
-      {message && <p role="status" className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-2 text-sm text-emerald-800 dark:text-emerald-200">{message}</p>}
-      <ul className="mt-2 divide-y divide-white/5">
+      {message && <p role="status" className="lq-alert lq-alert--success mt-2">{message}</p>}
+      <ul className="mt-2 divide-y divide-[var(--border)]">
         {activeIds.map((id) => {
           const title = s.meta[id]?.customTitle ?? s.playlists[id]?.title ?? id;
           const isActive = s.activeId === id;
           return (
             <li key={id} className="flex flex-wrap items-center gap-2 py-2">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{isActive ? '▶ ' : ''}{title}</p>
+                <p className="break-words text-sm font-medium">{title}</p>
+                {isActive && <span className="text-xs text-[var(--text-faint)]">Active playlist</span>}
                 <p className="truncate text-[11px] text-[var(--text-faint)]">{id} · {s.playlists[id]?.entries.length ?? 0} videos · {s.progress && Object.values(s.progress).filter((p) => p.playlistId === id && p.status === 'done' && p.completedAt).length} completed</p>
               </div>
               {!isActive && <Btn onClick={() => s.setActive(id)}><Play size={13} /> Open</Btn>}
-              <Btn onClick={() => open(id)}><Archive size={13} /> Manage / Remove</Btn>
+              <Btn variant="quiet" onClick={() => open(id)}><Settings2 size={16} aria-hidden="true" /> Manage / Remove</Btn>
             </li>
           );
         })}
@@ -136,7 +137,7 @@ export function PlaylistManager() {
                     notify(e?.message ?? 'Restore failed.');
                   }
                 }}><ArchiveRestore size={13} /> Restore</Btn>
-                <Btn variant="danger" onClick={() => open(id)}><Trash2 size={13} /> Manage / Remove</Btn>
+                <Btn variant="quiet" onClick={() => open(id)}><Settings2 size={16} aria-hidden="true" /> Manage / Remove</Btn>
               </li>
             ))}
           </ul>
@@ -164,7 +165,8 @@ export function PlaylistManager() {
               type="button"
               aria-pressed={dialog.choice === 'archive'}
               onClick={() => setDialog({ ...dialog, choice: 'archive', error: null })}
-              className={`rounded-lg border p-3 text-left ${dialog.choice === 'archive' ? 'border-cyan-400/60 bg-cyan-500/10' : 'border-[var(--border)] bg-[var(--surface-soft)] hover:bg-[var(--surface-hover)]'}`}
+              className="lq-decision"
+              disabled={dialog.busy}
             >
               <span className="flex items-center gap-1.5 text-sm font-semibold"><Archive size={15} /> Remove from dashboard (keep my learning data)</span>
               <span className="mt-1 block text-xs text-[var(--text-muted)]">
@@ -176,9 +178,10 @@ export function PlaylistManager() {
               type="button"
               aria-pressed={dialog.choice === 'delete'}
               onClick={() => setDialog({ ...dialog, choice: 'delete', error: null })}
-              className={`rounded-lg border p-3 text-left ${dialog.choice === 'delete' ? 'border-red-400/60 bg-red-500/10' : 'border-[var(--border)] bg-[var(--surface-soft)] hover:bg-[var(--surface-hover)]'}`}
+              className="lq-decision lq-decision--danger"
+              disabled={dialog.busy}
             >
-              <span className="flex items-center gap-1.5 text-sm font-semibold text-red-800 dark:text-red-200"><Trash2 size={15} /> Permanently delete playlist and all its learning data</span>
+              <span className="flex items-center gap-1.5 text-sm font-semibold"><Trash2 size={16} aria-hidden="true" className="shrink-0" /> Permanently delete playlist and all its learning data</span>
               <span className="mt-1 block text-xs text-[var(--text-muted)]">Destructive and cannot be undone through LearnQuest. The public YouTube playlist itself is not changed.</span>
             </button>
           </div>
@@ -190,8 +193,8 @@ export function PlaylistManager() {
           </div>
 
           {dialog.choice === 'delete' && (
-            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2.5">
-              <p className="flex items-start gap-1.5 text-xs text-red-800 dark:text-red-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div className="lq-alert lq-alert--danger mt-3">
+              <p className="flex items-start gap-1.5 text-xs"><AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
                 This permanently removes the playlist snapshot, stable-entry progress and annotations, review history, playback and Focus evidence, checkpoints, saved ranges, modules, queue records, playlist-scoped goals, and XP entries that can be reliably attributed to this playlist.
                 Genuine account-wide settings, preferences, day goals, and unattributable XP are preserved, and other playlists are not changed.
               </p>
@@ -203,9 +206,9 @@ export function PlaylistManager() {
             </div>
           )}
 
-          {dialog.error && <p role="alert" className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-800 dark:text-red-200">{dialog.error}</p>}
+          {dialog.error && <p role="alert" className="lq-alert lq-alert--danger mt-2">{dialog.error}</p>}
 
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <div className="lq-dialog-actions">
             <Btn onClick={() => setDialog(null)} disabled={dialog.busy}>Cancel</Btn>
             <Btn
               variant={dialog.choice === 'delete' ? 'danger' : 'primary'}

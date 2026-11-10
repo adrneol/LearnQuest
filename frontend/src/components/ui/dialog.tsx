@@ -1,5 +1,5 @@
 import {
-  useEffect, useId, useRef, useState, type ReactNode, type RefObject,
+  useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
@@ -40,7 +40,7 @@ let openModalCount = 0;
 let savedBodyOverflow = '';
 let savedBodyPaddingRight = '';
 
-function lockPageScroll(): () => void {
+export function lockPageScroll(): () => void {
   if (typeof document === 'undefined') return () => undefined;
   if (openModalCount === 0) {
     savedBodyOverflow = document.body.style.overflow;
@@ -121,15 +121,13 @@ export function Modal({
   onCloseRef.current = onClose;
   busyRef.current = busy;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const releaseScroll = lockPageScroll();
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const timer = window.setTimeout(() => {
-      const target = initialFocusRef?.current && !initialFocusRef.current.hasAttribute('disabled')
-        ? initialFocusRef.current
-        : focusable(panelRef.current)[0] ?? panelRef.current;
-      target?.focus();
-    }, 0);
+    const target = initialFocusRef?.current && !initialFocusRef.current.hasAttribute('disabled')
+      ? initialFocusRef.current
+      : focusable(panelRef.current)[0] ?? panelRef.current;
+    target?.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -154,7 +152,7 @@ export function Modal({
           event.preventDefault();
           last.focus();
         }
-      } else if (active === last) {
+      } else if (active === last || !panelRef.current?.contains(active)) {
         event.preventDefault();
         first.focus();
       }
@@ -162,7 +160,6 @@ export function Modal({
 
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      window.clearTimeout(timer);
       document.removeEventListener('keydown', onKeyDown);
       releaseScroll();
       if (previous?.isConnected) previous.focus();
@@ -176,7 +173,7 @@ export function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-black/60 p-3 sm:p-4"
+      className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto overscroll-contain bg-[var(--overlay)] p-3 sm:p-4"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
@@ -191,7 +188,7 @@ export function Modal({
         aria-busy={busy || undefined}
         tabIndex={-1}
         data-lq-modal={testId ?? 'dialog'}
-        className={`my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-[var(--border-strong)] bg-[var(--surface-strong)] p-4 text-[var(--text)] shadow-2xl outline-none sm:max-h-[calc(100dvh-2rem)] sm:p-5 ${panelClassName}`}
+        className={`my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-[var(--radius-panel)] border border-[var(--border-strong)] bg-[var(--surface-strong)] p-4 text-[var(--text)] shadow-[var(--elevation)] sm:max-h-[calc(100dvh-2rem)] sm:p-5 ${panelClassName}`}
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -213,7 +210,7 @@ export function Modal({
           )}
         </div>
         {children && <div className={`mt-3 ${bodyClassName}`}>{children}</div>}
-        {footer && <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{footer}</div>}
+        {footer && <div className="lq-dialog-actions">{footer}</div>}
       </div>
     </div>,
     document.body,

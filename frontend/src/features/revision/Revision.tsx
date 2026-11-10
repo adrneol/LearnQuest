@@ -105,7 +105,9 @@ export function Revision() {
     requestAnimationFrame(() => {
       const card = cardRefs.current.get(position);
       if (!card) return;
-      const toolbarH = toolbarRef.current?.getBoundingClientRect().height ?? 0;
+      const toolbar = toolbarRef.current;
+      const toolbarH = toolbar && getComputedStyle(toolbar).position === 'sticky'
+        ? toolbar.getBoundingClientRect().height : 0;
       const mobileHeader = Number.parseFloat(
         getComputedStyle(document.documentElement).getPropertyValue('--lq-mobile-header-h') || '0',
       ) || 0;
@@ -225,70 +227,61 @@ export function Revision() {
       <div
         ref={toolbarRef}
         style={{ top: 'var(--lq-mobile-header-h, 0px)' }}
-        className="sticky z-20 -mx-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5 shadow-md md:-mx-0 lg:top-2"
+        className="lq-card lq-card--compact sticky z-10 max-sm:static"
       >
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,10rem)_auto]">
-          <div className="col-span-2 sm:col-span-1">
-            <label className="block text-[11px] font-medium text-[var(--text-muted)]" htmlFor="rev-find">Find lesson by position or title</label>
-            <div className="relative mt-0.5">
-              <Search size={14} className="pointer-events-none absolute left-2.5 top-[calc(50%+0px)] -translate-y-1/2 text-[var(--text-faint)]" />
-              <input
-                id="rev-find"
-                className={`${inputCls} pl-8`}
-                value={query}
-                onChange={(e) => { setQuery(e.target.value); setMatches([]); setMessage(null); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    runSearch();
+        <div className="lq-revision-tools">
+          <form onSubmit={(event) => { event.preventDefault(); runSearch(); }} aria-label="Lesson navigation">
+            <label className="lq-label mb-1" htmlFor="rev-find">Find lesson by position or title</label>
+            <div className="lq-control-cluster">
+              <div className="relative min-w-0 flex-1">
+                <Search size={15} aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
+                <input id="rev-find" className={inputCls + ' pl-8'} value={query}
+                  onChange={(e) => { setQuery(e.target.value); setMatches([]); setMessage(null); }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      runSearch();
+                    }
+                  }}
+                  placeholder="e.g. 50 or Variables" aria-describedby="rev-find-hint" />
+              </div>
+              <Btn type="submit" variant="primary">Jump</Btn>
+            </div>
+            <p id="rev-find-hint" className="mt-1 text-xs text-[var(--text-faint)]">Enter a playlist position or part of a lesson title.</p>
+          </form>
+          <form onSubmit={(event) => { event.preventDefault(); flagByPosition(); }} aria-label="Flag a lesson">
+            <label className="lq-label mb-1" htmlFor="flag-pos">Flag position</label>
+            <div className="lq-control-cluster">
+              <input id="flag-pos" className={inputCls} value={flagPos}
+                onChange={(e) => setFlagPos(e.target.value)} inputMode="numeric"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    flagByPosition();
                   }
                 }}
-                placeholder="e.g. 50 or Variables"
-                aria-describedby="rev-find-hint"
-              />
+                placeholder={'1–' + snap.entries.length} aria-label="Position to flag for revision" />
+              <Btn type="submit"><Plus size={14} aria-hidden="true" /> Flag</Btn>
             </div>
-            <p id="rev-find-hint" className="mt-0.5 text-[10px] text-[var(--text-faint)]">
-              Pure number = playlist position; text = title search. Enter jumps.
-            </p>
-          </div>
-          <div className="flex items-end">
-            <Btn variant="primary" className="h-full max-h-10 w-full sm:w-auto" onClick={runSearch}><Search size={14} /> Jump</Btn>
-          </div>
-          <div>
-            <label className="block text-[11px] font-medium text-[var(--text-muted)]" htmlFor="flag-pos">Flag position</label>
-            <input
-              id="flag-pos"
-              className={`${inputCls} mt-0.5`}
-              value={flagPos}
-              onChange={(e) => setFlagPos(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); flagByPosition(); } }}
-              inputMode="numeric"
-              placeholder={`1–${snap.entries.length}`}
-              aria-label="Position to flag for revision"
-            />
-          </div>
-          <div className="flex items-end">
-            <Btn className="h-full max-h-10 w-full sm:w-auto" onClick={flagByPosition}><Plus size={14} /> Flag</Btn>
-          </div>
+          </form>
         </div>
 
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          <div className="mr-1 inline-flex rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-0.5" role="group" aria-label="Revision scope">
+        <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
+          <div className="lq-segmented" role="group" aria-label="Revision scope">
             <button
               onClick={() => { setMode('queue'); setFilter('all'); setMessage(null); }}
               aria-pressed={mode === 'queue'}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${mode === 'queue' ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
             >
               Revision queue ({queueItems.length})
             </button>
             <button
               onClick={() => { setMode('all'); setFilter('all'); setMessage(null); }}
               aria-pressed={mode === 'all'}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${mode === 'all' ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
             >
               All lessons ({snap.entries.length})
             </button>
           </div>
+          <div role="group" aria-label="Revision filters" className="lq-filter-bar">
           {filterEntries.map((v) => {
             const count = scopedItems.filter(({ r }) => matchesFilter(r, v, today)).length;
             return (
@@ -296,13 +289,14 @@ export function Revision() {
                 key={v}
                 onClick={() => { setFilter(v); setMessage(null); setMatches([]); }}
                 aria-pressed={filter === v}
-                className={`rounded-md px-2.5 py-1 text-[11px] ${filter === v ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'bg-[var(--surface-soft)] text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
+                className="lq-filter-button"
               >
                 {filterLabel(v, mode)} <span className="opacity-70">({count})</span>
               </button>
             );
           })}
-          <span className="w-full border-t border-[var(--border)] mt-1.5 pt-1.5 text-[11px] text-[var(--text-muted)]" role="status">
+          </div>
+          <span className="block text-xs text-[var(--text-muted)]" role="status">
             {mode === 'queue'
               ? `${filtered.length} of ${queueItems.length} queued lesson${queueItems.length === 1 ? '' : 's'}`
               : `${filtered.length} of ${allItems.length} lesson${allItems.length === 1 ? '' : 's'} in playlist`}
@@ -530,6 +524,7 @@ function RevisionCard({
 
         <div className="mt-2">
           <AnnotationFields
+            timezone={s.prefs.timezone}
             values={values}
             onChange={change}
             idPrefix={`revision-${entry.entryId ?? entry.position}`}

@@ -52,14 +52,14 @@ describe('navigation (no horizontal scroll pattern)', () => {
     const nav = await screen.findByLabelText('Sections');
     const labels = ['Dashboard', 'Library', 'Player', 'Goals', 'Checkpoints', 'Focus', 'Analytics', 'Efficiency', 'History', 'Revision', 'Modules', 'Arena', 'Reports', 'Settings'];
     for (const l of labels) {
-      expect(within(nav).getByRole('button', { name: l })).toBeTruthy();
+      expect(within(nav).getByRole('link', { name: l })).toBeTruthy();
     }
     // grouped headings on desktop sidebar
     expect(screen.getAllByText('Learn').length).toBeGreaterThanOrEqual(1);
     // no horizontal-scroll nav container remains
     expect(document.querySelector('nav.overflow-x-auto')).toBeNull();
     // Dashboard is the active page
-    expect(within(nav).getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page');
+    expect(within(nav).getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('clicking Player updates the hash; back-navigation restores Dashboard', async () => {
@@ -69,11 +69,11 @@ describe('navigation (no horizontal scroll pattern)', () => {
       </StoreProvider>,
     );
     const nav = await screen.findByLabelText('Sections');
-    fireEvent.click(within(nav).getByRole('button', { name: 'Player' }));
+    fireEvent.click(within(nav).getByRole('link', { name: 'Player' }));
     await waitFor(() => expect(window.location.hash).toBe('#/player'));
     expect(await screen.findByText(/No active playlist|Now playing/)).toBeTruthy();
     window.location.hash = '#/dash';
-    await waitFor(() => expect(within(nav).getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page'));
+    await waitFor(() => expect(within(nav).getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page'));
   });
 
   it('mobile drawer opens and closes with Escape', async () => {

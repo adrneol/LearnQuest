@@ -10,16 +10,17 @@ export function PlaylistSwitcher() {
   const s = useStore();
   const ids = Object.keys(s.playlists).filter((id) => !s.meta[id]?.archived);
   return (
-    <div className="min-w-[200px] flex-1 sm:max-w-[260px] sm:flex-none">
+    <div className="min-w-0">
       <Dropdown
         label="Active playlist"
+        hideLabel
         value={s.activeId ?? ''}
         options={[
           { value: '', label: '— Select playlist —' },
           ...ids.map((id) => ({
             value: id,
-            label: `${(s.meta[id]?.customTitle ?? s.playlists[id]?.title ?? id).slice(0, 40)}`,
-            hint: `N=${s.playlists[id]?.entries.length ?? 0}`,
+            label: s.meta[id]?.customTitle ?? s.playlists[id]?.title ?? id,
+            hint: `${s.playlists[id]?.entries.length ?? 0} videos · ${s.playlists[id]?.source === 'api' ? 'YouTube' : 'Imported'}`,
           })),
         ]}
         onChange={(v) => s.setActive(v || null)}

@@ -2,6 +2,8 @@ import { useId } from 'react';
 import type { ProgressRecord } from '../../types/index.js';
 import { Dropdown } from './Dropdown.js';
 import { Field, inputCls } from './ui.js';
+import { DateField } from './DateField.js';
+import { dateKeyInTimezone } from '../../domain/time/time.js';
 
 /**
  * Controlled learning-annotation fields shared by Revision and Player. The
@@ -66,6 +68,7 @@ interface Props {
   values: AnnotationValues;
   onChange: (next: AnnotationValues, patch: Partial<ProgressRecord>) => void;
   idPrefix?: string;
+  timezone: string;
   disabled?: boolean;
   /** Review status is rendered by the parent; this only controls the fields. */
   showNeedsRevision?: boolean;
@@ -75,6 +78,7 @@ export function AnnotationFields({
   values,
   onChange,
   idPrefix,
+  timezone,
   disabled = false,
   showNeedsRevision = true,
 }: Props) {
@@ -105,23 +109,10 @@ export function AnnotationFields({
           disabled={disabled}
         />
       </div>
-      <Field label="Revision date">
-        <input
-          id={`${prefix}-revision-date`}
-          type="date"
-          className={`${inputCls} ${dateInvalid ? 'border-red-500/50' : ''}`}
-          value={values.revisionDate}
-          disabled={disabled}
-          onChange={(e) => emit({ revisionDate: e.target.value })}
-          aria-invalid={dateInvalid}
-          aria-describedby={dateInvalid ? `${prefix}-date-error` : undefined}
-        />
-        {dateInvalid && (
-          <span id={`${prefix}-date-error`} className="mt-1 block text-[11px] text-red-800 dark:text-red-300" role="alert">
-            Choose a valid calendar date or leave it empty.
-          </span>
-        )}
-      </Field>
+      <DateField id={`${prefix}-revision-date`} label="Revision date" value={values.revisionDate}
+        today={dateKeyInTimezone(new Date(), timezone)} disabled={disabled}
+        error={dateInvalid ? 'Choose a valid calendar date or leave it empty.' : undefined}
+        onChange={(revisionDate) => emit({ revisionDate })} />
       <Field label="Notes">
         <textarea
           id={`${prefix}-notes`}

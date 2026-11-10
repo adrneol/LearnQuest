@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { PopupShell } from './popup.js';
+import { inputCls } from './ui.js';
 
 export interface DropOption {
   value: string;
@@ -13,145 +14,133 @@ interface Props {
   options: DropOption[];
   onChange: (value: string) => void;
   label: string;
+  hideLabel?: boolean;
   disabled?: boolean;
   error?: string | null;
 }
 
-/**
- * Dark-system dropdown. The option list renders through PopupShell (a
- * body-level portal), so cards, grids, and sidebars can never clip it; it
- * flips upward when room below is tight. Full keyboard support.
- */
-export function Dropdown({ value, options, onChange, label, disabled, error }: Props) {
+export function Dropdown({ value, options, onChange, label, hideLabel, disabled, error }: Props) {
+  const id = useId();
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(() => Math.max(0, options.findIndex((o) => o.value === value)));
-  const rootRef = useRef<HTMLDivElement>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const selected = options.find((o) => o.value === value);
-  // IDs must not contain spaces — aria-labelledby tokenizes on whitespace.
-  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const [activeIndex, setActiveIndex] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement | null>(null);
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const selected = options[selectedIndex];
+  const active = Math.min(activeIndex, options.length - 1);
+  const popupId = id + '-listbox';
+
+  const mountList = useCallback((element: HTMLDivElement | null) => {
+    list.current = element;
+    element?.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
-    setActive(Math.max(0, options.findIndex((o) => o.value === value)));
-  }, [value, options]);
-
-  useEffect(() => {
-    if (open) {
-      const t = setTimeout(() => btnRef.current?.focus(), 0);
-      return () => clearTimeout(t);
+    if (open && active >= 0) {
+      list.current?.querySelector('[data-active="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     }
-  }, [open ]);
+  }, [active, open]);
 
-  useEffect(() => {
-    const el = listRef.current?.querySelector('[data-active="true"]') as HTMLElement | null | undefined;
-    if (open && el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
-  }, [active, open ]);
+  const show = () => {
+    setActiveIndex(Math.max(0, selectedIndex));
+    setOpen(true);
+  };
 
-  const pick = (v: string) => {
-    onChange(v);
+  const close = () => {
     setOpen(false);
-    btnRef.current?.focus();
+    if (list.current?.contains(document.activeElement)) trigger.current?.focus();
+  };
+
+  const pick = (next: string) => {
+    onChange(next);
+    setOpen(false);
+    trigger.current?.focus();
+  };
+
+  const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    switch (event.key) {
+      case 'ArrowDown': setActiveIndex(Math.max(0, Math.min(active + 1, options.length - 1))); break;
+      case 'ArrowUp': setActiveIndex(Math.max(0, active - 1)); break;
+      case 'Home': setActiveIndex(0); break;
+      case 'End': setActiveIndex(Math.max(0, options.length - 1)); break;
+      case 'Enter':
+      case ' ':
+        if (options[active]) pick(options[active].value);
+        break;
+      case 'Escape':
+        event.stopPropagation();
+        close();
+        break;
+      case 'Tab':
+        close();
+        return; // The browser continues from the restored trigger.
+      default: return;
+    }
+    event.preventDefault();
   };
 
   return (
-    <div ref={rootRef}>
-      <span id={`dd-label-${slug}`} className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+    <div ref={root} className="min-w-0">
+      <span id={id + '-label'} className={hideLabel ? 'sr-only' : 'lq-label mb-1'}>
         {label}
       </span>
       <button
-        ref={btnRef}
+        ref={trigger}
         type="button"
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-labelledby={`dd-label-${slug}`}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => {
-          if (!open) {
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              setOpen(true);
-            }
-            return;
-          }
-          // Combobox pattern: focus stays on the trigger, the active option is
-          // announced through the listbox and committed with Enter/Space.
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setActive((i) => Math.min(options.length - 1, i + 1));
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setActive((i) => Math.max(0, i - 1));
-          } else if (e.key === 'Home') {
-            e.preventDefault();
-            setActive(0);
-          } else if (e.key === 'End') {
-            e.preventDefault();
-            setActive(Math.max(0, options.length - 1));
-          } else if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            const option = options[active];
-            if (option) pick(option.value);
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            setOpen(false);
-          } else if (e.key === 'Tab') {
-            setOpen(false);
+        aria-controls={open ? popupId : undefined}
+        aria-labelledby={id + '-label'}
+        aria-describedby={error ? id + '-error' : selected ? id + '-value' : undefined}
+        aria-invalid={Boolean(error)}
+        onClick={() => open ? close() : show()}
+        onKeyDown={(event) => {
+          if (!open && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+            event.preventDefault();
+            show();
           }
         }}
-        className="flex w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-left text-sm text-[var(--text)] hover:border-[var(--border-strong)] disabled:opacity-50"
+        className={inputCls + ' flex items-center gap-2 text-left hover:bg-[var(--surface-hover)] disabled:opacity-55'}
       >
-        <span className="min-w-0 flex-1">
-          <span className="block truncate">{selected?.label ?? '—'}</span>
-          {selected?.hint && <span className="block truncate text-[11px] text-[var(--text-faint)]">{selected.hint}</span>}
+        <span id={id + '-value'} className="min-w-0 flex-1">
+          <span className="block truncate" title={selected?.label}>{selected?.label ?? '—'}</span>
+          {selected?.hint && <span className="block truncate text-xs text-[var(--text-faint)]">{selected.hint}</span>}
         </span>
-        <ChevronDown size={15} className={`shrink-0 text-[var(--text-muted)] transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown aria-hidden="true" size={15} className="shrink-0 text-[var(--text-muted)]" />
       </button>
-      {error && <p className="mt-1 text-xs text-red-800 dark:text-red-300">{error}</p>}
-      <PopupShell anchor={() => rootRef.current} open={open} onClose={() => setOpen(false)}>
+      {error && <p id={id + '-error'} className="mt-1 text-xs text-[var(--danger)]">{error}</p>}
+      <PopupShell anchor={() => root.current} open={open} onClose={close}>
         <div
-          ref={listRef}
+          ref={mountList}
+          id={popupId}
           role="listbox"
-            aria-label={label}
-            aria-activedescendant={options[active] ? `dd-${slug}-${options[active].value}` : undefined}
-          className="overflow-auto p-1"
+          tabIndex={-1}
+          aria-label={label}
+          aria-activedescendant={active >= 0 ? id + '-option-' + active : undefined}
+          onKeyDown={onListKey}
+          className="overflow-auto overscroll-contain p-1 focus-visible:outline-offset-[-2px]"
         >
-          {options.map((o, i) => {
-            const sel = o.value === value;
-            return (
-                <button
-                  key={o.value}
-                  id={`dd-${slug}-${o.value}`}
-                role="option"
-                aria-selected={sel}
-                data-active={i === active ? 'true' : 'false'}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => pick(o.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    setActive(Math.min(options.length - 1, i + 1));
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    setActive(Math.max(0, i - 1));
-                  } else if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    pick(options[active]?.value ?? o.value);
-                  }
-                }}
-                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm ${
-                  i === active ? 'bg-[var(--accent-soft)]' : ''
-                } ${sel ? 'text-[var(--accent-hover)] font-medium' : 'text-[var(--text)]'}`}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">{o.label}</span>
-                  {o.hint && <span className="block truncate text-[11px] text-[var(--text-faint)]">{o.hint}</span>}
-                </span>
-                {sel && <Check size={15} className="shrink-0 text-emerald-700 dark:text-emerald-400" />}
-              </button>
-            );
-          })}
+          {options.map((option, index) => (
+            <div
+              key={option.value}
+              id={id + '-option-' + index}
+              role="option"
+              aria-selected={option.value === value}
+              data-active={index === active}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => pick(option.value)}
+              className={'flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-2 text-sm ' +
+                (index === active ? 'bg-[var(--selected)]' : '')}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{option.label}</span>
+                {option.hint && <span className="block truncate text-xs text-[var(--text-faint)]">{option.hint}</span>}
+              </span>
+              {option.value === value && <Check aria-hidden="true" size={15} className="shrink-0 text-[var(--success)]" />}
+            </div>
+          ))}
         </div>
       </PopupShell>
     </div>

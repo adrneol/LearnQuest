@@ -515,7 +515,7 @@ function PlayerInner() {
 
       <aside className="min-w-0 space-y-5 border-t border-[var(--border)] pt-5 lg:border-t-0 lg:border-l lg:pl-5 lg:pt-0">
         <section>
-          <h3 className="text-sm font-semibold text-[var(--text)]">This lesson</h3>
+          <h3 className="lq-section-title">This lesson</h3>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <NumberField
               label={`Jump to position (1–${N})`}
@@ -564,7 +564,7 @@ function PlayerInner() {
 
         <section className="border-t border-[var(--border)] pt-4">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-[var(--text)]">Queue ({queue.length})</h3>
+            <h3 className="lq-section-title">Queue ({queue.length})</h3>
             {queue.length > 0 && (
               <button onClick={() => s.setQueue(snap.playlistId, [])} className="text-xs text-[var(--text-faint)] underline">Clear</button>
             )}

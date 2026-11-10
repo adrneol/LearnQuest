@@ -595,7 +595,7 @@ export function Focus() {
       </section>
 
       <section aria-labelledby="focus-today-heading" className="border-t border-[var(--border)] pt-5">
-        <h3 id="focus-today-heading" className="text-sm font-semibold text-[var(--text)]">Today</h3>
+        <h3 id="focus-today-heading" className="lq-section-title">Today</h3>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <NumberField label="Daily study goal (min)" value={targetMin} onCommit={setTargetMin} min={5} max={720} error={goalError} />
           <NumberField label="Minimum daily goal (min)" value={minViable} onCommit={setMinViable} min={1} max={720} />
@@ -634,7 +634,7 @@ export function Focus() {
 
       <div className="grid gap-6 md:grid-cols-2">
         <section aria-labelledby="focus-planned-heading" className="border-t border-[var(--border)] pt-4">
-          <h3 id="focus-planned-heading" className="text-sm font-semibold text-[var(--text)]">Planned vs actual</h3>
+          <h3 id="focus-planned-heading" className="lq-section-title">Planned vs actual</h3>
           <p className="text-[11px] text-[var(--text-faint)]">Focused minutes: target vs recorded (pauses excluded)</p>
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
@@ -649,7 +649,7 @@ export function Focus() {
           </div>
         </section>
         <section aria-labelledby="focus-history-heading" className="border-t border-[var(--border)] pt-4">
-          <h3 id="focus-history-heading" className="text-sm font-semibold text-[var(--text)]">Sessions</h3>
+          <h3 id="focus-history-heading" className="lq-section-title">Sessions</h3>
           {s.sessions.length === 0 ? <p className="text-xs text-[var(--text-faint)]">No sessions yet.</p> : (
             <ul className="mt-1 max-h-44 space-y-1 overflow-auto text-xs">
               {[...s.sessions].reverse().slice(0, 20).map((x) => (
@@ -658,7 +658,7 @@ export function Focus() {
                   <span className="font-mono">{formatHuman(x.activeSec)}</span>
                   {x.estimated && <span className="text-amber-800 dark:text-amber-300">estimated</span>}
                   <span className="truncate text-[var(--text-muted)]">{x.note ?? ''}</span>
-                  <button className="ml-auto text-[var(--text-faint)]" onClick={() => s.deleteSession(x.id)} aria-label="Delete session"><Trash2 size={13} /></button>
+                  <Btn variant="quiet" className="lq-icon-button lq-delete-trigger ml-auto" onClick={() => s.deleteSession(x.id)} aria-label="Delete session"><Trash2 size={16} aria-hidden="true" /></Btn>
                 </li>
               ))}
             </ul>
@@ -667,7 +667,7 @@ export function Focus() {
       </div>
 
       <section aria-labelledby="focus-weekly-heading" className="border-t border-[var(--border)] pt-5">
-        <h3 id="focus-weekly-heading" className="text-sm font-semibold text-[var(--text)]">Weekly review</h3>
+        <h3 id="focus-weekly-heading" className="lq-section-title">Weekly review</h3>
         <WeeklyReview days={week} />
       </section>
     </div>

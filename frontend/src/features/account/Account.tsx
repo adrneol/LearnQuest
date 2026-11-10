@@ -53,7 +53,7 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
           : (current - 1 + ACCOUNT_SECTIONS.length) % ACCOUNT_SECTIONS.length;
     const target = ACCOUNT_SECTIONS[next];
     onSection(target);
-    window.setTimeout(() => document.getElementById(`account-tab-${target}`)?.focus(), 0);
+    document.getElementById(`account-tab-${target}`)?.focus();
   };
 
   return (
@@ -67,14 +67,14 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
             <h1
               id="account-page-title"
               tabIndex={-1}
-              className="truncate text-lg font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ring-offset)]"
+              className="break-words text-2xl font-bold tracking-tight"
             >
               {user.displayName || user.username}
             </h1>
             <p className="truncate text-xs text-[var(--text-muted)]">{user.email} · @{user.username}</p>
           </div>
         </div>
-        <div className="mt-4 flex flex-wrap gap-4 border-b border-[var(--border)]" role="tablist" aria-label="Account sections" aria-orientation="horizontal" onKeyDown={onTabKeyDown}>
+        <div className="lq-segmented mt-4" role="tablist" aria-label="Account sections" aria-orientation="horizontal" onKeyDown={onTabKeyDown}>
           <SectionBtn id="account-tab-profile" active={section === 'profile'} onClick={() => onSection('profile')}>Profile</SectionBtn>
           <SectionBtn id="account-tab-settings" active={section === 'settings'} onClick={() => onSection('settings')}>Account settings</SectionBtn>
           <SectionBtn id="account-tab-security" active={section === 'security'} onClick={() => onSection('security')}>Security &amp; sessions</SectionBtn>
@@ -106,7 +106,6 @@ function SectionBtn({ id, active, onClick, children }: { id: string; active: boo
       aria-controls={active ? `account-panel-${id.replace('account-tab-', '')}` : undefined}
       tabIndex={active ? 0 : -1}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-1 py-2 text-sm border-b-2 -mb-px transition-colors ${active ? 'border-[var(--text)] text-[var(--text)] font-semibold' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]'}`}
     >
       {children}
     </button>
@@ -142,7 +141,7 @@ function ProfileSection() {
 
   return (
     <Card>
-      <h2 className="text-base font-bold">Profile</h2>
+      <h2 className="lq-section-title">Profile</h2>
       <p className="mt-1 text-xs text-[var(--text-muted)]">Email changes go through verified account security.</p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Email (verified)">
@@ -253,7 +252,7 @@ function SettingsSection() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Learning preferences</h2>
+        <h2 className="lq-section-title">Learning preferences</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <TimezonePicker value={timezone} onChange={setTimezone} />
           <div className="space-y-3">
@@ -268,7 +267,7 @@ function SettingsSection() {
       </Card>
 
       <Card>
-        <h2 className="text-base font-bold">Account data</h2>
+        <h2 className="lq-section-title">Account data</h2>
         <p className="mt-1 text-xs text-[var(--text-muted)]">Two portable formats — pick the one you need.</p>
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
@@ -288,7 +287,7 @@ function SettingsSection() {
       </Card>
 
       <div className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-4 sm:p-5">
-        <h2 className="text-base font-bold">Danger zone</h2>
+        <h2 className="lq-section-title">Danger zone</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
           Delete your account and all associated learning data. This cannot be undone.
         </p>
@@ -333,8 +332,7 @@ function DeleteAccountDialog({
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
-  const phraseRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const submittingRef = useRef(false);
 
   const phraseMatches = confirmation.trim() === phrase;
@@ -367,7 +365,7 @@ function DeleteAccountDialog({
   return (
     <Modal
       role="alertdialog"
-            title="Permanently delete this account?"
+      title="Permanently delete this account?"
       description={(
         <>
           This is permanent and cannot be undone through LearnQuest. All playlists, progress, notes, review history,
@@ -377,10 +375,10 @@ function DeleteAccountDialog({
       )}
       onClose={onCancel}
       busy={busy}
-      initialFocusRef={user.hasPassword ? passwordRef : phraseRef}
+      initialFocusRef={cancelRef}
       closeLabel="Close delete-account dialog"
       testId="delete-account-dialog"
-      panelClassName="max-w-lg border-red-500/30"
+      panelClassName="max-w-lg"
     >
       <ul className="list-disc space-y-1 pl-5 text-xs text-[var(--text-muted)]">
         <li>Export a backup first if you might want a personal copy of your learning data.</li>
@@ -392,7 +390,6 @@ function DeleteAccountDialog({
         {user.hasPassword ? (
           <Field label="Current password">
             <input
-              ref={passwordRef}
               className={inputCls}
               type="password"
               value={password}
@@ -402,20 +399,20 @@ function DeleteAccountDialog({
             />
           </Field>
         ) : (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-100">
+          <div className="lq-alert lq-alert--warning">
             <p>This account uses Google sign-in. For your safety, account deletion asks you to confirm with Google again.</p>
             <Btn type="button" className="mt-2" onClick={onGoogleReauth} disabled={busy}>Reauthenticate with Google</Btn>
           </div>
         )}
         <Field label={`Type ${phrase} to confirm`}>
           <input
-            ref={phraseRef}
             className={inputCls}
             value={confirmation}
             onChange={(e) => setConfirmation(e.target.value)}
             autoComplete="off"
             spellCheck={false}
             disabled={busy}
+            aria-invalid={confirmation.length > 0 && !phraseMatches}
             aria-describedby="delete-phrase-help"
           />
         </Field>
@@ -424,11 +421,11 @@ function DeleteAccountDialog({
             ? `The phrase is not exact. Type ${phrase} exactly (leading/trailing spaces are ignored).`
             : `Exact phrase, including spaces: ${phrase}`}
         </p>
-        {error && <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-800 dark:text-red-200">{error}</p>}
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Btn type="button" onClick={onCancel} disabled={busy}>Cancel</Btn>
+        {error && <p role="alert" className="lq-alert lq-alert--danger">{error}</p>}
+        <div className="lq-dialog-actions">
+          <Btn ref={cancelRef} type="button" onClick={onCancel} disabled={busy}>Cancel</Btn>
           <Btn type="submit" variant="danger" disabled={!canDelete}>
-            <Trash2 size={14} /> {busy ? 'Deleting…' : 'Delete permanently'}
+            <Trash2 size={16} aria-hidden="true" /> {busy ? 'Deleting…' : 'Delete permanently'}
           </Btn>
         </div>
       </form>
@@ -594,7 +591,7 @@ function SecuritySection() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Password</h2>
+        <h2 className="lq-section-title">Password</h2>
         <p className="mt-1 text-xs text-[var(--text-muted)]">At least 12 characters. Current password required if one is set; otherwise Google re-verification.</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           {user.hasPassword && (
@@ -617,7 +614,7 @@ function SecuritySection() {
       </Card>
 
       <Card>
-        <h2 className="text-base font-bold">Email address</h2>
+        <h2 className="lq-section-title">Email address</h2>
         <p className="mt-1 text-xs text-[var(--text-muted)]">
           <b className="text-[var(--text)]">{user.email}</b> is your verified email. LearnQuest changes it only through
           Google verification; every session is signed out afterwards.
@@ -636,7 +633,7 @@ function SecuritySection() {
 
       <Card>
         <div className="mt-2 flex items-center justify-between gap-2">
-          <h2 className="text-base font-bold">Active sessions</h2>
+          <h2 className="lq-section-title">Active sessions</h2>
           <button
             type="button"
             onClick={() => { void loadSessions(); }}

@@ -1,8 +1,8 @@
-import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   LayoutDashboard, ListVideo, Clapperboard, ChartLine, BookOpen, Target, CheckCircle2,
   Timer as TimerIcon, Gauge, Swords, RefreshCw, History, BarChart3, Settings as SettingsIcon,
-  X, PartyPopper, Menu, ChevronsLeft, ChevronsRight, UserRound,
+  X, Check, Menu, PanelLeftClose, PanelLeftOpen, UserRound, BookOpenCheck,
 } from 'lucide-react';
 import { useStore } from './store';
 import { PlaylistSwitcher, Onboarding } from '../features/playlists/Playlists';
@@ -12,8 +12,8 @@ import { Goals } from '../features/goals/Goals';
 import { Checkpoints } from '../features/checkpoints/Checkpoints';
 import { Settings } from '../features/settings/Settings';
 import { Notifier } from '../components/layout/Notifier';
-import { DialogHost } from '../components/ui/dialog';
-import { Skeleton } from '../components/ui/ui';
+import { DialogHost, lockPageScroll } from '../components/ui/dialog';
+import { Btn, Skeleton } from '../components/ui/ui';
 import { Account } from '../features/account/Account';
 import { AccountMenu, type AccountSection } from '../features/account/AccountMenu';
 import { LegacyMigrationCard } from '../features/account/LegacyMigrationCard';
@@ -127,12 +127,77 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
   },
 ];
 
-const ALL_IDS = new Set<Tab>(GROUPS.flatMap((g) => g.items.map((i) => i.id)));
+const ACCOUNT_ITEM: NavItem = { id: 'account', label: 'Account', icon: <UserRound size={17} /> };
+const destinations = GROUPS.flatMap(({ items }) => items);
+const ALL_IDS = new Set<Tab>(destinations.map(({ id }) => id));
+const PAGE_DESCRIPTIONS: Record<Exclude<Tab, 'account'>, string> = {
+  dash: 'Pick up where you left off and see what’s next.',
+  learn: 'Find lessons, compare durations, and save ranges to study.',
+  player: 'Watch lessons and keep your learning notes in one place.',
+  goals: 'Set targets for your study time and progress.',
+  checks: 'Track milestones and review saved ranges.',
+  focus: 'Start a study block and review your focused time.',
+  analytics: 'Explore the composition of your playlist and your progress through it.',
+  efficiency: 'Compare recorded study time and learning activity.',
+  history: 'Review sessions, playback evidence, and self-reported entries.',
+  revise: 'Return to lessons you’ve flagged for another look.',
+  modules: 'Group related lessons and track them together.',
+  competition: 'Compare your progress with a simulated cohort.',
+  reports: 'Review your playlists and export or restore learning data.',
+  settings: 'Adjust appearance, study preferences, and connection settings.',
+};
 
-function tabFromHash(): Tab {
+function tabFromHash(): Tab | null {
   const h = window.location.hash.replace(/^#\/?/, '');
-  if (h.startsWith('account')) return 'account';
-  return (ALL_IDS.has(h as Tab) ? h : 'dash') as Tab;
+  if (!h) return 'dash';
+  if (/^account(?:\/|$)/.test(h)) return 'account';
+  return ALL_IDS.has(h as Tab) ? h as Tab : null;
+}
+
+function followInApp(event: React.MouseEvent<HTMLAnchorElement>, navigate: () => void) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  navigate();
+}
+
+function focusSection(id: string) {
+  const target = document.getElementById(id);
+  target?.focus({ preventScroll: true });
+  target?.scrollIntoView?.({ block: 'start' });
+}
+
+function Brand({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="lq-brand" translate="no">
+      <span className="lq-brand-mark" aria-hidden="true"><BookOpenCheck size={20} strokeWidth={1.7} /></span>
+      {!compact && <span>LearnQuest</span>}
+    </div>
+  );
+}
+
+function WorkspaceNav({ tab, compact = false, onNavigate }: {
+  tab: Tab; compact?: boolean; onNavigate: (tab: Tab) => void;
+}) {
+  const item = ({ id, label, icon }: NavItem) => (
+    <li key={id}>
+      <a href={`#/${id}`} className="lq-nav-link" aria-current={tab === id ? 'page' : undefined}
+        title={compact ? label : undefined} onClick={(event) => followInApp(event, () => onNavigate(id))}>
+        <span className="lq-nav-icon" aria-hidden="true">{icon}</span>
+        <span className={compact ? 'sr-only' : 'truncate'}>{label}</span>
+      </a>
+    </li>
+  );
+  return (
+    <nav aria-label="Sections" className="lq-navigation">
+      {GROUPS.map(({ title, items }) => (
+        <div key={title} className="lq-nav-group">
+          {!compact && <p className="lq-nav-label">{title}</p>}
+          <ul aria-label={title}>{items.map(item)}</ul>
+        </div>
+      ))}
+      <ul aria-label="Account" className="lq-nav-account">{item(ACCOUNT_ITEM)}</ul>
+    </nav>
+  );
 }
 
 function accountSectionFromHash(): AccountSection {
@@ -147,19 +212,19 @@ function SyncIndicator() {
   // Persistent "saved" status is permanent noise; show the indicator only
   // while a real user action needs attention: in-flight save, failed save,
   // or conflicts awaiting a decision. Caught up = quiet header.
-  if (s.syncStatus === 'saving') return <span className="text-[11px] text-[var(--text-muted)]" role="status">Saving…</span>;
-  if (s.syncStatus === 'resolving') return <span className="text-[11px] text-[var(--text-muted)]" role="status">Reconciling changes…</span>;
+  if (s.syncStatus === 'saving') return <span className="lq-sync" role="status">Saving…</span>;
+  if (s.syncStatus === 'resolving') return <span className="lq-sync" role="status">Reconciling changes…</span>;
   if (s.syncStatus === 'saved') return null;
   if (s.syncStatus === 'review') {
     return (
-      <a href="#cloud-conflicts" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-200 hover:bg-amber-500/25" title={s.syncError ?? 'Two devices changed the same records'}>
+      <a href="#cloud-conflicts" className="lq-sync lq-sync--review" onClick={(event) => followInApp(event, () => focusSection('cloud-conflicts'))} title={s.syncError ?? 'Two devices changed the same records'}>
         Review {s.cloudConflicts.length} change{s.cloudConflicts.length === 1 ? '' : 's'}
       </a>
     );
   }
   if (s.syncStatus === 'error') {
     return (
-      <button type="button" onClick={s.retryCloudSave} className="rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-800 dark:text-red-200 hover:bg-red-500/25" title={s.syncError ?? 'Save failed'}>
+      <button type="button" onClick={s.retryCloudSave} className="lq-sync lq-sync--error" title={s.syncError ?? 'Save failed'}>
         Save failed · retry
       </button>
     );
@@ -190,10 +255,10 @@ function MigrationReadOnlyBanner() {
       role="status"
       aria-live="polite"
       aria-labelledby="migration-readonly-title"
-      className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3 text-sm"
+      className="lq-alert lq-alert--info"
     >
-      <h2 id="migration-readonly-title" className="font-semibold text-cyan-800 dark:text-cyan-100">Learning data is temporarily read-only</h2>
-      <p className="mt-1 text-xs text-cyan-800 dark:text-cyan-100/80">
+      <h2 id="migration-readonly-title" className="font-semibold">Learning data is temporarily read-only</h2>
+      <p className="mt-1">
         LearnQuest is finishing a storage-maintenance step. Your edits remain in this tab and are not lost.
         Keep this tab open; the next edit after the freeze is released will retry the save. Reading and
         navigation still work.
@@ -212,9 +277,9 @@ function CloudConflictBanner() {
   if (s.mode !== 'cloud' || s.cloudConflicts.length === 0) return null;
   const collections = [...new Set(s.cloudConflicts.map((c) => c.collection))];
   return (
-    <section id="cloud-conflicts" role="alert" aria-labelledby="cloud-conflicts-title" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-      <h2 id="cloud-conflicts-title" className="font-semibold text-amber-800 dark:text-amber-100">Two devices changed the same records</h2>
-      <p className="mt-1 text-xs text-amber-800 dark:text-amber-100/80">
+    <section id="cloud-conflicts" tabIndex={-1} role="alert" aria-labelledby="cloud-conflicts-title" className="lq-alert lq-alert--warning">
+      <h2 id="cloud-conflicts-title" className="font-semibold">Two devices changed the same records</h2>
+      <p className="mt-1">
         Your local changes are still here. Nothing was overwritten. Choose which version to keep for each area;
         unrelated changes from both devices were already merged and saved.
       </p>
@@ -222,15 +287,15 @@ function CloudConflictBanner() {
         {collections.map((collection) => (
           <li key={collection} className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-soft)] p-2">
             <span className="min-w-0 flex-1 font-medium">{COLLECTION_LABELS[collection] ?? collection}</span>
-            <span className="text-[11px] text-amber-800 dark:text-amber-100/70">
+            <span className="text-xs">
               {s.cloudConflicts.filter((c) => c.collection === collection).length} conflicting record(s)
             </span>
-            <button type="button" onClick={() => s.resolveCloudConflict(collection, 'keep-local')} className="rounded-lg bg-amber-400/20 px-2.5 py-1 text-xs font-semibold hover:bg-amber-400/30">
+            <Btn onClick={() => s.resolveCloudConflict(collection, 'keep-local')}>
               Keep this device
-            </button>
-            <button type="button" onClick={() => s.resolveCloudConflict(collection, 'use-server')} className="rounded-lg bg-[var(--surface-hover)] px-2.5 py-1 text-xs font-semibold hover:bg-[var(--surface-hover)]">
+            </Btn>
+            <Btn onClick={() => s.resolveCloudConflict(collection, 'use-server')}>
               Use server version
-            </button>
+            </Btn>
           </li>
         ))}
       </ul>
@@ -240,40 +305,29 @@ function CloudConflictBanner() {
 
 function AppInner() {
   const s = useStore();
-  const [tab, setTab] = useState<Tab>(() => tabFromHash());
+  const [tab, setTab] = useState<Tab>(() => tabFromHash() ?? 'dash');
   const [drawer, setDrawer] = useState(false);
   const [accountSection, setAccountSection] = useState<AccountSection>(() => accountSectionFromHash());
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lq-nav-collapsed') === '1');
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
   const lastTabRef = useRef<Tab | null>(null);
   const isAccountPage = tab === 'account';
 
-  // hash routing: back/forward buttons work
   useEffect(() => {
     const onHash = () => {
-      setTab(tabFromHash());
+      const next = tabFromHash();
+      if (next === null) return; // Ordinary document anchors are not routes.
+      setTab(next);
       setAccountSection(accountSectionFromHash());
+      setDrawer(false);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-
-  // Entering Account from another route moves focus to the account page's
-  // own heading. Switching account sections keeps the normal tab focus so a
-  // keyboard user is not pulled away from the tab list on every selection.
-  useEffect(() => {
-    const enteredAccount = isAccountPage && lastTabRef.current !== 'account';
-    lastTabRef.current = tab;
-    if (!enteredAccount) return;
-    const timer = window.setTimeout(() => {
-      document.getElementById('account-page-title')?.focus({ preventScroll: true });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [isAccountPage, tab]);
 
   const go = useCallback((t: Tab) => {
     setTab(t);
@@ -310,51 +364,67 @@ function AppInner() {
     return () => {
       ro?.disconnect();
       window.removeEventListener('resize', update);
+      document.documentElement.style.removeProperty('--lq-mobile-header-h');
     };
-  }, []);
+  }, [s.ready, s.loadError]);
 
-  // Lock body scroll, trap focus inside the drawer, mark the page inert, and
-  // restore focus to the opener. A drawer must never leak Tab into the page.
-  useEffect(() => {
-    if (!drawer) return;
-    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : menuBtnRef.current;
-    const background = Array.from(document.querySelectorAll<HTMLElement>('[data-app-background]'));
+  useLayoutEffect(() => {
+    if (!drawer || !s.ready || s.loadError) return;
+    const desktop = window.matchMedia?.('(min-width: 64rem)');
+    if (desktop?.matches) {
+      setDrawer(false);
+      return;
+    }
+    const opener = menuBtnRef.current;
+    const sidebar = sidebarRef.current;
+    const background = Array.from(document.querySelectorAll<HTMLElement>('[data-app-background]:not([inert])'));
     for (const el of background) el.setAttribute('inert', '');
-    const focusTimer = window.setTimeout(() => closeBtnRef.current?.focus(), 0);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
+    const unlockScroll = lockPageScroll();
+    closeBtnRef.current?.focus();
+
+    const onBreakpoint = (event: MediaQueryListEvent) => {
+      if (event.matches) setDrawer(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
         setDrawer(false);
         return;
       }
-      if (e.key !== 'Tab') return;
-      const root = drawerRef.current;
-      if (!root) return;
-      const focusable = Array.from(root.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )).filter((el) => el.offsetParent !== null);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+      if (event.key !== 'Tab') return;
+      const panel = drawerRef.current;
+      const links = panel?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]');
+      if (!panel || !links?.length) return;
+      const first = links[0];
+      const last = links[links.length - 1];
+      const active = document.activeElement;
+      if (!panel.contains(active) || (event.shiftKey ? active === first : active === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
       }
     };
+    desktop?.addEventListener('change', onBreakpoint);
     document.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     return () => {
-      window.clearTimeout(focusTimer);
+      desktop?.removeEventListener('change', onBreakpoint);
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
+      unlockScroll();
       for (const el of background) el.removeAttribute('inert');
-      previousFocus.current?.focus?.();
+      const returnTarget = desktop?.matches
+        ? sidebar?.querySelector<HTMLElement>('[aria-current="page"]')
+        : opener;
+      returnTarget?.focus({ preventScroll: true });
     };
-  }, [drawer]);
+  }, [drawer, s.ready, s.loadError]);
+
+  useLayoutEffect(() => {
+    if (!s.ready || s.loadError) return;
+    const previous = lastTabRef.current;
+    lastTabRef.current = tab;
+    if (previous === tab || (previous === null && tab !== 'account')) return;
+    const heading = tab === 'account' ? 'account-page-title' : 'workspace-page-title';
+    document.getElementById(heading)?.focus({ preventScroll: true });
+  }, [tab, s.ready, s.loadError]);
 
   if (s.loadError) {
     // A failed read is not an empty database. The store deliberately refuses to
@@ -395,197 +465,87 @@ function AppInner() {
   }
 
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
-  const displayTitle = snap && s.meta[snap.playlistId]?.customTitle ? s.meta[snap.playlistId].customTitle! : snap?.title;
-
-
-
-  const navItem = (t: NavItem, compact: boolean, onNavigate?: () => void) => {
-    const active = tab === t.id;
-    return (
-      <li key={t.id}>
-        <button
-          onClick={() => {
-            go(t.id);
-            onNavigate?.();
-          }}
-          aria-current={active ? 'page' : undefined}
-          title={compact ? t.label : undefined}
-          aria-label={compact ? t.label : undefined}
-          className={`relative flex w-full items-center gap-2.5 rounded-md px-2 py-[7px] text-sm transition-colors ${
-            active
-              ? 'bg-[var(--surface-hover)] font-semibold text-[var(--text)]'
-              : 'text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
-          } ${compact ? 'justify-center px-0' : ''}`}
-        >
-          {active && (
-            <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--text)]" />
-          )}
-          <span className={`shrink-0 ${active ? 'text-[var(--text)]' : 'text-[var(--text-faint)]'}`} aria-hidden="true">{t.icon}</span>
-          {!compact && <span className="truncate">{t.label}</span>}
-        </button>
-      </li>
-    );
-  };
-
-  const navList = (compact: boolean, onNavigate?: () => void) => (
-    <nav aria-label="Sections" className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-2">
-      {GROUPS.map((g) => (
-        <div key={g.title} role="group" aria-labelledby={`nav-group-${g.title}`}>
-          {!compact && (
-            <p id={`nav-group-${g.title}`} className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-faint)]">{g.title}</p>
-          )}
-          <ul className="space-y-0.5">
-            {g.items.map((t) => navItem(t, compact, onNavigate))}
-          </ul>
-        </div>
-      ))}
-      <div role="group" aria-labelledby="nav-group-account" className="border-t border-[var(--border)] pt-2">
-        {!compact && (
-          <p id="nav-group-account" className="px-2 pb-0.5 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-faint)]">Account</p>
-        )}
-        <ul className="space-y-0.5">
-          {navItem({ id: 'account' as Tab, label: 'Account', icon: <UserRound size={17} /> }, compact, onNavigate)}
-        </ul>
-      </div>
-    </nav>
-  );
+  const pageTitle = isAccountPage ? 'Account' : destinations.find(({ id }) => id === tab)?.label ?? 'Dashboard';
+  const pageGroup = GROUPS.find(({ items }) => items.some(({ id }) => id === tab))?.title ?? 'Account';
 
   return (
     <div
       data-reduced-motion={s.prefs.reducedMotion ? 'true' : 'false'}
       data-page={isAccountPage ? 'account' : 'workspace'}
-      className="min-h-screen bg-[var(--page-bg)]"
+      data-compact={collapsed}
+      className="lq-shell"
     >
-      <a
-        href="#main-content"
-        className="sr-only z-[100] rounded-md bg-[var(--surface-strong)] px-4 py-2 text-sm text-[var(--text)] focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
-      >
+      <a data-app-background href="#main-content" className="lq-skip"
+        onClick={(event) => followInApp(event, () => focusSection('main-content'))}>
         Skip to main content
       </a>
-      {/* Desktop sidebar */}
-      <aside
-        data-app-background
-        className={`fixed bottom-0 left-0 top-0 z-30 hidden flex-col border-r border-[var(--border)] bg-[var(--surface)] transition-[width] lg:flex ${
-          collapsed ? 'w-[68px]' : 'w-60'
-        }`}
-        aria-label="Primary"
-      >
-        <div className={`flex items-center gap-2 border-b border-[var(--border)] px-3 py-3 ${collapsed ? 'justify-center' : ''}`}>
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--accent)] text-[11px] font-black text-[var(--accent-text)]">LQ</span>
-          {!collapsed && (
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold leading-none">LearnQuest</p>
-              <p className="mt-0.5 truncate text-[10px] text-[var(--text-faint)]">Exact-duration tracker</p>
-            </div>
-          )}
-        </div>
-        {!collapsed && !isAccountPage && (
-          <div className="px-3">
-            <PlaylistSwitcher />
-          </div>
-        )}
-        {navList(collapsed)}
-        <div className="border-t border-[var(--border)] p-2">
-          <button
-            onClick={() => setCollapsed((c) => !c)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="flex w-full items-center justify-center gap-1 rounded-lg bg-[var(--surface-soft)] px-2 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
-          >
-            {collapsed ? <ChevronsRight size={15} /> : <><ChevronsLeft size={15} /> Collapse</>}
-          </button>
+
+      <aside ref={sidebarRef} data-app-background className="lq-sidebar" aria-label="Primary">
+        <div className="lq-sidebar-head"><Brand compact={collapsed} /></div>
+        <WorkspaceNav tab={tab} compact={collapsed} onNavigate={go} />
+        <div className="lq-sidebar-foot">
+          <Btn variant="quiet" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed} onClick={() => setCollapsed((value) => !value)} className="w-full">
+            {collapsed ? <PanelLeftOpen size={17} aria-hidden="true" /> : <><PanelLeftClose size={17} aria-hidden="true" /> Collapse sidebar</>}
+          </Btn>
         </div>
       </aside>
 
-      {/* Mobile header */}
-      <header ref={headerRef} data-app-background className="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--page-bg)] lg:hidden">
-        <div className="flex items-center gap-2 px-3 py-2.5">
-          <button
-            ref={menuBtnRef}
-            onClick={() => setDrawer(true)}
-            aria-label="Open menu"
-            aria-expanded={drawer}
-            className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--surface-soft)] text-[var(--text)] hover:bg-[var(--surface-hover)]"
-          >
-            <Menu size={18} />
-          </button>
-          <span className="grid h-8 w-8 place-items-center rounded-md bg-[var(--accent)] text-[11px] font-black text-[var(--accent-text)]">LQ</span>
-          <p className="mr-auto text-sm font-bold">{isAccountPage ? 'Account' : 'LearnQuest'}</p>
-          {s.authUser && <AccountMenu onNavigate={goAccount} />}
-        </div>
-        {!isAccountPage && (
-          <div className="px-3 pb-2">
-            <PlaylistSwitcher />
-          </div>
-        )}
-      </header>
-
-      {/* Mobile drawer */}
       {drawer && (
-        <div className="fixed inset-0 z-40 lg:hidden" role="presentation">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setDrawer(false)} />
-          <div
-            ref={drawerRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Menu"
-            className="absolute bottom-0 left-0 top-0 flex w-72 max-w-[85vw] flex-col border-r border-[var(--border)] bg-[var(--surface)]"
-          >
-            <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-3">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--accent)] text-[11px] font-black text-[var(--accent-text)]">LQ</span>
-              <p className="mr-auto text-sm font-bold">LearnQuest</p>
-              <button
-                ref={closeBtnRef}
-                onClick={() => {
-                  setDrawer(false);
-                  menuBtnRef.current?.focus();
-                }}
-                aria-label="Close menu"
-                className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--surface-soft)] hover:bg-[var(--surface-hover)]"
-              >
-                <X size={17} />
-              </button>
+        <div className="lq-drawer-layer" role="presentation">
+          <div className="lq-drawer-overlay" aria-hidden="true" onClick={() => setDrawer(false)} />
+          <div id="workspace-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-label="Menu" className="lq-drawer">
+            <div className="lq-drawer-head">
+              <Brand />
+              <Btn variant="quiet" ref={closeBtnRef} aria-label="Close menu" onClick={() => setDrawer(false)} className="w-11 px-0">
+                <X size={19} aria-hidden="true" />
+              </Btn>
             </div>
-            {navList(false, () => menuBtnRef.current?.focus())}
+            <WorkspaceNav tab={tab} onNavigate={go} />
           </div>
         </div>
       )}
 
-      {/* Content */}
-      <div data-app-background className={collapsed ? 'lg:pl-[68px]' : 'lg:pl-60'}>
-        {s.authUser && (
-          <div className="sticky top-0 z-20 hidden border-b border-[var(--border)] bg-[var(--page-bg)] lg:block">
-            <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-2">
-              <div className="min-w-0 flex-1">
-                {isAccountPage ? (
-                  <p className="truncate text-xs font-semibold text-[var(--text)]">Account</p>
-                ) : (
-                  <>
-                    <p className="truncate text-xs font-semibold text-[var(--text)]">{displayTitle ?? 'LearnQuest'}</p>
-                    <p className="truncate text-[10px] text-[var(--text-faint)]">
-                      {snap ? `N=${snap.entries.length} · ${snap.source} · fetched ${new Date(snap.fetchedAt).toLocaleString()}` : 'No active playlist'}
-                    </p>
-                  </>
-                )}
-              </div>
+      <div data-app-background className="lq-workspace">
+        <header ref={headerRef} className="lq-topbar">
+          <div className="lq-topbar-inner">
+            <Btn ref={menuBtnRef} variant="quiet" aria-label="Open menu" aria-expanded={drawer}
+              aria-controls={drawer ? 'workspace-drawer' : undefined} aria-haspopup="dialog"
+              onClick={() => setDrawer(true)} className="lq-menu-toggle">
+              <Menu size={20} aria-hidden="true" />
+            </Btn>
+            <p className="lq-topbar-location">
+              <span className="lg:hidden">{pageTitle}</span>
+              <span className="hidden lg:inline">{pageGroup}</span>
+            </p>
+            {!isAccountPage && <div className="lq-topbar-playlist"><PlaylistSwitcher /></div>}
+            <div className="lq-topbar-actions">
               <SyncIndicator />
-              <AccountMenu onNavigate={goAccount} />
+              {s.authUser && <AccountMenu onNavigate={goAccount} />}
             </div>
           </div>
-        )}
-        <main id="main-content" className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
+        </header>
+
+        <main id="main-content" tabIndex={-1} className="lq-main" aria-labelledby={isAccountPage ? 'account-page-title' : 'workspace-page-title'}>
+          {!isAccountPage && (
+            <div className="lq-page-heading">
+              <h1 id="workspace-page-title" tabIndex={-1}>{pageTitle}</h1>
+              <p>{PAGE_DESCRIPTIONS[tab]}</p>
+            </div>
+          )}
           <MigrationReadOnlyBanner />
           <CloudConflictBanner />
           {!isAccountPage && !snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
           {!isAccountPage && <LegacyMigrationCard />}
           {!isAccountPage && s.lastDiff && (
-            <div className="flex items-start gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm">
+            <div role="status" className="lq-alert lq-alert--info flex items-start gap-2">
               <p className="min-w-0 flex-1">{s.lastDiff}</p>
               <button onClick={() => s.setLastDiff(null)} aria-label="Dismiss" className="shrink-0"><X size={16} /></button>
             </div>
           )}
           {!isAccountPage && s.celebration && (
-            <div className="flex items-start gap-3 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-soft)] p-4">
-              <PartyPopper className="mt-0.5 shrink-0 text-[var(--text)]" />
+            <div role="status" className="lq-alert lq-alert--success flex items-start gap-3">
+              <Check className="mt-0.5 shrink-0" size={18} aria-hidden="true" />
               <p className="min-w-0 flex-1 text-sm">{s.celebration}</p>
               <button onClick={s.clearCelebration} className="shrink-0 rounded-lg bg-[var(--surface-hover)] px-3 py-1.5 text-sm">Continue</button>
             </div>
@@ -609,10 +569,10 @@ function AppInner() {
           </Suspense>
         </main>
 
-        <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] text-[var(--text-faint)]">
+        <footer className="lq-footer">
           {s.mode === 'cloud'
             ? 'Your learning data is stored with your account. Exports and backups are available in Reports and Account.'
-            : 'Local test mode: progress lives in this browser (IndexedDB). Production builds use authenticated cloud persistence.'}
+            : 'Local workspace. Learning data is stored in this browser.'}
         </footer>
       </div>
       <Notifier />

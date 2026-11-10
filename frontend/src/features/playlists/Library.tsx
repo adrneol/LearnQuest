@@ -137,9 +137,9 @@ export function Library() {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <h2 className="text-base font-bold">Range explorer <span className="font-normal text-[var(--text-muted)]">(N={N}, boundaries adapt to this playlist)</span></h2>
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+      <Card className="lq-card--compact">
+        <h2 className="lq-section-title">Range explorer</h2>
+        <div className="mt-3 grid grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto]">
           <NumberField
             label={`Start (1–${N})`}
             value={start}
@@ -154,7 +154,7 @@ export function Library() {
           />
           <div className="min-w-0">
             <Dropdown
-              label="Session length (estimate only)"
+              label="Session length"
               value={String(s.prefs.sessionLenMin)}
               options={[10, 15, 25, 45, 60].map((m) => ({ value: String(m), label: `${m} min` }))}
               onChange={(v) => s.setPrefs({ sessionLenMin: Number(v) })}
@@ -162,26 +162,26 @@ export function Library() {
           </div>
           <div className="flex items-end">
             <Btn variant="primary" onClick={() => s.saveRange({ playlistId: snap.playlistId, label: `Videos ${start}–${end}`, start, end })} disabled={!range}>
-              <Plus size={14} /> Save
+              <Plus size={14} aria-hidden="true" /> Save range
             </Btn>
           </div>
         </div>
-        <p className="mt-1 text-[10px] text-[var(--text-faint)]">Session length only estimates how many study blocks a range needs — it never changes recorded durations.</p>
+        <p className="mt-2 text-xs text-[var(--text-faint)]">Session length only estimates the number of study blocks. Recorded durations stay the same.</p>
         {rangeErrMsg && <p className="mt-1 text-sm text-red-800 dark:text-red-300">{rangeErrMsg}</p>}
         <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Range presets">
           {(['full', 'first', 'middle', 'last'] as const).map((p) => (
             <button
               key={p}
               onClick={() => applyPreset(p)}
-              className="rounded-full bg-[var(--surface-soft)] px-3 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
+              className="min-h-9 rounded-[var(--radius-control)] bg-[var(--surface-soft)] px-2.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] pointer-coarse:min-h-11"
             >
               {p === 'full' ? `Full playlist (1–${N})` : p === 'first' ? 'First videos' : p === 'middle' ? 'Middle segment' : 'Final videos'}
             </button>
           ))}
         </div>
         {range && (
-          <div className="mt-3 grid min-w-0 gap-3 md:grid-cols-3">
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg bg-[var(--surface-soft)] p-3 text-sm sm:grid-cols-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-3 grid min-w-0 items-start gap-3 border-t border-[var(--border)] pt-3 lg:grid-cols-[13.5rem_minmax(0,1fr)]">
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-[var(--radius-control)] bg-[var(--surface-soft)] p-3 text-sm min-[380px]:grid-cols-4 lg:grid-cols-2">
               <div>
                 <dt className="text-[11px] text-[var(--text-faint)]">Videos {start}–{end}</dt>
                 <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.count}</dd>
@@ -198,41 +198,38 @@ export function Library() {
                 <dt className="text-[11px] text-[var(--text-faint)]">Unresolved</dt>
                 <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.unresolved}</dd>
               </div>
-              <div className="col-span-2 sm:col-span-4">
-                <dt className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Sessions of {s.prefs.sessionLenMin} min</dt>
+              <div className="col-span-full">
+                <dt className="text-xs text-[var(--text-faint)]">Sessions of {s.prefs.sessionLenMin} min</dt>
                 <dd className="text-xs text-[var(--text-muted)]">≈{sessionsNeeded(range.totalSec, s.prefs.sessionLenMin * 60)} needed</dd>
               </div>
               {!range.isComplete && (
-                <div className="col-span-2 sm:col-span-4">
+                <div className="col-span-full">
                   <p className="text-xs text-amber-800 dark:text-amber-300">Incomplete — positions {range.unresolvedPositions.join(', ')} unresolved. Not a complete total.</p>
                 </div>
               )}
-              <div className="col-span-2 sm:col-span-4">
+              <div className="col-span-full">
                 {(() => {
                   const rp = computeRangeProgress(snap, start, end, s.progress);
                   return <p className="text-xs text-[var(--text-muted)]"><b>{rp.done}/{rp.count}</b> done{rp.doneSec !== null && rp.totalSec !== null ? ` · ${formatHuman(rp.totalSec - rp.doneSec)} left` : ''}.</p>;
                 })()}
               </div>
             </dl>
-            <div className="min-w-0 md:col-span-2">
-              <div className="mb-2 inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-0.5" role="group" aria-label="Chart view">
+            <div className="min-w-0">
+              <div className="lq-segmented mb-2" role="group" aria-label="Chart view">
                 {(['bars', 'cumulative'] as const).map((v) => (
                   <button
                     key={v}
                     onClick={() => setChartView(v)}
                     aria-pressed={chartView === v}
-                    className={`rounded-[10px] px-3 py-1.5 text-xs font-medium transition ${
-                      chartView === v ? 'bg-[var(--accent)] text-[var(--accent-text)] shadow' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                    }`}
                   >
                     {v === 'bars' ? 'Video duration' : 'Cumulative duration'}
                   </button>
                 ))}
               </div>
               {chartView === 'bars' ? (
-                <DurationBars data={chartData} heightClass="h-64" />
+                <DurationBars data={chartData} heightClass="h-52" />
               ) : (
-                <CumulativeLine data={chartData} heightClass="h-64" />
+                <CumulativeLine data={chartData} heightClass="h-52" />
               )}
             </div>
           </div>
@@ -246,9 +243,10 @@ export function Library() {
       </Card>
 
       <Card>
-        <div className="flex flex-wrap items-center gap-2">
+        <h2 className="lq-section-title mb-3">Lessons</h2>
+        <div className="flex flex-wrap items-end gap-2">
           <div className="relative flex-1 min-w-[180px]">
-            <Search size={14} className="absolute left-2.5 top-2.5 text-[var(--text-faint)]" />
+            <Search aria-hidden="true" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search titles…" className={`${inputCls} pl-8`} aria-label="Search videos" />
           </div>
           <div className="w-[calc(50%-0.25rem)] min-w-0 sm:w-40">
@@ -278,7 +276,7 @@ export function Library() {
               onChange={(v) => { setSort(v as EntrySortKey); setPage(0); }}
             />
           </div>
-          <span className="text-xs text-[var(--text-faint)]">{rows.length} shown</span>
+          <span className="py-2 text-xs tabular-nums text-[var(--text-faint)]">{rows.length} shown</span>
         </div>
         {/*
           Phones get a real card list: no 640px horizontal canvas, no clipped
@@ -355,7 +353,7 @@ export function Library() {
           })}
         </ul>
         <div className="mt-2 hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="lq-data-table min-w-[640px]">
             <thead>
               <tr className="text-left text-xs text-[var(--text-muted)]">
                 <th className="p-2">Sel</th><th className="p-2">Done</th><th className="p-2">Revise</th><th className="p-2">#</th><th className="p-2">Title</th><th className="p-2 text-right">Duration</th><th className="p-2">Open</th>
@@ -412,7 +410,7 @@ export function Library() {
       </Card>
 
       <Card>
-        <h3 className="text-sm font-bold">Distribution & composition</h3>
+        <h2 className="lq-section-title">Distribution & composition</h2>
         <p className="text-[11px] text-[var(--text-faint)]">Bars: minutes per video across the whole playlist (every resolved entry) · Pie: completed vs remaining videos</p>
         <div className="grid min-w-0 gap-3 md:grid-cols-2">
           <div className="h-52 min-w-0">

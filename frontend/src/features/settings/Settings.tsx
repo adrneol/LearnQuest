@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { KeyRound, Sun, Moon, Monitor } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { useTheme, type Theme } from '../../app/theme.js';
@@ -7,27 +7,31 @@ import { Card, Field } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 
-function ThemeOption({ value, icon, label }: { value: Theme; icon: React.ReactNode; label: string }) {
+const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+  { value: 'system', label: 'System', icon: Monitor },
+];
+
+function ThemeOptions() {
   const { pref, resolved, setTheme } = useTheme();
-  const active = pref === value;
+  const group = useId();
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={() => setTheme(value)}
-      className={`flex flex-col items-center gap-1.5 rounded-lg border px-3 py-3 text-xs font-medium transition-colors ${
-        active
-          ? 'border-[var(--text)] bg-[var(--surface-hover)] text-[var(--text)]'
-          : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
-      }`}
-    >
-      {icon}
-      <span>{label}</span>
-      {value === 'system' && active ? (
-        <span className="text-[10px] font-normal text-[var(--text-faint)]">Using {resolved}</span>
-      ) : null}
-    </button>
+    <fieldset className="mt-3">
+      <legend className="lq-label">Theme</legend>
+      <div className="mt-1 grid grid-cols-3 gap-2">
+        {THEMES.map(({ value, label, icon: Icon }) => (
+          <label key={value} className="relative min-w-0 cursor-pointer">
+            <input type="radio" name={group} checked={pref === value} onChange={() => setTheme(value)}
+              aria-label={label} className="peer sr-only" />
+            <span className="flex min-h-11 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--control-border)] px-1 py-2 text-xs font-semibold text-[var(--text-muted)] hover:bg-[var(--surface-hover)] peer-checked:border-[var(--text)] peer-checked:bg-[var(--selected)] peer-checked:text-[var(--text)] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--focus)]">
+              <Icon size={15} aria-hidden="true" className="hidden sm:block" /> {label}
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-[var(--text-faint)]">Saved on this device.{pref === 'system' ? ` Currently using ${resolved} mode.` : ''}</p>
+    </fieldset>
   );
 }
 
@@ -44,51 +48,12 @@ export function Settings() {
   return (
     <div className="space-y-4">
       <Card>
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-base font-bold">Backend connection</h2>
-          <button onClick={() => checkApiHealth().then(setHealth)} className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]">
-            Recheck
-          </button>
-        </div>
-        {configured ? (
-          <p className="mt-1 text-xs text-[var(--text-muted)]">YouTube metadata API connected.</p>
-        ) : (
-          <>
-            <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
-              {health.ok ? 'Backend reachable — API key missing.' : 'Backend unreachable. JSON import still works.'}
-            </p>
-            <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--text-muted)]">
-              <li>Create a Google Cloud project and enable <b>YouTube Data API v3</b> (read-only).</li>
-              <li>Create an <b>API key</b> restricted to that API and your backend host.</li>
-              <li>Paste it into <code className="font-mono text-[var(--text)]">backend/.env</code> as <code className="font-mono">YOUTUBE_API_KEY=…</code> (never into chat, never into the frontend).</li>
-              <li>Restart the backend, then Recheck.</li>
-            </ol>
-          </>
-        )}
-        {!configured && (
-          <p className="mt-2 flex items-start gap-1.5 text-xs text-[var(--text-faint)]">
-            <KeyRound size={13} className="mt-0.5 shrink-0" />
-            Keys never appear in frontend bundles, API responses, logs, or the UI.
-          </p>
-        )}
+        <h2 className="lq-section-title">Appearance</h2>
+        <ThemeOptions />
       </Card>
 
       <Card>
-        <h2 className="text-base font-bold">Appearance</h2>
-        <div className="mt-2">
-          <Field label="Theme">
-            <div className="mt-1 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Theme">
-              <ThemeOption value="light" icon={<Sun size={16} />} label="Light" />
-              <ThemeOption value="dark" icon={<Moon size={16} />} label="Dark" />
-              <ThemeOption value="system" icon={<Monitor size={16} />} label="System" />
-            </div>
-            <p className="mt-1.5 text-[11px] text-[var(--text-faint)]">Saved on this device — both themes are supported.</p>
-          </Field>
-        </div>
-      </Card>
-
-      <Card>
-        <h2 className="text-base font-bold">Preferences</h2>
+        <h2 className="lq-section-title">Preferences</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <div>
             <TimezonePicker value={s.prefs.timezone} onChange={(tz) => s.setPrefs({ timezone: tz })} />
@@ -132,7 +97,40 @@ export function Settings() {
       </Card>
 
       <Card>
-        <h2 className="text-base font-bold">Data &amp; privacy</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="lq-section-title">Backend connection</h2>
+          <button onClick={() => checkApiHealth().then(setHealth)} className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]">
+            Recheck
+          </button>
+        </div>
+        {configured ? (
+          <p className="mt-1 text-xs text-[var(--text-muted)]">YouTube metadata API connected.</p>
+        ) : (
+          <>
+            <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
+              {health.ok ? 'Backend reachable — API key missing.' : 'Backend unreachable. JSON import still works.'}
+            </p>
+            <details className="mt-3">
+              <summary className="text-sm font-semibold">YouTube API setup</summary>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--text-muted)]">
+              <li>Create a Google Cloud project and enable <b>YouTube Data API v3</b> (read-only).</li>
+              <li>Create an <b>API key</b> restricted to that API and your backend host.</li>
+              <li>Paste it into <code className="font-mono text-[var(--text)]">backend/.env</code> as <code className="font-mono">YOUTUBE_API_KEY=…</code> (never into chat, never into the frontend).</li>
+              <li>Restart the backend, then Recheck.</li>
+              </ol>
+            </details>
+          </>
+        )}
+        {!configured && (
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-[var(--text-faint)]">
+            <KeyRound size={13} className="mt-0.5 shrink-0" />
+            Keys never appear in frontend bundles, API responses, logs, or the UI.
+          </p>
+        )}
+      </Card>
+
+      <Card>
+        <h2 className="lq-section-title">Data &amp; privacy</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
           {s.mode === 'cloud'
             ? 'Your data is saved to your account. CSV/JSON exports stay on your device.'

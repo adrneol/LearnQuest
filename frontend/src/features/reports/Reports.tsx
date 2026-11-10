@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Plus, RefreshCw, Download, Upload, Trash2, Settings2, EllipsisVertical, Search, AlertTriangle } from 'lucide-react';
 import {
   computePlaylistProgress, rangeDuration, computeRangeProgress, toCsv, XP_RULES, snapshotCompleteness,
@@ -7,6 +7,7 @@ import {
 import { useStore } from '../../app/store.js';
 import { confirmDialog, promptDialog } from '../../components/ui/dialog.js';
 import { PopupShell } from '../../components/ui/popup.js';
+import { moveMenuFocus } from '../../components/ui/menuKeys.js';
 import { fetchPlaylistFromServer, snapshotToCsv, parseImportFile } from '../../services/api/playlistApi.js';
 import { Card, Btn, inputCls } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
@@ -20,7 +21,6 @@ export function Reports() {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
 
   const add = async (refresh = false) => {
     // Add reads only the dedicated Add field; Refresh always targets the
@@ -70,7 +70,7 @@ export function Reports() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Playlists ({allIds.length}) · combined {combined.done}/{combined.total} videos</h2>
+        <h2 className="lq-section-title">Playlists ({allIds.length}) · combined {combined.done}/{combined.total} videos</h2>
         <div className="mt-2 flex flex-col gap-2 sm:flex-row">
           <input className={inputCls} placeholder="New playlist URL or ID" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="New playlist URL" />
           <Btn variant="primary" onClick={() => add(false)} disabled={busy || !url.trim()}><Plus size={14} /> Add</Btn>
@@ -81,7 +81,7 @@ export function Reports() {
       </Card>
 
       <Card>
-        <h3 className="text-sm font-bold">Exports (same verified engine as dashboard — no PDFs)</h3>
+        <h3 className="lq-section-title">Exports (same verified engine as dashboard — no PDFs)</h3>
         <div className="mt-2 flex flex-wrap gap-2">
           <Btn onClick={async () => download(`learnquest-backup-${Date.now()}.json`, await s.exportBackup())}><Download size={14} /> Backup JSON</Btn>
           <Btn disabled={!snap} onClick={() => snap && download(`${snap.playlistId}-videos.csv`, snapshotToCsv(snap, completedEntryKeys(snap, s.progress)))}><Download size={14} /> Videos CSV</Btn>
@@ -177,15 +177,18 @@ export function Reports() {
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           <Btn onClick={() => s.clearCacheOnly()}>Clear cached metadata (keep progress)</Btn>
-          {!confirmClear ? (
-            <Btn variant="danger" onClick={() => setConfirmClear(true)}><Trash2 size={14} /> Clear ALL data…</Btn>
-          ) : (
-            <>
-              <span className="text-sm text-red-800 dark:text-red-300">Really delete all learning data and reset preferences?</span>
-              <Btn variant="danger" onClick={async () => { await s.clearAllData(); setConfirmClear(false); }}>Yes, delete</Btn>
-              <Btn onClick={() => setConfirmClear(false)}>Cancel</Btn>
-            </>
-          )}
+          <Btn variant="quiet" className="lq-delete-trigger" onClick={async () => {
+            const confirmed = await confirmDialog({
+              title: 'Clear all learning data?',
+              body: 'This deletes all learning data and resets learning preferences. Export a backup first if you want to retain a copy.',
+              confirmLabel: 'Clear learning data',
+              danger: true,
+            });
+            if (confirmed) {
+              try { await s.clearAllData(); }
+              catch (error) { notify(error instanceof Error ? error.message : 'Could not clear learning data.'); }
+            }
+          }}><Trash2 size={16} aria-hidden="true" /> Clear all data…</Btn>
         </div>
       </Card>
     </div>
@@ -245,7 +248,10 @@ function PlaylistTable({ ids }: { ids: string[] }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const menuAnchor = useRef<HTMLDivElement>(null);
+  const menuAnchor = useRef<HTMLButtonElement | null>(null);
+  const focusMenu = useCallback((element: HTMLDivElement | null) => {
+    moveMenuFocus(element, 'Home');
+  }, []);
 
   const rows = ids
     .map((id) => {
@@ -260,7 +266,11 @@ function PlaylistTable({ ids }: { ids: string[] }) {
 
   if (ids.length === 0) return <p className="mt-2 text-xs text-[var(--text-faint)]">No playlists yet.</p>;
 
-  const closeMenu = () => setMenuFor(null);
+  const menuRow = rows.find((row) => row.id === menuFor);
+  const closeMenu = () => {
+    setMenuFor(null);
+    menuAnchor.current?.focus({ preventScroll: true });
+  };
   const act = async (kind: 'rename' | 'archive' | 'remove', row: (typeof rows)[number]) => {
     closeMenu();
     if (kind === 'rename') {
@@ -307,33 +317,42 @@ function PlaylistTable({ ids }: { ids: string[] }) {
                 {r.m?.archived ? ' · archived' : ''}
               </span>
             </button>
-            <div ref={menuFor === r.id ? menuAnchor : undefined} className="shrink-0">
-              <button
-                onClick={() => setMenuFor(menuFor === r.id ? null : r.id)}
+            <div className="shrink-0">
+              <Btn variant="quiet"
+                onClick={(event) => {
+                  menuAnchor.current = event.currentTarget;
+                  setMenuFor(menuFor === r.id ? null : r.id);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+                  event.preventDefault();
+                  menuAnchor.current = event.currentTarget;
+                  setMenuFor(r.id);
+                }}
                 aria-label={`Actions for ${r.title}`}
                 aria-expanded={menuFor === r.id}
                 aria-haspopup="menu"
-                className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                className="lq-icon-button"
               >
-                <EllipsisVertical size={16} />
-              </button>
+                <EllipsisVertical size={17} aria-hidden="true" />
+              </Btn>
             </div>
           </li>
         ))}
       </ul>
-      <PopupShell anchor={() => menuAnchor.current} open={menuFor !== null} onClose={closeMenu}>
-        <div role="menu" className="p-1">
-          {menuFor && (() => {
-            const row = rows.find((x) => x.id === menuFor)!;
-            return (
-              <>
-                <MenuItem label="Rename…" onPick={() => act('rename', row)} />
-                <MenuItem label={row.m?.archived ? 'Unarchive' : 'Archive'} onPick={() => act('archive', row)} />
-                <MenuItem label="Manage removal…" danger onPick={() => act('remove', row)} />
-              </>
-            );
-          })()}
-        </div>
+      <PopupShell anchor={() => menuAnchor.current} open={Boolean(menuRow)} onClose={closeMenu} minWidth={208}>
+        {menuRow && (
+          <div ref={focusMenu} role="menu" aria-label={'Actions for ' + menuRow.title}
+            className="overflow-auto overscroll-contain p-1" onKeyDown={(event) => {
+              if (event.key === 'Tab') closeMenu();
+              if (moveMenuFocus(event.currentTarget, event.key)) event.preventDefault();
+            }}>
+            <MenuItem label="Rename…" onPick={() => act('rename', menuRow)} />
+            <MenuItem label={menuRow.m?.archived ? 'Unarchive' : 'Archive'} onPick={() => act('archive', menuRow)} />
+            <div role="separator" className="my-1 border-t border-[var(--border)]" />
+            <MenuItem label="Manage removal…" danger onPick={() => act('remove', menuRow)} />
+          </div>
+        )}
       </PopupShell>
     </div>
   );
@@ -344,7 +363,7 @@ function MenuItem({ label, danger, onPick }: { label: string; danger?: boolean; 
     <button
       role="menuitem"
       onClick={onPick}
-      className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-sm ${danger ? 'text-red-800 dark:text-red-300 hover:bg-red-500/15' : 'text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
+      className={`lq-menu-item ${danger ? 'lq-menu-item--danger' : ''}`}
     >
       {label}
     </button>

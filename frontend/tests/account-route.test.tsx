@@ -93,7 +93,7 @@ function json(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function mockCloud(state: unknown = EMPTY_STATE) {
+function mockCloud(state: unknown = EMPTY_STATE, saveActive?: () => Response) {
   globalThis.fetch = (async (url: any) => {
     const u = String(url);
     if (u.endsWith('/api/health')) return json({ ok: true, hasKey: true });
@@ -101,6 +101,7 @@ function mockCloud(state: unknown = EMPTY_STATE) {
       return json({ authenticated: true, user: USER, csrfToken: 'csrf-route', ...CONFIG });
     }
     if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state, version: 0 });
+    if (u.endsWith('/api/account/data/activeId') && saveActive) return saveActive();
     if (u.endsWith('/api/account/sessions')) return json({ sessions: [] });
     return json({ error: 'not found' }, 404);
   }) as any;
@@ -166,7 +167,7 @@ describe('standalone account route', () => {
     expect(screen.queryByText('Active playlist')).toBeNull();
     expect(screen.queryByText(/Active playlist:/)).toBeNull();
     expect(screen.queryByText(/fetched/i)).toBeNull();
-    expect(screen.queryByText(/N=2/)).toBeNull();
+    expect(screen.queryByText(/2 videos/)).toBeNull();
     expect(screen.queryByText('Your account is ready')).toBeNull();
     expect(screen.queryByLabelText('Playlist URL or ID')).toBeNull();
     expect(screen.queryByText(/Local LearnQuest data found/)).toBeNull();
@@ -197,6 +198,23 @@ describe('standalone account route', () => {
     );
 
     expect(await screen.findAllByText(/Playlist Leak Canary/)).not.toHaveLength(0);
-    expect((await screen.findAllByText(/N=2/)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Active playlist' })).toHaveTextContent('2 videos');
+  });
+
+  it('offers a retry in the shared header after a cloud save fails', async () => {
+    const save = vi.fn()
+      .mockReturnValueOnce(json({ error: 'Temporary write failure' }, 500))
+      .mockReturnValueOnce(json({ version: 1, collection: 'activeId', savedAt: '2026-11-10T00:00:00Z' }));
+    mockCloud(ACTIVE_STATE, save);
+    window.location.hash = '#/learn';
+    render(<StoreProvider mode="cloud"><App /></StoreProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Active playlist' }));
+    fireEvent.click(await screen.findByRole('option', { name: /Select playlist/ }));
+    const retry = await screen.findByRole('button', { name: /Save failed/ });
+    expect(retry.closest('header')).toContainElement(screen.getByRole('button', { name: /Account menu for/ }));
+    fireEvent.click(retry);
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Save failed/ })).not.toBeInTheDocument());
   });
 });

@@ -113,12 +113,12 @@ export function Analytics() {
     <div className="min-w-0 space-y-4">
       <div className="grid min-w-0 gap-4 md:grid-cols-2">
         <Card className="min-w-0">
-          <h3 className="text-sm font-bold">Cumulative content</h3>
+          <h3 className="lq-section-title">Cumulative content</h3>
           <CumulativeChart data={data.cum} heightClass="h-52" complete={data.comp.isComplete} />
           <details className="mt-2 text-xs text-[var(--text)]">
             <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
             <div className="mt-1 overflow-x-auto">
-              <table className="w-full text-left text-[11px]">
+              <table className="lq-data-table text-left">
                 <caption className="sr-only">Cumulative resolved content by playlist position</caption>
                 <thead><tr><th className="pr-3 font-semibold">Position</th><th className="font-semibold">Cumulative time</th></tr></thead>
                 <tbody>
@@ -132,7 +132,7 @@ export function Analytics() {
         </Card>
         <Card className="min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-bold">Duration distribution</h3>
+            <h3 className="lq-section-title">Duration distribution</h3>
             <button
               type="button"
               onClick={() => setDistMode((m) => (m === 'overview' ? 'detail' : 'overview'))}
@@ -171,7 +171,7 @@ export function Analytics() {
           <details className="mt-2 text-xs text-[var(--text)]">
             <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
             <div className="mt-1 max-h-40 overflow-auto">
-              <table className="w-full text-left text-[11px]">
+              <table className="lq-data-table text-left">
                 <caption className="sr-only">Duration in minutes by playlist position</caption>
                 <thead><tr><th className="pr-3 font-semibold">Position</th><th className="font-semibold">Minutes</th></tr></thead>
                 <tbody>
@@ -188,18 +188,18 @@ export function Analytics() {
 
       <div className="grid min-w-0 gap-4 md:grid-cols-3">
         <Card>
-          <h3 className="text-sm font-bold">Completed vs remaining</h3>
+          <h3 className="lq-section-title">Completed vs remaining</h3>
           <ProgressDonut done={data.prog.completedCount} total={data.prog.n} heightClass="h-44" />
           <p className="text-xs text-[var(--text-muted)]">{data.prog.completedCount}/{data.prog.n} videos · {data.prog.isDurationComplete && data.prog.completedSec !== null ? `${formatSecondsHHMMSS(data.prog.completedSec)} content done` : 'duration total incomplete — count shown'}.</p>
         </Card>
         <Card>
-          <h3 className="text-sm font-bold">Verified vs manual</h3>
+          <h3 className="lq-section-title">Verified vs manual</h3>
           <p className="mt-2 text-2xl font-bold">{data.verified} <span className="text-xs font-normal text-[var(--text-muted)]">verified</span> · {data.manual} <span className="text-xs font-normal text-[var(--text-muted)]">manual</span></p>
           <div className="mt-2"><ProgressBar pct={data.verified + data.manual ? (data.verified / (data.verified + data.manual)) * 100 : 0} tone="emerald" /></div>
           <p className="mt-1 text-xs text-[var(--text-muted)]">Checkboxes are manual by design; only player-observed coverage ≥ threshold counts as verified.</p>
         </Card>
         <Card>
-          <h3 className="text-sm font-bold">Session lengths</h3>
+          <h3 className="lq-section-title">Session lengths</h3>
           <p className="text-[11px] text-[var(--text-faint)]">Number of recorded sessions per duration bucket (minutes)</p>
           <div className="h-44 min-w-0">
             <ResponsiveContainer width="100%" height="100%">
@@ -214,7 +214,7 @@ export function Analytics() {
           </div>
           <details className="mt-2 text-xs text-[var(--text)]">
             <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
-            <table className="mt-1 w-full text-left text-[11px]">
+            <table className="mt-1 lq-data-table text-left">
               <caption className="sr-only">Recorded session count by duration bucket</caption>
               <thead><tr><th className="pr-3 font-semibold">Minutes</th><th className="font-semibold">Sessions</th></tr></thead>
               <tbody>
@@ -229,7 +229,7 @@ export function Analytics() {
 
       <div className="grid min-w-0 gap-4 md:grid-cols-2">
         <Card>
-          <h3 className="text-sm font-bold">Modules & learning quality</h3>
+          <h3 className="lq-section-title">Modules & learning quality</h3>
           {data.mods.length === 0 && <p className="text-xs text-[var(--text-faint)]">No modules yet — group playlist positions into chapters on the Modules tab (e.g. “Basics 1–8”). Analytics will summarize remaining work per module here.</p>}
           {data.mods.map((m) => (
             <p key={m.name} className="mt-1 text-xs text-[var(--text)]">{m.name} · {m.remainingCount} left{m.remainingSec !== null ? ` · ${formatHuman(m.remainingSec)}` : ''}</p>
@@ -239,7 +239,7 @@ export function Analytics() {
           </p>
         </Card>
         <Card>
-          <h3 className="text-sm font-bold">Insights (from recorded values)</h3>
+          <h3 className="lq-section-title">Insights (from recorded values)</h3>
           <ul className="mt-1 space-y-1.5 text-sm">
             {data.insights.map((i, k) => (
               <li key={k} className={`rounded-lg p-2 text-xs ${i.kind === 'good' ? 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-200' : i.kind === 'warn' ? 'bg-amber-500/10 text-amber-800 dark:text-amber-200' : 'bg-[var(--surface-soft)] text-[var(--text)]'}`}>{i.text}</li>

@@ -266,6 +266,7 @@ describe('account screen', () => {
     const dialog = screen.getByRole('alertdialog', { name: /Permanently delete this account/ });
     expect(dialog).toHaveTextContent(/cannot be undone/i);
     expect(dialog).toHaveTextContent(/playlists, progress, notes/i);
+    expect(screen.getByRole('button', { name: 'Cancel', exact: true })).toHaveFocus();
     const permanent = screen.getByRole('button', { name: /Delete permanently/ });
     expect(permanent).toBeDisabled();
 

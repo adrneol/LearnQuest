@@ -30,10 +30,23 @@ npm --prefix frontend run test:browser:baseline
 
 The harness builds the app in memory and serves it on a temporary loopback
 port. Each test opens a fresh browser context with synthetic IndexedDB records,
-a fixed date, UTC, and blocked API/external requests. The baseline checks
+a fixed date, and UTC. The fixture blocks external requests and intercepts
+account requests with synthetic replies for the signed-in cases. The baseline checks
 Library on desktop/dark and phone/light. It waits for charts and fonts, advances
 the browser clock through chart animation, then compares captures from two
 independent contexts for stability.
+
+The browser baseline also checks the skip link, drawer focus and resize cleanup,
+contrast in both themes, and keyboard theme switching. It visits all 15
+destinations at 1440px and 320px, plus Dashboard, Library, Analytics, Settings,
+and Account at 1024px, 768px, and 390px.
+
+The interaction checks cover the Player's calendar and notes, Revision toolbar
+alignment and Enter submission, theme changes through Account and Settings,
+and playlist and account confirmation flows. The theme bootstrap runs under
+the deployment CSP resource directives on loopback. The deletion fixture
+returns a simulated failure and keeps the confirmation available for retry
+or cancellation.
 
 On constrained hosts, run the Vitest and browser commands in sequence. The
 cold browser build and jsdom worker startup compete for CPU.
@@ -46,6 +59,11 @@ not interchangeable. If a comparison fails, the actual image is saved under
 capturing or accepting a visual change. Review the images before committing
 them. The default `smoke` mode checks repeatability without reading or writing
 references.
+
+Set `LQ_VISUAL_MODE=review` to write candidates and representative route captures
+to `frontend/test-results/visual` without replacing any references. The Phase B
+references record the shared playlist bar, navigation rail, page title,
+contrast tokens, and condensed range controls.
 
 ## Known defects
 
@@ -63,9 +81,10 @@ into the ordinary baseline when its fix lands.
 | --- | --- |
 | CHART-1, CHART-2 | Highest tick covers the data; a range starting at 25 reports playlist position 25. |
 | ARENA-1, ARENA-2 | Completing a lesson preserves earlier qualifying evidence; a fixed run's dates agree with its displayed period. |
-| NAV-1, NAV-2 | Skip to main keeps the current route and moves focus; resizing an open drawer releases the desktop. |
-| A11Y-1, A11Y-2 | Icon buttons expose their supplied name; normal help text meets 4.5:1 contrast. |
 | EXPORT-1 | Manifest file names agree with the archive contents. |
+
+Phase B moved NAV-1, NAV-2, and A11Y-2 to the browser baseline and A11Y-1 to
+the frontend Vitest baseline. The deferred cases above remain opt-in.
 
 The existing authentication browser scripts remain separate. These fixtures
 exercise the local learning workspace; they do not establish production

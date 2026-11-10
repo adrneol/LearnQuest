@@ -218,7 +218,7 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
       )}
 
       <div className="mt-3">
-        <AnnotationFields values={values} onChange={change} idPrefix={`player-${entry.entryId ?? entry.position}`} />
+        <AnnotationFields values={values} onChange={change} timezone={s.prefs.timezone} idPrefix={`player-${entry.entryId ?? entry.position}`} />
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">

@@ -240,7 +240,7 @@ export function Competition() {
         <>
           {unavailable ? (
             <Card>
-              <h3 className="text-sm font-bold">Arena unavailable</h3>
+              <h3 className="lq-section-title">Arena unavailable</h3>
               <p className="mt-1 text-xs text-[var(--text)]" role="status">
                 {fixed && !arenaSnap
                   ? `This fixed run is bound to playlist "${fixed.playlistId ?? 'unknown'}". That playlist is no longer available, so its score cannot be reconstructed and no other playlist is substituted.`
@@ -253,7 +253,7 @@ export function Competition() {
               <Card>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-sm font-bold">{fixed ? 'Private fixed run' : 'Practice simulation'}</h3>
+                    <h3 className="lq-section-title">{fixed ? 'Private fixed run' : 'Practice simulation'}</h3>
                     <p className="text-[11px] text-[var(--text-faint)]">
                       {fixed
                         ? `Started ${fixed.startedAt.slice(0, 10)} · ends ${fixed.endsAt.slice(0, 10)} · settings locked · client-computed`
@@ -357,7 +357,7 @@ export function Competition() {
 
               <div className="grid min-w-0 gap-4 md:grid-cols-3">
                 <Card>
-                  <h3 className="text-sm font-bold">My Arena score</h3>
+                  <h3 className="lq-section-title">My Arena score</h3>
                   <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">Window {windowName} · {s.prefs.timezone}</p>
                   {!board.components.available ? (
                     <p className="mt-2 text-xs text-amber-800 dark:text-amber-200" role="status">Score unavailable: the playlist duration is unresolved.</p>
@@ -407,7 +407,7 @@ export function Competition() {
                 </Card>
 
                 <Card className="min-w-0 md:col-span-2">
-                  <h3 className="text-sm font-bold">
+                  <h3 className="lq-section-title">
                     Leaderboard — Arena v2 · {windowName}{paused && ' (paused)'}
                   </h3>
                   <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">

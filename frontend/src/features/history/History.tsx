@@ -176,7 +176,7 @@ export function HistoryView() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Study history <span className="font-normal text-[var(--text-muted)]">({tz})</span></h2>
+        <h2 className="lq-section-title">Study history <span className="font-normal text-[var(--text-muted)]">({tz})</span></h2>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {(['today', 'yesterday', 'week', 'month', 'all', 'custom'] as Preset[]).map((p) => (
             <button key={p} onClick={() => setPreset(p)} className={`rounded-full px-3 py-1 text-xs ${preset === p ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'bg-[var(--surface-soft)] text-[var(--text)]'}`}>{p}</button>
@@ -240,7 +240,7 @@ export function HistoryView() {
       </Card>
 
       <Card>
-        <h3 className="text-sm font-bold">Sessions in {rangeLabel} ({allRows.length}) — click for detail</h3>
+        <h3 className="lq-section-title">Sessions in {rangeLabel} ({allRows.length}) — click for detail</h3>
         {allRows.length === 0 ? (
           <p className="text-xs text-[var(--text-faint)]">
             No sessions have been recorded in {rangeLabel}. Zero is the real total for this period. History before
@@ -268,7 +268,7 @@ export function HistoryView() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
-          <h3 className="text-sm font-bold">Per-video history ({rangeLabel})</h3>
+          <h3 className="lq-section-title">Per-video history ({rangeLabel})</h3>
           <div className="mt-1 flex gap-2">
             <NumberField
               label="Video position"
@@ -438,7 +438,7 @@ function ManualEntry({ onSaved }: { onSaved?: (dateKey: string) => string }) {
 
   return (
     <Card>
-      <h3 className="text-sm font-bold">Self-reported entry <span className="font-normal text-[var(--text-muted)]">(pre-tracking history)</span></h3>
+      <h3 className="lq-section-title">Self-reported entry <span className="font-normal text-[var(--text-muted)]">(pre-tracking history)</span></h3>
       <div className="mt-2 grid grid-cols-2 gap-2">
         <Dropdown
           label="Playlist"

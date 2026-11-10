@@ -1,7 +1,5 @@
-import { render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
 import { niceTicks } from '../../src/components/charts/PanChart.js';
-import { Btn } from '../../src/components/ui/ui.js';
 import {
   challengeWindowDates, computeArenaUserEvidence, createFixedChallenge, DEFAULT_CHALLENGE,
 } from '../../src/domain/competition/competition.js';
@@ -57,11 +55,6 @@ it('ARENA-2: fixed-run dates agree with its advertised start and end', () => {
   expect(fixed.windowDates.filter((date) =>
     date < fixed.startedAt.slice(0, 10) || date > fixed.endsAt.slice(0, 10),
   )).toEqual([]);
-});
-
-it('A11Y-1: an icon-only shared button exposes its caller-supplied name', () => {
-  render(<Btn aria-label="Previous lesson"><svg aria-hidden="true" /></Btn>);
-  expect(screen.getByRole('button')).toHaveAccessibleName('Previous lesson');
 });
 
 it('EXPORT-1: the archive manifest names exactly the files it inventories', () => {
