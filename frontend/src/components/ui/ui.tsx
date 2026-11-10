@@ -1,7 +1,7 @@
 import React, { forwardRef } from 'react';
 
 export function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <section className={`glass rounded-2xl p-4 sm:p-5 shadow-xl ${className}`}>{children}</section>;
+  return <section className={`rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5 ${className}`}>{children}</section>;
 }
 
 interface BtnProps {
@@ -18,13 +18,13 @@ interface BtnProps {
 export const Btn = forwardRef<HTMLButtonElement, BtnProps>(function Btn({
   children, onClick, variant = 'ghost', className = '', type = 'button', disabled, title, 'aria-expanded': ariaExpanded,
 }, ref) {
-  const base = 'inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
+  const base = 'inline-flex min-h-[40px] max-w-full min-w-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ring-offset)] disabled:cursor-not-allowed disabled:opacity-50';
   const styles =
     variant === 'primary'
-      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/40 disabled:hover:bg-violet-600'
+      ? 'bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-text)] disabled:hover:bg-[var(--accent)]'
       : variant === 'danger'
-        ? 'bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 disabled:hover:bg-red-500/15'
-        : 'bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200 disabled:hover:bg-white/5';
+        ? 'bg-red-500/10 text-red-800 dark:text-red-300 border border-red-500/30 hover:bg-red-500/20 disabled:hover:bg-red-500/10'
+        : 'bg-[var(--surface-soft)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-[var(--text)] disabled:hover:bg-[var(--surface-soft)]';
   return (
     <button ref={ref} type={type} disabled={disabled} title={title} aria-expanded={ariaExpanded} onClick={onClick} className={`${base} ${styles} ${className}`}>
       {children}
@@ -34,7 +34,7 @@ export const Btn = forwardRef<HTMLButtonElement, BtnProps>(function Btn({
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block text-xs font-medium text-slate-400">
+    <label className="block text-xs font-medium text-[var(--text-muted)]">
       <span className="mb-1 block">{label}</span>
       {children}
     </label>
@@ -42,14 +42,20 @@ export function Field({ label, children }: { label: string; children: React.Reac
 }
 
 export const inputCls =
-  'w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500';
+  'w-full rounded-lg bg-[var(--surface-soft)] border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]';
 
-export function ProgressBar({ pct, tone = 'violet' }: { pct: number; tone?: 'violet' | 'cyan' | 'emerald' }) {
-  const color = tone === 'emerald' ? 'bg-emerald-400' : tone === 'cyan' ? 'bg-cyan-400' : 'bg-violet-500';
+export function ProgressBar({ pct, tone = 'neutral', className = '' }: { pct: number; tone?: 'neutral' | 'cyan' | 'emerald'; className?: string }) {
+  const color = tone === 'emerald' ? 'bg-emerald-500' : tone === 'cyan' ? 'bg-cyan-500' : 'bg-[var(--text)]';
   const safe = Math.max(0, Math.min(100, pct));
-  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const reduced = (() => {
+    try {
+      const root = document.documentElement;
+      if (root.dataset?.reducedMotion) return root.dataset.reducedMotion === 'true';
+    } catch { /* ignore */ }
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  })();
   return (
-    <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={Math.round(safe)} aria-valuemin={0} aria-valuemax={100}>
+    <div className={`h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-soft)] ${className}`} role="progressbar" aria-valuenow={Math.round(safe)} aria-valuemin={0} aria-valuemax={100}>
       <div className={`h-full rounded-full ${color}`} style={{ width: `${safe}%`, transition: reduced ? 'none' : 'width 400ms ease' }} />
     </div>
   );
@@ -57,9 +63,38 @@ export function ProgressBar({ pct, tone = 'violet' }: { pct: number; tone?: 'vio
 
 export function Empty({ title, hint }: { title: string; hint: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-white/15 p-6 text-center">
-      <p className="font-semibold text-slate-200">{title}</p>
-      <p className="mt-1 text-sm text-slate-400">{hint}</p>
+    <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface)] p-6 text-center">
+      <p className="font-semibold text-[var(--text)]">{title}</p>
+      <p className="mt-1 text-sm text-[var(--text-muted)]">{hint}</p>
+    </div>
+  );
+}
+
+export function Skeleton({ className = '' }: { className?: string }) {
+  return <div aria-hidden="true" className={`animate-pulse rounded-lg bg-[var(--surface-soft)] ${className}`} />;
+}
+
+export function CheckField(props: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const { label, checked, onChange, disabled, className = '' } = props;
+  return (
+    <label className={`flex items-center gap-2 text-sm text-[var(--text)] ${className}`}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 shrink-0 accent-zinc-900 dark:accent-zinc-100" />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+export function SectionHeading({ title, children }: { title: string; children?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <h3 className="text-sm font-bold text-[var(--text)]">{title}</h3>
+      {children}
     </div>
   );
 }

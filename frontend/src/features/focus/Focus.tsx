@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, CheckCircle2, Trash2, Timer as TimerIcon, Coffee, SkipForward } from 'lucide-react';
+import { Play, Pause, CheckCircle2, Trash2, Coffee, SkipForward } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import {
   formatHuman, computePlaylistProgress, sessionsNeeded, dateKeyInTimezone, calendarWindowDates,
@@ -13,7 +13,8 @@ import { useDayTick } from '../../app/dayTick.js';
 import { notify } from '../../services/notifications/notify.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { NumberField } from '../../components/ui/NumberField.js';
-import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
+import { Btn, Field, inputCls } from '../../components/ui/ui.js';
+import { useChartTheme } from '../../components/charts/theme.js';
 
 const TIMER_STORAGE_KEY_V1 = 'lq-focus-timer-v1';
 const TIMER_STORAGE_PREFIX = 'lq-focus-timer-v2:';
@@ -85,6 +86,7 @@ function persistTimer(key: string, state: FocusTimerState, note = '', manualMin:
 
 export function Focus() {
   const s = useStore();
+  const { TICK, AXIS_LABEL, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const storageKey = focusStorageKey(s.mode, s.authUser?.userId ?? null);
   const storageKeyRef = useRef(storageKey);
   storageKeyRef.current = storageKey;
@@ -523,11 +525,11 @@ export function Focus() {
   const actual = (focusByDay.get(todayKey) ?? 0) / 60;
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <h2 className="flex items-center gap-1.5 text-base font-bold"><TimerIcon size={16} /> Focus timer <span className="font-normal text-slate-400">(focused time ≠ video length)</span></h2>
+    <div className="space-y-6">
+      <section aria-labelledby="focus-timer-heading" className="pt-1">
+        <h2 id="focus-timer-heading" className="text-xs font-semibold text-[var(--text-muted)]">Focus timer</h2>
         {(recovered || recoveredReview) && timer.phase === 'paused' && (
-          <div className="mt-1 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200">
+          <div className="mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">
             <p>
               Recovered paused session. Time while the page was closed was not counted; press Resume to continue.
             </p>
@@ -538,13 +540,12 @@ export function Focus() {
             )}
           </div>
         )}
-        {lockNotice && <p role="alert" className="mt-1 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200">{lockNotice}</p>}
-        <p className="mt-1 font-mono text-5xl font-bold tabular-nums" aria-live="off">{fmtClock(activeSec)}</p>
-        <p className="text-xs text-slate-400">
-          Timer-active time excludes pauses. Elapsed time {fmtClock(wallSec)}. The timer auto-pauses when this tab is hidden; only real active intervals are saved.
-          Finishing never auto-marks videos complete.
+        {lockNotice && <p role="alert" className="mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">{lockNotice}</p>}
+        <p className="mt-2 text-center font-mono text-6xl font-semibold tabular-nums tracking-tight text-[var(--text)] sm:text-7xl" aria-live="off">{fmtClock(activeSec)}</p>
+        <p className="mt-1 text-center text-xs text-[var(--text-muted)]">
+          {fmtClock(wallSec)} elapsed · active intervals only · pauses excluded
         </p>
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           {timer.phase === 'running' ? <Btn onClick={pause}><Pause size={14} /> Pause</Btn> : (
             <Btn variant="primary" onClick={start}><Play size={14} /> {timer.phase === 'paused' ? 'Resume' : 'Start'}</Btn>
           )}
@@ -561,19 +562,19 @@ export function Focus() {
           <div
             role="group"
             aria-label="Confirm timer reset"
-            className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200"
+            className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200"
           >
             <p>
               Discard this timer? Recorded time, the draft note and any manual correction will be cleared. Finished sessions are not affected.
             </p>
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
               <Btn onClick={reset}>Discard timer</Btn>
               <Btn variant="ghost" onClick={() => setConfirmReset(false)}>Keep timer</Btn>
             </div>
           </div>
         )}
-        <details className="mt-2 rounded-xl bg-white/5 p-2 text-xs text-slate-300">
-          <summary className="cursor-pointer font-semibold text-slate-200">Add a note or manual correction (optional)</summary>
+        <details className="mt-2 rounded-lg bg-[var(--surface-soft)] p-2 text-xs text-[var(--text)]">
+          <summary className="cursor-pointer font-semibold text-[var(--text)]">Add a note or manual correction (optional)</summary>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <Field label="Session note"><input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What did you work on?" /></Field>
             <NumberField
@@ -587,14 +588,14 @@ export function Focus() {
               error={manualError}
             />
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1 text-[11px] text-[var(--text-faint)]">
             Adjusted time is saved as an estimated session and is never presented as player-verified playback.
           </p>
         </details>
-      </Card>
+      </section>
 
-      <Card>
-        <h3 className="text-sm font-bold">Today's plan ({todayKey})</h3>
+      <section aria-labelledby="focus-today-heading" className="border-t border-[var(--border)] pt-5">
+        <h3 id="focus-today-heading" className="text-sm font-semibold text-[var(--text)]">Today</h3>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <NumberField label="Daily study goal (min)" value={targetMin} onCommit={setTargetMin} min={5} max={720} error={goalError} />
           <NumberField label="Minimum daily goal (min)" value={minViable} onCommit={setMinViable} min={1} max={720} />
@@ -612,63 +613,63 @@ export function Focus() {
           const prog = computePlaylistProgress(snap, s.progress);
           const remaining = prog.remainingSec;
           return (
-            <p className="mt-2 text-xs text-slate-400">
+            <p className="mt-2 text-xs text-[var(--text-muted)]">
               {remaining !== null
                 ? `Remaining content ${formatHuman(remaining)} fits ≈${sessionsNeeded(remaining, s.prefs.sessionLenMin * 60)} sessions of ${s.prefs.sessionLenMin} min (video time; real study with notes/practice usually takes longer).`
                 : 'Remaining duration unknown (incomplete metadata) — plan by video count instead.'}
             </p>
           );
         })()}
-        {goalError && <p className="mt-1 text-xs text-red-300" role="alert">{goalError}</p>}
+        {goalError && <p className="mt-1 text-xs text-red-800 dark:text-red-300" role="alert">{goalError}</p>}
         {(() => {
           const g = s.goals[todayKey];
-          if (!g) return <p className="mt-1 text-xs text-slate-500">No goal yet today. Even {s.prefs.minViableMin} focused minutes keeps the habit alive.</p>;
+          if (!g) return <p className="mt-1 text-xs text-[var(--text-faint)]">No goal yet today. Even {s.prefs.minViableMin} focused minutes keeps the habit alive.</p>;
           const done = focusByDay.get(todayKey) ?? 0;
           if (done < g.targetFocusSec && g.targetFocusSec - done > 3600) {
-            return <p className="mt-1 text-xs text-cyan-300">Large remainder ({formatHuman(g.targetFocusSec - done)}). Consider shrinking to a {s.prefs.minViableMin}-minute minimum viable session — no shame, consistency wins.</p>;
+            return <p className="mt-1 text-xs text-cyan-800 dark:text-cyan-300">Large remainder ({formatHuman(g.targetFocusSec - done)}). Consider shrinking to a {s.prefs.minViableMin}-minute minimum viable session — no shame, consistency wins.</p>;
           }
           return null;
         })()}
-      </Card>
+      </section>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <h3 className="text-sm font-bold">Planned vs actual (today)</h3>
-          <p className="text-[11px] text-slate-500">Focused minutes: target vs recorded (pauses excluded)</p>
+      <div className="grid gap-6 md:grid-cols-2">
+        <section aria-labelledby="focus-planned-heading" className="border-t border-[var(--border)] pt-4">
+          <h3 id="focus-planned-heading" className="text-sm font-semibold text-[var(--text)]">Planned vs actual</h3>
+          <p className="text-[11px] text-[var(--text-faint)]">Focused minutes: target vs recorded (pauses excluded)</p>
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={[{ name: 'Planned', v: Math.round(planned) }, { name: 'Actual', v: Math.round(actual) }]} margin={{ top: 8, right: 8, bottom: 4, left: -8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff14" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} label={{ value: 'min', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
-                <Tooltip contentStyle={{ backgroundColor: '#141830', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 12, fontSize: 12, color: '#e8ecf6' }} formatter={(v: any) => [`${v} min`, 'focused']} />
-                <Bar dataKey="v" fill="#34d399" radius={[4, 4, 0, 0]} maxBarSize={64} />
+                <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+                <XAxis dataKey="name" tick={TICK} />
+                <YAxis tick={TICK} label={{ value: 'min', angle: -90, position: 'insideLeft', fontSize: 11, fill: AXIS_LABEL.fill }} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'focused']} />
+                <Bar dataKey="v" fill={SERIES.emerald} radius={[4, 4, 0, 0]} maxBarSize={64} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </Card>
-        <Card>
-          <h3 className="text-sm font-bold">Session history</h3>
-          {s.sessions.length === 0 ? <p className="text-xs text-slate-500">No sessions yet.</p> : (
+        </section>
+        <section aria-labelledby="focus-history-heading" className="border-t border-[var(--border)] pt-4">
+          <h3 id="focus-history-heading" className="text-sm font-semibold text-[var(--text)]">Sessions</h3>
+          {s.sessions.length === 0 ? <p className="text-xs text-[var(--text-faint)]">No sessions yet.</p> : (
             <ul className="mt-1 max-h-44 space-y-1 overflow-auto text-xs">
               {[...s.sessions].reverse().slice(0, 20).map((x) => (
-                <li key={x.id} className="flex items-center gap-2 border-b border-white/5 pb-1">
+                <li key={x.id} className="flex items-center gap-2 border-b border-[var(--border)] pb-1">
                   <span className="font-mono">{x.dateKey}</span>
                   <span className="font-mono">{formatHuman(x.activeSec)}</span>
-                  {x.estimated && <span className="text-amber-300">estimated</span>}
-                  <span className="truncate text-slate-400">{x.note ?? ''}</span>
-                  <button className="ml-auto text-slate-500" onClick={() => s.deleteSession(x.id)} aria-label="Delete session"><Trash2 size={13} /></button>
+                  {x.estimated && <span className="text-amber-800 dark:text-amber-300">estimated</span>}
+                  <span className="truncate text-[var(--text-muted)]">{x.note ?? ''}</span>
+                  <button className="ml-auto text-[var(--text-faint)]" onClick={() => s.deleteSession(x.id)} aria-label="Delete session"><Trash2 size={13} /></button>
                 </li>
               ))}
             </ul>
           )}
-        </Card>
+        </section>
       </div>
 
-      <Card>
-        <h3 className="text-sm font-bold">Weekly review (recorded data only)</h3>
+      <section aria-labelledby="focus-weekly-heading" className="border-t border-[var(--border)] pt-5">
+        <h3 id="focus-weekly-heading" className="text-sm font-semibold text-[var(--text)]">Weekly review</h3>
         <WeeklyReview days={week} />
-      </Card>
+      </section>
     </div>
   );
 }
@@ -703,16 +704,16 @@ function WeeklyReview({ days }: { days: { day: string; sec: number; key: string 
   };
   const vids = Object.values(s.progress).filter((p) => isProgressComplete(p) && inWeek(p.completedAt)).length;
   const cps = s.checkpoints.filter((c) => inWeek(c.completedAt)).length;
-  if (total === 0 && vids === 0) return <p className="text-xs text-slate-500">Insufficient data — finish a video or a focus session to generate a review.</p>;
+  if (total === 0 && vids === 0) return <p className="text-xs text-[var(--text-faint)]">Insufficient data — finish a video or a focus session to generate a review.</p>;
   return (
     <div className="text-sm">
       <p>{formatHuman(total)} focused · {vids} videos completed · {cps} checkpoints.</p>
       <div className="mt-2 flex gap-1" role="img" aria-label="Study calendar, last 7 days">
         {days.map((d) => (
-          <div key={d.key} title={`${d.key}: ${formatHuman(d.sec)}`} className={`h-8 flex-1 rounded ${d.sec === 0 ? 'bg-white/5' : d.sec < 900 ? 'bg-emerald-900' : d.sec < 3600 ? 'bg-emerald-600' : 'bg-emerald-400'}`} />
+          <div key={d.key} title={`${d.key}: ${formatHuman(d.sec)}`} className={`h-8 flex-1 rounded ${d.sec === 0 ? 'bg-[var(--surface-soft)]' : d.sec < 900 ? 'bg-emerald-900' : d.sec < 3600 ? 'bg-emerald-600' : 'bg-emerald-400'}`} />
         ))}
       </div>
-      <p className="mt-1 text-xs text-slate-400">Next week: aim for one more active day than this week. Missed days? Welcome back — progress is preserved.</p>
+      <p className="mt-1 text-xs text-[var(--text-muted)]">Next week: aim for one more active day than this week. Missed days? Welcome back — progress is preserved.</p>
     </div>
   );
 }

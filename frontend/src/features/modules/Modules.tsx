@@ -83,27 +83,27 @@ export function Modules() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Modules <span className="font-normal text-slate-400">(optional grouping over playlist positions)</span></h2>
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+        <h2 className="text-base font-bold">Modules <span className="font-normal text-[var(--text-muted)]">(optional grouping over playlist positions)</span></h2>
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
           <input className={inputCls} placeholder="Module name (you choose — never auto-assigned)" value={name} onChange={(e) => setName(e.target.value)} aria-label="Module name" />
           <input className={inputCls} placeholder={`Positions, e.g. 1-8, 10 (1–${snap.entries.length})`} value={positions} onChange={(e) => setPositions(e.target.value)} aria-label="Module positions" />
-          <Btn variant="primary" onClick={create} disabled={!name.trim()}><Plus size={14} /> Create</Btn>
+          <Btn variant="primary" className="w-full whitespace-nowrap sm:w-auto" onClick={create} disabled={!name.trim()}><Plus size={14} /> Create</Btn>
         </div>
-        {err && <p className="mt-1 text-sm text-red-300">{err}</p>}
+        {err && <p className="mt-1 text-sm text-red-800 dark:text-red-300">{err}</p>}
       </Card>
       {mods.length === 0 && (
         <Card>
           <h3 className="text-sm font-bold">What is a module?</h3>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             A module is a group of playlist videos <i>you</i> define — e.g. “JavaScript Fundamentals” or “Practice
             Exercises”. LearnQuest never claims to know a playlist's real syllabus; modules only group what you assign.
           </p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-300">
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--text)]">
             <li>Name it above (e.g. <span className="font-mono">HTML Basics</span>).</li>
             <li>List positions like <span className="font-mono">1-8, 10</span> (valid: 1–{snap.entries.length}).</li>
             <li>Press <b>Create</b> — progress, rename, reassign, and reorder controls appear on each module card.</li>
           </ol>
-          <p className="mt-1 text-xs text-slate-500">Videos may stay unassigned. Nothing is created until you press Create — no fake chapters.</p>
+          <p className="mt-1 text-xs text-[var(--text-faint)]">Videos may stay unassigned. Nothing is created until you press Create — no fake chapters.</p>
         </Card>
       )}
       {mods.map((m, idx) => {
@@ -114,7 +114,7 @@ export function Modules() {
         return (
           <Card key={m.id}>
             <div className="flex flex-wrap items-center gap-2">
-              <p className="mr-auto font-semibold">{m.name} <span className="text-xs font-normal text-slate-400">· {m.positions.length} videos · {done} done · {sum.isComplete ? formatSecondsHHMMSS(sum.totalSec) : `${formatSecondsHHMMSS(sum.totalSec)} +?`}</span></p>
+              <p className="mr-auto font-semibold">{m.name} <span className="text-xs font-normal text-[var(--text-muted)]">· {m.positions.length} videos · {done} done · {sum.isComplete ? formatSecondsHHMMSS(sum.totalSec) : `${formatSecondsHHMMSS(sum.totalSec)} +?`}</span></p>
               <Btn onClick={() => s.moveModule(m.id, -1)} disabled={idx === 0} aria-label={`Move ${m.name} up`}><ChevronUp size={14} /></Btn>
               <Btn onClick={() => s.moveModule(m.id, 1)} disabled={idx === mods.length - 1} aria-label={`Move ${m.name} down`}><ChevronDown size={14} /></Btn>
               <Btn onClick={async () => { const l = await promptDialog({ title: 'Rename module', initial: m.name }); if (l) s.saveModule({ ...m, name: l }, m.id); }} aria-label={`Rename ${m.name}`}><Pencil size={14} /></Btn>
@@ -130,7 +130,7 @@ export function Modules() {
               <Btn onClick={() => s.deleteModule(m.id)} variant="danger" aria-label={`Delete ${m.name}`}><Trash2 size={14} /></Btn>
             </div>
             <ProgressBar pct={m.positions.length ? (done / m.positions.length) * 100 : 0} tone="cyan" />
-            <p className="mt-1 text-xs text-slate-500">Positions: {m.positions.slice(0, 20).join(', ')}{m.positions.length > 20 ? ` … +${m.positions.length - 20}` : ''}</p>
+            <p className="mt-1 text-xs text-[var(--text-faint)]">Positions: {m.positions.slice(0, 20).join(', ')}{m.positions.length > 20 ? ` … +${m.positions.length - 20}` : ''}</p>
           </Card>
         );
       })}

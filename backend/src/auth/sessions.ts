@@ -148,14 +148,28 @@ export async function revokeSessionById(store: DataStore, userId: string, sessio
   return r.matchedCount > 0;
 }
 
+/**
+ * Revoke every active session for an account atomically. `find` then per-id
+ * updates run inside one transaction when the adapter supports it, so a
+ * concurrent login can never observe (or slip into) a half-revoked state and
+ * a pre-existing session is either revoked or not — never "probably".
+ * Without the transaction capability (in-memory tests without an adapter
+ * transaction), the sequential fallback is still correct: each session is
+ * independently fail-closed at authentication time.
+ */
 export async function revokeAllSessions(store: DataStore, userId: string, exceptSessionId?: string): Promise<number> {
-  const filter: Record<string, unknown> = { userId, revokedAt: null };
-  if (exceptSessionId) filter.sessionId = { $ne: exceptSessionId };
-  const active = await store.sessions.find(filter);
-  for (const s of active) {
-    await store.sessions.updateOne({ sessionId: s.sessionId }, { $set: { revokedAt: new Date().toISOString() } });
-  }
-  return active.length;
+  const revokeAll = async (tx: DataStore): Promise<number> => {
+    const filter: Record<string, unknown> = { userId, revokedAt: null };
+    if (exceptSessionId) filter.sessionId = { $ne: exceptSessionId };
+    const active = await tx.sessions.find(filter);
+    const revokedAt = new Date().toISOString();
+    for (const s of active) {
+      await tx.sessions.updateOne({ sessionId: s.sessionId }, { $set: { revokedAt } });
+    }
+    return active.length;
+  };
+  if (store.transaction) return store.transaction(revokeAll);
+  return revokeAll(store);
 }
 
 export async function listSessions(store: DataStore, userId: string) {

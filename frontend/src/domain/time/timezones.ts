@@ -36,11 +36,27 @@ const FALLBACK_ZONES = [
 
 const DEDUPED_FALLBACK = [...new Set(FALLBACK_ZONES)];
 
+/**
+ * Etc/GMT virtual zones are NOT returned by Intl.supportedValuesOf in most
+ * runtimes. They are generated explicitly. POSIX sign inversion applies:
+ * Etc/GMT+4 displays UTC−04:00, while Etc/GMT−4 displays UTC+04:00.
+ * These are honestly-derived virtual zones — used for display and offset only.
+ */
+function buildEtcZones(): string[] {
+  const out = new Set<string>(['Etc/UTC', 'Etc/GMT', 'Etc/Universal', 'Etc/Zulu']);
+  for (let i = 1; i <= 12; i += 1) out.add(`Etc/GMT+${i}`); // displays UTC−i
+  for (let i = 1; i <= 14; i += 1) out.add(`Etc/GMT-${i}`); // displays UTC+i
+  return [...out];
+}
+const ETC_ZONES = buildEtcZones();
+
 /** Alias search: common abbreviations/city spellings → canonical zones. */
 const ALIASES: Record<string, string> = {
   ist: 'Asia/Kolkata',
   kolkata: 'Asia/Kolkata',
   calcutta: 'Asia/Kolkata',
+  npt: 'Asia/Kathmandu',
+  nepal: 'Asia/Kathmandu',
   pst: 'America/Los_Angeles',
   mst: 'America/Denver',
   cst: 'America/Chicago',
@@ -55,9 +71,21 @@ const ALIASES: Record<string, string> = {
   kst: 'Asia/Seoul',
   cstcn: 'Asia/Shanghai',
   nzst: 'Pacific/Auckland',
+  sydney: 'Australia/Sydney',
+  sydneytime: 'Australia/Sydney',
+  london: 'Europe/London',
+  paris: 'Europe/Paris',
+  moscow: 'Europe/Moscow',
+  istanbul: 'Europe/Istanbul',
+  singapore: 'Asia/Singapore',
+  hongkong: 'Asia/Hong_Kong',
   kyiv: 'Europe/Kyiv',
   kiev: 'Europe/Kyiv',
   local: 'local',
+  auckland: 'Pacific/Auckland',
+  apia: 'Pacific/Apia',
+  casablanca: 'Africa/Casablanca',
+  lordhowe: 'Australia/Lord_Howe',
 };
 
 /**
@@ -122,7 +150,7 @@ export function getAvailableZones(): string[] {
   }
   // Union with the curated catalogue so canonical modern names (Kolkata, Kyiv)
   // are always offered even when a runtime lists legacy equivalents.
-  for (const z of DEDUPED_FALLBACK) out.add(z);
+  for (const z of [...DEDUPED_FALLBACK, ...ETC_ZONES]) out.add(z);
   return [...out];
 }
 
@@ -179,7 +207,7 @@ export function formatOffset(min: number | null): string {
   return `UTC${sign}${h}:${m}`;
 }
 
-/** Score-based search across city, region, identifier, and aliases. */
+/** Score-based search across city, region, identifier, UTC offset, and aliases. */
 export function searchZones(query: string, zones: string[], limit = 60): string[] {
   const q = query.trim().toLowerCase();
   if (!q) {
@@ -189,11 +217,22 @@ export function searchZones(query: string, zones: string[], limit = 60): string[
     return [...hubs.filter((z) => zones.includes(z)), ...rest].slice(0, limit);
   }
   const aliasHit = ALIASES[q];
+  const aliasHitComma = ALIASES[q.replace(/\s+/g, ' ')];
+  const offsetQuery = parseOffsetQuery(q);
+  const now = new Date();
   const scored: { z: string; score: number }[] = [];
   for (const z of zones) {
-    if (z === aliasHit) {
+    if (z === aliasHit || z === aliasHitComma) {
       scored.push({ z, score: 0 });
       continue;
+    }
+    // UTC offset match (e.g. "+5:30", "+0530", "-0500", "+05:30")
+    if (offsetQuery !== null) {
+      const minutes = utcOffsetMinutes(now, z);
+      if (minutes !== null && minutes === offsetQuery) {
+        scored.push({ z, score: 0 });
+        continue;
+      }
     }
     const city = cityOf(z).toLowerCase();
     const region = regionOf(z).toLowerCase();
@@ -211,4 +250,17 @@ export function searchZones(query: string, zones: string[], limit = 60): string[
     .sort((a, b) => a.score - b.score || a.z.localeCompare(b.z))
     .slice(0, limit)
     .map((s) => s.z);
+}
+
+const OFFSET_TOKEN_RE = /^([+-])(\d{2}):?(\d{2})$/;
+
+/** Parse "+05:30", "+0530", "-0500" into minutes east of UTC. Null when not an offset query. */
+function parseOffsetQuery(q: string): number | null {
+  const match = q.match(OFFSET_TOKEN_RE);
+  if (!match) return null;
+  const hours = Number(match[2]);
+  const minutes = Number(match[3]);
+  const total = hours * 60 + minutes;
+  if (total > 14 * 60) return null;
+  return match[1] === '-' ? -total : total;
 }

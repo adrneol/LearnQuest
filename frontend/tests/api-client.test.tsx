@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { apiUrl, getApiBase, checkApiHealth } from '../src/services/api/playlistApi.js';
 import { apiRequest, setCsrfToken } from '../src/services/api/http.js';
-import App from '../src/app/App';
 import { StoreProvider } from '../src/app/store';
 
 const realFetch = globalThis.fetch;
@@ -108,25 +107,29 @@ describe('health check truthfulness', () => {
   });
 });
 
-describe('backend status recovery without reload', () => {
-  it('offline pill recovers on window focus once the backend responds', async () => {
+describe('backend connection reporting (Settings-only)', () => {
+  it('shows setup guidance only while action is needed, without a permanent status badge', async () => {
+    const { Settings } = await import('../src/features/settings/Settings');
     let fail = true;
     globalThis.fetch = (async (url: any) => {
+      const u = String(url);
       if (fail) throw new TypeError('fetch failed');
-      return { ok: true, json: async () => ({ ok: true, hasKey: true }) } as Response;
+      if (u.endsWith('/api/health')) return { ok: true, json: async () => ({ ok: true, hasKey: true }) } as Response;
+      return { ok: true, json: async () => ({}) } as Response;
     }) as any;
+
     render(
-      <StoreProvider>
-        <App />
+      <StoreProvider mode="local">
+        <Settings />
       </StoreProvider>,
     );
-    expect(await screen.findByText(/API offline/)).toBeTruthy();
+    // Attention state: guidance visible only while something is wrong.
+    expect(await screen.findByText(/Backend unreachable\. JSON import still works\./)).toBeTruthy();
+    expect(screen.getByText(/Backend connection/)).toBeTruthy();
+
     fail = false;
-    window.dispatchEvent(new Event('focus'));
-    expect(await screen.findByText(/API ready/)).toBeTruthy();
-    await waitFor(() => {
-      // healthy: no further polling listeners remain attached (single recovery fetch)
-      expect(screen.queryByText(/API offline/)).toBeNull();
-    });
+    fireEvent.click(screen.getByText('Recheck'));
+    expect(await screen.findByText(/YouTube metadata API connected\./)).toBeTruthy();
+    expect(screen.queryByText(/YouTube Data API v3/i)).toBeNull();
   });
 });

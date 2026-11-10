@@ -1,5 +1,5 @@
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
-import { TOOLTIP_STYLE, SERIES } from './theme.js';
+import { useChartTheme } from './theme.js';
 
 interface Props {
   done: number;
@@ -13,9 +13,10 @@ interface Props {
  * a neutral ring + explicit 0% replaces the misleading single-color pie.
  */
 export function ProgressDonut({ done, total, heightClass = 'h-52', emptyHint }: Props) {
+  const { TOOLTIP_STYLE, SERIES } = useChartTheme();
   if (total <= 0) {
     return (
-      <div className={`${heightClass} grid place-items-center rounded-xl border border-dashed border-white/15 text-sm text-slate-500`}>
+      <div className={`${heightClass} grid place-items-center rounded-lg border border-dashed border-[var(--border-strong)] text-sm text-[var(--text-faint)]`}>
         {emptyHint ?? 'No entries to show yet.'}
       </div>
     );
@@ -23,10 +24,10 @@ export function ProgressDonut({ done, total, heightClass = 'h-52', emptyHint }: 
   if (done <= 0) {
     return (
       <div className={`${heightClass} flex flex-col items-center justify-center gap-1`}>
-        <div className="grid h-28 w-28 place-items-center rounded-full border-8 border-white/10">
-          <span className="font-mono text-xl font-bold text-slate-300">0%</span>
+        <div className="grid h-28 w-28 place-items-center rounded-full border-8 border-[var(--border)]">
+          <span className="font-mono text-xl font-bold text-[var(--text-muted)]">0%</span>
         </div>
-        <p className="text-xs text-slate-400">0 of {total} done — complete your first video to start the chart.</p>
+        <p className="text-xs text-[var(--text-muted)]">0 of {total} done — complete your first video to start the chart.</p>
       </div>
     );
   }

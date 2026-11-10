@@ -7,7 +7,7 @@ import {
 import type { PlaybackSegment, PlaylistEntry } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { notify } from '../../services/notifications/notify.js';
-import { Card, Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
+import { Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import { PlayerLearningRecord } from './LearningRecordEditor.js';
 
@@ -467,22 +467,21 @@ function PlayerInner() {
   const currentKey = entry ? entryKey(snap.playlistId, entry) : `${snap.playlistId}::${pos}`;
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-0 flex-1 basis-full sm:basis-auto">
-            <h2 className="text-base font-bold">Now playing #{pos}</h2>
-            <p className="max-w-xl break-words text-sm text-slate-400" title={entry?.title}>{entry?.title}</p>
-          </div>
-          <span className={`max-w-full shrink-0 rounded-full px-2 py-1 text-[11px] ${completion === 'verified' ? 'bg-emerald-500/15 text-emerald-300' : completion === 'manual' ? 'bg-cyan-500/15 text-cyan-300' : completion === 'in-progress' ? 'bg-violet-500/20 text-violet-200' : completion === 'unavailable' ? 'bg-red-500/15 text-red-300' : 'bg-white/5 text-slate-400'}`}>
-            {completion === 'verified' ? '✓ verified' : completion === 'manual' ? 'manual complete' : completion === 'in-progress' ? 'in progress' : completion === 'needs-revision' ? 'needs revision' : completion === 'unavailable' ? 'unavailable' : 'not started'}
+    <>
+    <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,26rem)]">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="font-mono text-lg tabular-nums font-semibold text-[var(--text)]">#{pos}</h2>
+          <p className="min-w-0 basis-full break-words text-sm font-medium text-[var(--text)]" title={entry?.title}>{entry?.title}</p>
+          <span className="text-[11px] text-[var(--text-faint)]">
+            {completion === 'verified' ? 'verified' : completion === 'manual' ? 'manual complete' : completion === 'in-progress' ? 'in progress' : completion === 'needs-revision' ? 'needs revision' : completion === 'unavailable' ? 'unavailable' : 'not started'}
           </span>
         </div>
-        <div className="mt-3 aspect-video w-full overflow-hidden rounded-xl bg-black">
+        <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-black ring-1 ring-[var(--border)]">
           <div ref={mountRef} className="h-full w-full" />
         </div>
         {err && (
-          <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-200">
+          <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-200">
             <p className="flex items-start gap-2">
               <TriangleAlert size={15} className="mt-0.5 shrink-0" />
               <span>
@@ -502,77 +501,90 @@ function PlayerInner() {
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Btn variant="primary" onClick={play} disabled={state === 'error' || !entry?.videoId}><Play size={14} /> Play</Btn>
           <Btn onClick={pause}><Pause size={14} /> Pause</Btn>
-          <Btn onClick={() => go(pos - 1)} disabled={pos <= 1}><SkipBack size={14} /> Prev</Btn>
-          <Btn onClick={() => go(pos + 1)} disabled={pos >= N}>Next <SkipForward size={14} /></Btn>
-          <Btn onClick={enqueue}><ListPlus size={14} /> Queue</Btn>
-          <span className="w-full break-words font-mono text-xs text-slate-400 sm:ml-auto sm:w-auto">
+          <Btn onClick={() => go(pos - 1)} disabled={pos <= 1} aria-label="Previous lesson"><SkipBack size={14} /></Btn>
+          <Btn onClick={() => go(pos + 1)} disabled={pos >= N} aria-label="Next lesson"><SkipForward size={14} /></Btn>
+          <Btn onClick={enqueue} title="Queue this lesson"><ListPlus size={14} /></Btn>
+          <span className="w-full break-words font-mono text-xs text-[var(--text-muted)] sm:ml-auto sm:w-auto">
             {formatSecondsHHMMSS(Math.floor(cur))} / {dur !== null ? formatSecondsHHMMSS(dur) : '?'} · {rate}x · unique {formatSecondsHHMMSS(Math.floor(cov.uniqueSec))}
           </span>
         </div>
         {dur !== null && dur > 0 && (
           <div className="mt-2"><ProgressBar pct={(cur / dur) * 100} tone="cyan" /></div>
         )}
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <NumberField
-            label={`Jump to position (1–${N})`}
-            value={pos}
-            min={1}
-            max={N}
-            live={false}
-            onCommit={(v) => { if (v !== null) go(v); }}
-          />
-          <Field label="Pause-note (saved when the video ends)">
-            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What to remember…" className={inputCls} />
-          </Field>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Btn onClick={() => entry && s.toggleDone(snap.playlistId, pos, entry.videoId)}>
-            <CheckCircle2 size={14} /> {rec?.completedAt ? 'Unmark complete' : 'Mark complete (manual — not verified)'}
-          </Btn>
-          <Btn
-            onClick={() => {
-              if (!entry) return;
-              const curRec = s.progress[currentKey] ?? rec;
-              s.updateRecord(currentKey, {
-                playlistId: snap.playlistId,
-                position: pos,
-                entryId: entryIdentity(entry),
-                videoId: entry.videoId,
-                status: curRec?.status ?? 'in-progress',
-                completedAt: curRec?.completedAt ?? null,
-                needsRevision: !curRec?.needsRevision,
-              });
-            }}
-            aria-pressed={!!rec?.needsRevision}
-          >
-            <BookmarkPlus size={14} /> {rec?.needsRevision ? 'Unflag revision' : 'Needs revision'}
-          </Btn>
-          {entry?.videoId && (
-            <a className="inline-flex items-center gap-1.5 rounded-xl bg-white/5 px-3 py-2 text-sm" target="_blank" rel="noreferrer" href={`https://www.youtube.com/watch?v=${entry.videoId}&list=${snap.playlistId}`}>
-              <ExternalLink size={14} /> YouTube
-            </a>
-          )}
-        </div>
-        <p className="mt-2 text-[11px] text-slate-500">
-          Verified completion at ≥{Math.round(s.settings.verifiedThreshold * 100)}% unique coverage (Settings). Telemetry samples position ~2×/s; seeks never credit skipped spans; buffering never counts. Watching on YouTube directly cannot be verified here.
-        </p>
-      </Card>
+      </div>
 
-      {entry && <PlayerLearningRecord entry={entry} />}
-
-      <Card>
-        <h3 className="text-sm font-bold">Learning queue ({queue.length})</h3>
-        {queue.length === 0 ? (
-          <p className="text-xs text-slate-500">Queue videos to build tonight's session order. Queue is per-playlist.</p>
-        ) : (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {queue.map((p) => (
-              <button key={p} onClick={() => go(p)} className={`rounded-lg px-2 py-1 font-mono text-xs ${p === pos ? 'bg-violet-600 text-white' : 'bg-white/5 text-slate-300'}`}>#{p}</button>
-            ))}
-            <button onClick={() => s.setQueue(snap.playlistId, [])} className="rounded-lg px-2 py-1 text-xs text-slate-500 underline">Clear</button>
+      <aside className="min-w-0 space-y-5 border-t border-[var(--border)] pt-5 lg:border-t-0 lg:border-l lg:pl-5 lg:pt-0">
+        <section>
+          <h3 className="text-sm font-semibold text-[var(--text)]">This lesson</h3>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <NumberField
+              label={`Jump to position (1–${N})`}
+              value={pos}
+              min={1}
+              max={N}
+              live={false}
+              onCommit={(v) => { if (v !== null) go(v); }}
+            />
+            <Field label="Pause note">
+              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What to remember…" className={inputCls} aria-label="Pause note" />
+            </Field>
           </div>
-        )}
-      </Card>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Btn onClick={() => entry && s.toggleDone(snap.playlistId, pos, entry.videoId)}>
+              <CheckCircle2 size={14} /> {rec?.completedAt ? 'Unmark complete' : 'Mark complete'}
+            </Btn>
+            <Btn
+              onClick={() => {
+                if (!entry) return;
+                const curRec = s.progress[currentKey] ?? rec;
+                s.updateRecord(currentKey, {
+                  playlistId: snap.playlistId,
+                  position: pos,
+                  entryId: entryIdentity(entry),
+                  videoId: entry.videoId,
+                  status: curRec?.status ?? 'in-progress',
+                  completedAt: curRec?.completedAt ?? null,
+                  needsRevision: !curRec?.needsRevision,
+                });
+              }}
+              aria-pressed={!!rec?.needsRevision}
+            >
+              <BookmarkPlus size={14} /> {rec?.needsRevision ? 'Unflag revision' : 'Needs revision'}
+            </Btn>
+            {entry?.videoId && (
+              <a className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm text-[var(--text-muted)] hover:text-[var(--text)]" target="_blank" rel="noreferrer" href={`https://www.youtube.com/watch?v=${entry.videoId}&list=${snap.playlistId}`}>
+                <ExternalLink size={14} /> YouTube
+              </a>
+            )}
+          </div>
+          <p className="mt-2 text-[11px] text-[var(--text-faint)]">
+            Completion verified at {Math.round(s.settings.verifiedThreshold * 100)}% unique coverage (Settings). Seeks never credit skipped spans; buffering never counts.
+          </p>
+        </section>
+
+        <section className="border-t border-[var(--border)] pt-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-[var(--text)]">Queue ({queue.length})</h3>
+            {queue.length > 0 && (
+              <button onClick={() => s.setQueue(snap.playlistId, [])} className="text-xs text-[var(--text-faint)] underline">Clear</button>
+            )}
+          </div>
+          {queue.length === 0 ? (
+            <p className="mt-1.5 text-xs text-[var(--text-faint)]">Empty — queue videos for tonight.</p>
+          ) : (
+            <ol className="mt-1.5 flex flex-wrap gap-1">
+              {queue.map((p) => (
+                <li key={p}>
+                  <button onClick={() => go(p)} className={`rounded-md px-2 py-1 font-mono text-xs tabular-nums ${p === pos ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'bg-[var(--surface-soft)] text-[var(--text)]'}`}>#{p}</button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </aside>
     </div>
+
+    {entry && <PlayerLearningRecord entry={entry} />}
+    </>
   );
 }

@@ -76,7 +76,7 @@ export function Reports() {
           <Btn variant="primary" onClick={() => add(false)} disabled={busy || !url.trim()}><Plus size={14} /> Add</Btn>
           <Btn onClick={() => add(true)} disabled={busy || !snap}><RefreshCw size={14} /> Refresh active{snap ? ` (#${snap.entries.length})` : ''}</Btn>
         </div>
-        {msg && <p className="mt-1 text-sm text-slate-300">{msg}</p>}
+        {msg && <p className="mt-1 text-sm text-[var(--text)]">{msg}</p>}
         <PlaylistTable ids={allIds} />
       </Card>
 
@@ -105,7 +105,7 @@ export function Reports() {
           }}><Download size={14} /> Checkpoints CSV</Btn>
         </div>
         <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-white/5 px-3 py-2 text-sm">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm">
             <Upload size={14} /> Restore backup
             <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
               const f = e.target.files?.[0];
@@ -138,7 +138,7 @@ export function Reports() {
               }
             }} />
           </label>
-          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-white/5 px-3 py-2 text-sm">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm">
             <Upload size={14} /> Import snapshot JSON
             <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
               const f = e.target.files?.[0];
@@ -171,8 +171,8 @@ export function Reports() {
             <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} /> Reduce motion
           </label>
         </div>
-        <div className="mt-3 rounded-xl bg-white/5 p-3 text-xs text-slate-400">
-          <p className="font-semibold text-slate-300">XP rules (deterministic, deduped)</p>
+        <div className="mt-3 rounded-lg bg-[var(--surface-soft)] p-3 text-xs text-[var(--text-muted)]">
+          <p className="font-semibold text-[var(--text)]">XP rules (deterministic, deduped)</p>
           <p>video {XP_RULES.videoDone} · exercise {XP_RULES.exerciseDone} · code {XP_RULES.codeReproduced} · built {XP_RULES.builtExample} · revision {XP_RULES.revisionDone} · checkpoint {XP_RULES.checkpointDone} · 30min focus {XP_RULES.focusSession30min} · study day {XP_RULES.studyDay} · achievement 25. Re-clicks never double-award (ledger dedup keys).</p>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -181,7 +181,7 @@ export function Reports() {
             <Btn variant="danger" onClick={() => setConfirmClear(true)}><Trash2 size={14} /> Clear ALL data…</Btn>
           ) : (
             <>
-              <span className="text-sm text-red-300">Really delete all learning data and reset preferences?</span>
+              <span className="text-sm text-red-800 dark:text-red-300">Really delete all learning data and reset preferences?</span>
               <Btn variant="danger" onClick={async () => { await s.clearAllData(); setConfirmClear(false); }}>Yes, delete</Btn>
               <Btn onClick={() => setConfirmClear(false)}>Cancel</Btn>
             </>
@@ -203,8 +203,8 @@ function OrphanReview() {
   if (entries.length === 0) return null;
   return (
     <Card className="border-amber-500/30">
-      <h3 className="flex items-center gap-1.5 text-sm font-bold text-amber-200"><AlertTriangle size={15} /> Playlist changes need review ({entries.length})</h3>
-      <p className="mt-1 text-xs text-slate-400">
+      <h3 className="flex items-center gap-1.5 text-sm font-bold text-amber-800 dark:text-amber-200"><AlertTriangle size={15} /> Playlist changes need review ({entries.length})</h3>
+      <p className="mt-1 text-xs text-[var(--text-muted)]">
         These records were preserved because their video occurrence was removed or replaced. They are not counted as
         completion for any current video. Review the notes, then delete the orphan if it is no longer useful.
       </p>
@@ -213,19 +213,19 @@ function OrphanReview() {
           const snap = s.playlists[rec.playlistId];
           const entry = snap?.entries.find((e) => e.entryId === rec.entryId);
           return (
-            <li key={key} className="flex items-start gap-2 rounded-xl bg-white/5 p-2">
+            <li key={key} className="flex items-start gap-2 rounded-lg bg-[var(--surface-soft)] p-2">
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-slate-200">
+                <span className="block truncate text-[var(--text)]">
                   {snap ? (s.meta[snap.playlistId]?.customTitle ?? snap.title) : rec.playlistId} · #{rec.position} {entry?.title ?? rec.videoId}
                 </span>
-                <span className="block truncate text-slate-500">
+                <span className="block truncate text-[var(--text-faint)]">
                   {rec.reviewReason === 'video-mismatch' ? 'video replaced at this position' : rec.reviewReason === 'removed' ? 'removed from playlist' : 'unmatched'}
                   {' · '}{rec.completedAt ? `completed ${new Date(rec.completedAt).toLocaleDateString()}` : 'no completion'}
                   {rec.notes ? ` · notes: ${rec.notes}` : ''}
                 </span>
               </span>
               <button
-                className="shrink-0 text-slate-500 hover:text-red-300"
+                className="shrink-0 text-[var(--text-faint)] hover:text-red-800 dark:text-red-300"
                 aria-label={`Delete orphaned record ${rec.videoId}`}
                 onClick={() => s.deleteProgressRecord(key)}
               >
@@ -258,7 +258,7 @@ function PlaylistTable({ ids }: { ids: string[] }) {
     .filter((r) => (showArchived || !r.m?.archived) && r.title.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => Number(b.id === s.activeId) - Number(a.id === s.activeId) || a.title.localeCompare(b.title));
 
-  if (ids.length === 0) return <p className="mt-2 text-xs text-slate-500">No playlists yet.</p>;
+  if (ids.length === 0) return <p className="mt-2 text-xs text-[var(--text-faint)]">No playlists yet.</p>;
 
   const closeMenu = () => setMenuFor(null);
   const act = async (kind: 'rename' | 'archive' | 'remove', row: (typeof rows)[number]) => {
@@ -285,24 +285,24 @@ function PlaylistTable({ ids }: { ids: string[] }) {
     <div className="mt-2">
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[160px] flex-1">
-          <Search size={14} className="absolute left-2.5 top-2.5 text-slate-500" />
+          <Search size={14} className="absolute left-2.5 top-2.5 text-[var(--text-faint)]" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search playlists…" aria-label="Search playlists" className={`${inputCls} pl-8`} />
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-slate-400">
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> archived
         </label>
-        <span className="text-xs text-slate-500">{rows.length}/{ids.length} shown</span>
+        <span className="text-xs text-[var(--text-faint)]">{rows.length}/{ids.length} shown</span>
       </div>
       <ul className="mt-1 max-h-80 space-y-1 overflow-auto pr-0.5">
         {rows.map((r) => (
           <li
             key={r.id}
-            className={`flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-sm ${r.id === s.activeId ? 'bg-violet-600/20' : 'bg-white/5'}`}
+            className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm ${r.id === s.activeId ? 'bg-[var(--surface-hover)]' : 'bg-[var(--surface-soft)]'}`}
           >
             <span className={`h-2 w-2 shrink-0 rounded-full ${r.comp.unresolved > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} title={r.comp.unresolved > 0 ? `${r.comp.unresolved} unresolved` : 'complete metadata'} />
             <button className="min-w-0 flex-1 truncate text-left" onClick={() => s.setActive(r.id)} title={r.title}>
-              <span className={`font-medium ${r.id === s.activeId ? 'text-violet-200' : 'text-slate-200'}`}>{r.title}</span>
-              <span className="ml-2 whitespace-nowrap font-mono text-[11px] text-slate-500">
+              <span className={`font-medium ${r.id === s.activeId ? 'text-[var(--text)]' : 'text-[var(--text)]'}`}>{r.title}</span>
+              <span className="ml-2 whitespace-nowrap font-mono text-[11px] text-[var(--text-faint)]">
                 N={r.p.entries.length} · {r.prog.completedCount}/{r.prog.n} · {new Date(r.p.fetchedAt).toLocaleDateString()}
                 {r.m?.archived ? ' · archived' : ''}
               </span>
@@ -313,7 +313,7 @@ function PlaylistTable({ ids }: { ids: string[] }) {
                 aria-label={`Actions for ${r.title}`}
                 aria-expanded={menuFor === r.id}
                 aria-haspopup="menu"
-                className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
               >
                 <EllipsisVertical size={16} />
               </button>
@@ -344,7 +344,7 @@ function MenuItem({ label, danger, onPick }: { label: string; danger?: boolean; 
     <button
       role="menuitem"
       onClick={onPick}
-      className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-sm ${danger ? 'text-red-300 hover:bg-red-500/15' : 'text-slate-200 hover:bg-white/10'}`}
+      className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-sm ${danger ? 'text-red-800 dark:text-red-300 hover:bg-red-500/15' : 'text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
     >
       {label}
     </button>

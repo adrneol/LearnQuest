@@ -85,12 +85,12 @@ describe('chart empty states and captions', () => {
 
   it('bar view carries only its own units; line view only its own', () => {
     const { unmount } = render(<DurationBars data={[point(1, 60), point(2, null), point(3, 120)]} />);
-    expect(screen.getByText(/Individual video durations/)).toBeTruthy();
-    expect(screen.queryByText(/Running total/)).toBeNull();
+    expect(screen.getByText(/Video durations — minutes per video/)).toBeTruthy();
+    expect(screen.queryByText(/Cumulative minutes/)).toBeNull();
     unmount();
     render(<CumulativeLine data={[point(1, 60), point(2, null), point(3, 120)]} />);
-    expect(screen.getByText(/Running total/)).toBeTruthy();
-    expect(screen.queryByText(/Individual video durations/)).toBeNull();
+    expect(screen.getByText(/Cumulative minutes/)).toBeTruthy();
+    expect(screen.queryByText(/Video durations/)).toBeNull();
   });
 
   it('cumulative chart discloses incomplete metadata instead of hiding it', () => {

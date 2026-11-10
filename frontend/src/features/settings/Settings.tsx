@@ -1,10 +1,35 @@
 import { useEffect, useState } from 'react';
-import { KeyRound, PlugZap } from 'lucide-react';
+import { KeyRound, Sun, Moon, Monitor } from 'lucide-react';
 import { useStore } from '../../app/store.js';
+import { useTheme, type Theme } from '../../app/theme.js';
 import { checkApiHealth } from '../../services/api/playlistApi.js';
 import { Card, Field } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
+
+function ThemeOption({ value, icon, label }: { value: Theme; icon: React.ReactNode; label: string }) {
+  const { pref, resolved, setTheme } = useTheme();
+  const active = pref === value;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={() => setTheme(value)}
+      className={`flex flex-col items-center gap-1.5 rounded-lg border px-3 py-3 text-xs font-medium transition-colors ${
+        active
+          ? 'border-[var(--text)] bg-[var(--surface-hover)] text-[var(--text)]'
+          : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
+      }`}
+    >
+      {icon}
+      <span>{label}</span>
+      {value === 'system' && active ? (
+        <span className="text-[10px] font-normal text-[var(--text-faint)]">Using {resolved}</span>
+      ) : null}
+    </button>
+  );
+}
 
 export function Settings() {
   const s = useStore();
@@ -14,46 +39,68 @@ export function Settings() {
     checkApiHealth().then(setHealth);
   }, []);
 
+  const configured = health.ok && health.hasKey;
+
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="flex items-center gap-1.5 text-base font-bold"><PlugZap size={16} /> Backend connection</h2>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-          <span className={`rounded-full px-2.5 py-1 text-xs ${health.ok && health.hasKey ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
-            {health.ok ? (health.hasKey ? '● Connected — API key configured' : '● Backend reachable — API key missing') : '○ Backend unreachable'}
-          </span>
-          <button onClick={() => checkApiHealth().then(setHealth)} className="rounded-xl bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base font-bold">Backend connection</h2>
+          <button onClick={() => checkApiHealth().then(setHealth)} className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]">
             Recheck
           </button>
         </div>
-        {(!health.ok || !health.hasKey) && (
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-300">
-            <li>Create a Google Cloud project and enable <b>YouTube Data API v3</b> (read-only, no billing required).</li>
-            <li>Create an <b>API key</b> restricted to that API and your backend host.</li>
-            <li>Paste it into <code className="font-mono text-cyan-300">backend/.env</code> as <code className="font-mono">YOUTUBE_API_KEY=…</code> (never into chat, never into the frontend).</li>
-            <li>Restart the backend. This indicator flips to green — no data is lost.</li>
-          </ol>
+        {configured ? (
+          <p className="mt-1 text-xs text-[var(--text-muted)]">YouTube metadata API connected.</p>
+        ) : (
+          <>
+            <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
+              {health.ok ? 'Backend reachable — API key missing.' : 'Backend unreachable. JSON import still works.'}
+            </p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--text-muted)]">
+              <li>Create a Google Cloud project and enable <b>YouTube Data API v3</b> (read-only).</li>
+              <li>Create an <b>API key</b> restricted to that API and your backend host.</li>
+              <li>Paste it into <code className="font-mono text-[var(--text)]">backend/.env</code> as <code className="font-mono">YOUTUBE_API_KEY=…</code> (never into chat, never into the frontend).</li>
+              <li>Restart the backend, then Recheck.</li>
+            </ol>
+          </>
         )}
-        <p className="mt-2 flex items-start gap-1.5 text-xs text-slate-500">
-          <KeyRound size={13} className="mt-0.5 shrink-0" />
-          Keys never appear in frontend bundles, API responses, logs, or the UI. Until configured, playlist-URL fetching stays disabled but JSON snapshot import in Reports works fully.
-        </p>
+        {!configured && (
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-[var(--text-faint)]">
+            <KeyRound size={13} className="mt-0.5 shrink-0" />
+            Keys never appear in frontend bundles, API responses, logs, or the UI.
+          </p>
+        )}
+      </Card>
+
+      <Card>
+        <h2 className="text-base font-bold">Appearance</h2>
+        <div className="mt-2">
+          <Field label="Theme">
+            <div className="mt-1 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Theme">
+              <ThemeOption value="light" icon={<Sun size={16} />} label="Light" />
+              <ThemeOption value="dark" icon={<Moon size={16} />} label="Dark" />
+              <ThemeOption value="system" icon={<Monitor size={16} />} label="System" />
+            </div>
+            <p className="mt-1.5 text-[11px] text-[var(--text-faint)]">Saved on this device — both themes are supported.</p>
+          </Field>
+        </div>
       </Card>
 
       <Card>
         <h2 className="text-base font-bold">Preferences</h2>
-        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <div>
             <TimezonePicker value={s.prefs.timezone} onChange={(tz) => s.setPrefs({ timezone: tz })} />
-            <p className="mt-1 text-[11px] text-slate-500">Aggregation only — stored UTC events are never rewritten. Daily/weekly figures recompute instantly, no refetch needed.</p>
+            <p className="mt-1 text-[11px] text-[var(--text-faint)]">Aggregation only — stored UTC events are never rewritten.</p>
           </div>
           <div className="space-y-3">
-            <Field label={`Verified completion threshold: ${Math.round(s.settings.verifiedThreshold * 100)}% unique coverage`}>
+            <Field label={`Verified completion threshold: ${Math.round(s.settings.verifiedThreshold * 100)}%`}>
               <input
                 type="range" min={50} max={100} step={5}
                 value={Math.round(s.settings.verifiedThreshold * 100)}
                 onChange={(e) => s.setSettings({ verifiedThreshold: Number(e.target.value) / 100 })}
-                className="w-full" aria-label="Verified completion threshold"
+                className="w-full accent-zinc-900 dark:accent-zinc-100" aria-label="Verified completion threshold"
               />
             </Field>
             <NumberField
@@ -78,30 +125,19 @@ export function Settings() {
               max={600}
             />
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} /> Reduce motion
+              <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} className="accent-zinc-900 dark:accent-zinc-100" /> Reduce motion
             </label>
           </div>
         </div>
-        <p className="mt-2 text-[11px] text-slate-500">
-          Invalid or empty numeric values are rejected before they can be saved; duration planning always uses a positive session length.
-        </p>
       </Card>
 
       <Card>
-        <h2 className="text-base font-bold">Data & privacy</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-base font-bold">Data &amp; privacy</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
           {s.mode === 'cloud'
-            ? 'Your learning data is saved to your LearnQuest account.'
-            : 'Your learning data is stored in this browser. Export a backup before clearing browser data.'}
+            ? 'Your data is saved to your account. CSV/JSON exports stay on your device.'
+            : 'Your data stays in this browser (IndexedDB). Export a backup before clearing browser data.'}
         </p>
-        <details className="mt-2 text-xs text-slate-400">
-          <summary className="cursor-pointer font-semibold text-slate-300">How saving works</summary>
-          <p className="mt-1">
-            {s.mode === 'cloud'
-              ? 'Account changes are saved to the server. CSV/JSON exports are created locally, and the backend proxy receives only the playlist URL/ID you request.'
-              : 'Local records live in this browser’s IndexedDB; a small interrupted-focus recovery snapshot stays on this device. CSV/JSON exports are created locally, and the backend proxy receives only the playlist URL/ID you request.'}
-          </p>
-        </details>
       </Card>
     </div>
   );

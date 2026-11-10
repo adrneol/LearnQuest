@@ -56,7 +56,7 @@ export function Dropdown({ value, options, onChange, label, disabled, error }: P
 
   return (
     <div ref={rootRef}>
-      <span id={`dd-label-${slug}`} className="mb-1 block text-xs font-medium text-slate-400">
+      <span id={`dd-label-${slug}`} className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
         {label}
       </span>
       <button
@@ -100,15 +100,15 @@ export function Dropdown({ value, options, onChange, label, disabled, error }: P
             setOpen(false);
           }
         }}
-        className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-left text-sm text-slate-100 hover:border-white/25 disabled:opacity-50"
+        className="flex w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-left text-sm text-[var(--text)] hover:border-[var(--border-strong)] disabled:opacity-50"
       >
         <span className="min-w-0 flex-1">
           <span className="block truncate">{selected?.label ?? '—'}</span>
-          {selected?.hint && <span className="block truncate text-[11px] text-slate-500">{selected.hint}</span>}
+          {selected?.hint && <span className="block truncate text-[11px] text-[var(--text-faint)]">{selected.hint}</span>}
         </span>
-        <ChevronDown size={15} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={15} className={`shrink-0 text-[var(--text-muted)] transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {error && <p className="mt-1 text-xs text-red-300">{error}</p>}
+      {error && <p className="mt-1 text-xs text-red-800 dark:text-red-300">{error}</p>}
       <PopupShell anchor={() => rootRef.current} open={open} onClose={() => setOpen(false)}>
         <div
           ref={listRef}
@@ -141,14 +141,14 @@ export function Dropdown({ value, options, onChange, label, disabled, error }: P
                   }
                 }}
                 className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm ${
-                  i === active ? 'bg-violet-600/30' : ''
-                } ${sel ? 'text-white' : 'text-slate-300'}`}
+                  i === active ? 'bg-[var(--accent-soft)]' : ''
+                } ${sel ? 'text-[var(--accent-hover)] font-medium' : 'text-[var(--text)]'}`}
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{o.label}</span>
-                  {o.hint && <span className="block truncate text-[11px] text-slate-500">{o.hint}</span>}
+                  {o.hint && <span className="block truncate text-[11px] text-[var(--text-faint)]">{o.hint}</span>}
                 </span>
-                {sel && <Check size={15} className="shrink-0 text-emerald-400" />}
+                {sel && <Check size={15} className="shrink-0 text-emerald-700 dark:text-emerald-400" />}
               </button>
             );
           })}

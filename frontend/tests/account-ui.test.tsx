@@ -23,7 +23,7 @@ function makeStore() {
     prefs: { timezone: 'UTC', sessionLenMin: 25, breakMin: 5, minViableMin: 10 },
     updateProfile: vi.fn(async (input: any) => ({ ...USER, ...input })),
     updateAccountPreferences: vi.fn(async () => ({ ...USER })),
-    exportAccountData: vi.fn(async () => undefined),
+    exportAccountBundle: vi.fn(async () => ({ zip: new Uint8Array([1, 2, 3]), manifest: {} })),
     refreshSession: vi.fn(async () => undefined),
     reloadCloudData: vi.fn(async () => undefined),
     deleteAccount: vi.fn(async () => undefined),
@@ -82,8 +82,12 @@ describe('account menu in the main header', () => {
     expect(trigger).toHaveFocus();
 
     fireEvent.click(trigger);
+    vi.stubGlobal('URL', Object.assign({}, URL, {
+      createObjectURL: vi.fn(() => 'blob:mock'),
+      revokeObjectURL: vi.fn(),
+    }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Export account data/ }));
-    await waitFor(() => expect(storeRef.current.exportAccountData).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(storeRef.current.exportAccountBundle).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     fireEvent.click(trigger);

@@ -58,20 +58,20 @@ export function Checkpoints() {
       <div className="grid gap-3 md:grid-cols-2">
         <Card>
           <h2 className="flex items-center gap-1.5 text-sm font-bold"><Target size={16} /> Checkpoint</h2>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
             A learning milestone over an inclusive video range. Progress is tracked, completion is recognized when the full eligible range is done, and the established milestone/XP behavior applies.
           </p>
         </Card>
         <Card>
           <h2 className="flex items-center gap-1.5 text-sm font-bold"><Library size={16} /> Saved range</h2>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
             A reusable duration/range calculation saved from Library. It does not independently represent completion or award milestone XP.
           </p>
         </Card>
       </div>
 
       <Card>
-        <h2 className="text-base font-bold">New checkpoint <span className="font-normal text-slate-400">(one range within 1–{N})</span></h2>
+        <h2 className="text-base font-bold">New checkpoint <span className="font-normal text-[var(--text-muted)]">(one range within 1–{N})</span></h2>
         <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:items-end">
           <Field label="Video range">
             <input
@@ -97,19 +97,19 @@ export function Checkpoints() {
             <Plus size={14} /> Add checkpoint
           </Btn>
         </div>
-        <div className="mt-2 rounded-xl border border-white/10 bg-black/20 p-2.5 text-sm">
+        <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5 text-sm">
           {parsed.ok ? (
             <>
-              <p className="text-slate-200">This will create <b>{previewName}</b> for videos <b>{parsed.range.start}–{parsed.range.end}</b> inclusive ({parsed.range.end - parsed.range.start + 1} video{parsed.range.end - parsed.range.start === 0 ? '' : 's'}).</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">Saved name: {previewName}. A custom name replaces the generated label; the range is not entered twice.</p>
+              <p className="text-[var(--text)]">This will create <b>{previewName}</b> for videos <b>{parsed.range.start}–{parsed.range.end}</b> inclusive ({parsed.range.end - parsed.range.start + 1} video{parsed.range.end - parsed.range.start === 0 ? '' : 's'}).</p>
+              <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">Saved name: {previewName}. A custom name replaces the generated label; the range is not entered twice.</p>
             </>
           ) : (
-            <p className={`text-xs ${touched ? 'text-amber-200' : 'text-slate-500'}`}>
+            <p className={`text-xs ${touched ? 'text-amber-800 dark:text-amber-200' : 'text-[var(--text-faint)]'}`}>
               {touched ? parsed.error : 'Type a range such as 1-8, 9–16, or one position such as 103. The display name is generated automatically.'}
             </p>
           )}
         </div>
-        <p className="mt-2 text-[11px] text-slate-500">
+        <p className="mt-2 text-[11px] text-[var(--text-faint)]">
           Accepted: <span className="font-mono">1-8</span>, <span className="font-mono">1 – 8</span>, <span className="font-mono">1–8</span>, <span className="font-mono">103</span>.
           Reversed, fractional, negative, malformed, or out-of-bounds ranges are rejected without clamping.
         </p>
@@ -118,10 +118,10 @@ export function Checkpoints() {
       {list.length === 0 && (
         <Card>
           <h3 className="flex items-center gap-1.5 text-sm font-bold"><CheckCircle2 size={15} /> No checkpoints yet</h3>
-          <p className="mt-1 text-sm text-slate-400">
-            Enter one video range above, for example <span className="font-mono text-slate-200">1-8</span>. The name <b>Videos 1–8</b> appears automatically; use the optional custom name only when you want a descriptive milestone.
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
+            Enter one video range above, for example <span className="font-mono text-[var(--text)]">1-8</span>. The name <b>Videos 1–8</b> appears automatically; use the optional custom name only when you want a descriptive milestone.
           </p>
-          <p className="mt-1 text-xs text-slate-500">Only completing the range's videos completes a checkpoint. Nothing is pre-created.</p>
+          <p className="mt-1 text-xs text-[var(--text-faint)]">Only completing the range's videos completes a checkpoint. Nothing is pre-created.</p>
         </Card>
       )}
 
@@ -134,20 +134,20 @@ export function Checkpoints() {
           const auto = c.label === autoCheckpointLabel(c.start, c.end);
           body = (
             <>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[var(--text-muted)]">
                 {rp.done}/{rp.count} videos · {r.isComplete ? `${formatSecondsHHMMSS(r.totalSec)} total` : 'duration incomplete'} {c.completedAt ? '· ✓ complete' : ''}
-                {!auto ? <span className="ml-1 text-slate-500">· custom name</span> : null}
+                {!auto ? <span className="ml-1 text-[var(--text-faint)]">· custom name</span> : null}
               </p>
-              <div className="mt-1"><ProgressBar pct={rp.count ? (rp.done / rp.count) * 100 : 0} tone={c.completedAt ? 'emerald' : 'violet'} /></div>
+              <div className="mt-1"><ProgressBar pct={rp.count ? (rp.done / rp.count) * 100 : 0} tone={c.completedAt ? 'emerald' : 'neutral'} /></div>
             </>
           );
         } catch {
-          body = <p className="text-xs text-amber-300">Needs review — playlist length changed (now N={N}). Edit or delete; original {c.start}–{c.end} preserved.</p>;
+          body = <p className="text-xs text-amber-800 dark:text-amber-300">Needs review — playlist length changed (now N={N}). Edit or delete; original {c.start}–{c.end} preserved.</p>;
         }
         return (
           <Card key={c.id}>
             <div className="flex flex-wrap items-center gap-2">
-              <p className="mr-auto min-w-0 truncate font-semibold">{c.label} <span className="text-xs font-normal text-slate-400">({c.start}–{c.end})</span></p>
+              <p className="mr-auto min-w-0 truncate font-semibold">{c.label} <span className="text-xs font-normal text-[var(--text-muted)]">({c.start}–{c.end})</span></p>
               <Btn title="Rename checkpoint" onClick={async () => { const l = await promptDialog({ title: 'Rename checkpoint', initial: c.label }); if (l && l.trim()) s.renameCheckpoint(c.id, l.trim()); }}><Pencil size={14} /></Btn>
               <Btn title="Edit checkpoint range" onClick={() => { void editRange(c); }}><Settings2 size={14} /></Btn>
               <Btn variant="danger" title="Delete checkpoint" onClick={() => s.deleteCheckpoint(c.id)}><Trash2 size={14} /></Btn>
@@ -159,17 +159,17 @@ export function Checkpoints() {
 
       <Card>
         <h3 className="flex items-center gap-1.5 text-sm font-bold"><Library size={15} /> Saved ranges ({ranges.length})</h3>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-[var(--text-faint)]">
           These are duration calculations saved from Library. They are not checkpoints, do not track completion here, and do not award milestone XP.
         </p>
         {ranges.map((r) => (
-          <div key={r.id} className="flex items-center gap-2 border-t border-white/5 py-1.5 text-sm">
-            <span className="mr-auto truncate">{r.label} <span className="text-slate-500">({r.start}–{r.end})</span></span>
+          <div key={r.id} className="flex items-center gap-2 border-t border-[var(--border)] py-1.5 text-sm">
+            <span className="mr-auto truncate">{r.label} <span className="text-[var(--text-faint)]">({r.start}–{r.end})</span></span>
             <Btn onClick={async () => { const l = await promptDialog({ title: 'Rename saved range', initial: r.label }); if (l) s.renameRange(r.id, l); }}><Pencil size={13} /></Btn>
             <Btn variant="danger" onClick={() => s.deleteRange(r.id)}><Trash2 size={13} /></Btn>
           </div>
         ))}
-        {ranges.length === 0 && <p className="mt-2 text-xs text-slate-500">No saved ranges yet. Open Library, choose a range, and save it as a reusable duration calculation.</p>}
+        {ranges.length === 0 && <p className="mt-2 text-xs text-[var(--text-faint)]">No saved ranges yet. Open Library, choose a range, and save it as a reusable duration calculation.</p>}
       </Card>
     </div>
   );

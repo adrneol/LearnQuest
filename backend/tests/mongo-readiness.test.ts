@@ -116,6 +116,7 @@ describe('HTTP liveness versus MongoDB readiness', () => {
       },
     };
     const app = createApp({ store: brokenStore, readiness: readinessSource(value) });
+    vi.stubEnv('SESSION_SECRET', 'synthetic-session-secret-for-readiness-tests');
     try {
       const res = await request(app)
         .get('/api/account/data')
@@ -126,6 +127,7 @@ describe('HTTP liveness versus MongoDB readiness', () => {
       expect(res.body).not.toHaveProperty('ok');
       expect(JSON.stringify(res.body)).not.toContain('private-host');
     } finally {
+      vi.unstubAllEnvs();
       await db.close();
     }
   });

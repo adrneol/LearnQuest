@@ -107,7 +107,10 @@ function validateAccountDataResponse(value: unknown): { state: ServerState; vers
   if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) {
     throw invalidAccountData();
   }
-  if (value.schemaVersion !== undefined && value.schemaVersion !== 1) {
+  // The server contract is `schemaVersion: 1`. A missing or mismatched value
+  // means the deployed frontend and backend are not a compatible pair; refuse
+  // to normalize a payload we cannot prove the shape of.
+  if (value.schemaVersion !== 1) {
     throw invalidAccountData();
   }
   const state = value.state;

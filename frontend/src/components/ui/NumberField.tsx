@@ -99,7 +99,7 @@ export function NumberField({
 
   const shownError = externalError ?? error;
   return (
-    <div className={`block text-xs font-medium text-slate-400 ${className}`}>
+    <div className={`block text-xs font-medium text-[var(--text-muted)] ${className}`}>
       <label htmlFor={id} className="mb-1 block">{label}</label>
       <input
         id={id}
@@ -126,8 +126,8 @@ export function NumberField({
         }}
         className={`${inputCls} ${shownError ? 'border-red-500/50' : ''}`}
       />
-      {hint && !shownError && <span className="mt-1 block text-[11px] text-slate-500">{hint}</span>}
-      {shownError && <span id={errorId} className="mt-1 block text-[11px] text-red-300">{shownError}</span>}
+      {hint && !shownError && <span className="mt-1 block text-[11px] text-[var(--text-faint)]">{hint}</span>}
+      {shownError && <span id={errorId} className="mt-1 block text-[11px] text-red-800 dark:text-red-300">{shownError}</span>}
     </div>
   );
 }

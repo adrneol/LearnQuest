@@ -69,6 +69,20 @@ export function requireAuth(store: DataStore): RequestHandler {
         clearSessionCookie(res);
         throw httpError('Your session expired. Sign in again.', 401, 'SESSION_EXPIRED');
       }
+      // A short-lived Google registration session expires on its own schedule.
+      // Enforcing it here (not only in /session and /onboarding) means every
+      // authenticated surface agrees: an expired onboarding session is dead
+      // everywhere, including the SSE stream. The error contract matches the
+      // onboarding route's existing response so embedded/legacy clients see
+      // one consistent code.
+      if (session.authMethod === 'google_register') {
+        const exp = session.onboardingExpiresAt ? Date.parse(session.onboardingExpiresAt) : 0;
+        if (!Number.isFinite(exp) || exp <= Date.now()) {
+          await revokeSession(store, token);
+          clearSessionCookie(res);
+          throw httpError('The account-setup session has expired. Sign in again to continue.', 403, 'ONBOARDING_SESSION_INVALID');
+        }
+      }
       const account = await store.accounts.findOne({ userId: session.userId }) as Account | null;
       if (!account || account.status !== 'active') {
         clearSessionCookie(res);
@@ -88,6 +102,18 @@ export function requireAuth(store: DataStore): RequestHandler {
       }
       const touched = await touchSession(store, session);
       req.auth = { account, session: touched, userId: account.userId };
+      // Sliding cookie renewal: keep the browser cookie aligned with the
+      // server-side sliding idle window (capped by the absolute expiry), so an
+      // active user is never left with a stale 30-day cookie that dies while
+      // the session is still valid. Inactive users still lose the cookie.
+      // Renewal is limited to safe read methods: mutation responses may also
+      // rotate or clear cookies, and browsers apply only one value per
+      // Set-Cookie header slot — mixing both would make the outcome ambiguous.
+      if (req.method === 'GET') {
+        const absoluteRemainingSec = Math.floor((Date.parse(touched.expiresAt) - Date.now()) / 1000);
+        const maxAgeSec = Math.max(0, Math.min(env.sessionIdleHours * 3600, absoluteRemainingSec));
+        if (maxAgeSec > 0) setSessionCookie(res, token, maxAgeSec);
+      }
       next();
     } catch (e) {
       next(e);

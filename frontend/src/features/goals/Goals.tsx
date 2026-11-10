@@ -58,7 +58,7 @@ export function Goals() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Flexible goals <span className="font-normal text-slate-400">(achieved only by real activity — never by timers)</span></h2>
+        <h2 className="text-base font-bold">Flexible goals <span className="font-normal text-[var(--text-muted)]">(achieved only by real activity — never by timers)</span></h2>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           <Dropdown
             label="Metric"
@@ -100,7 +100,7 @@ export function Goals() {
           <input type="checkbox" checked={dated} onChange={(e) => setDated(e.target.checked)} /> Due today ({today}); uncheck for open-ended
         </label>
         <div className="mt-2"><Btn variant="primary" onClick={create}><Plus size={14} /> Create goal</Btn></div>
-        {errs.map((e) => <p key={e} className="mt-1 text-xs text-red-300">{e}</p>)}
+        {errs.map((e) => <p key={e} className="mt-1 text-xs text-red-800 dark:text-red-300">{e}</p>)}
       </Card>
 
       {s.flexGoals.length === 0 && <Empty title="No flexible goals" hint="Video count, unique content, focus time, playback time, or a checkpoint — scoped per playlist or day." />}
@@ -120,9 +120,9 @@ export function Goals() {
               <Btn variant="danger" onClick={() => s.deleteFlexGoal(g.id)}><Trash2 size={13} /></Btn>
             </div>
             <p className="mt-1 font-mono text-sm">{displayCurrent(g.metric, current)} / {formatGoalTarget(g.metric, g.target)} · {p.remaining > 0 ? `${displayCurrent(g.metric, p.remaining)} to go` : 'done'}</p>
-            <div className="mt-1"><ProgressBar pct={Math.min(100, p.pct)} tone={p.status === 'achieved' || p.status === 'exceeded' ? 'emerald' : 'violet'} /></div>
-            {g.achievedAt && <p className="mt-1 flex items-center gap-1 text-xs text-emerald-300"><Trophy size={12} /> Achieved {new Date(g.achievedAt).toLocaleString()} — exact earning activity above. No duplicate completion events.</p>}
-            {p.status === 'missed' && <p className="mt-1 text-xs text-slate-400">Missed — adjust the target or set a fresh goal. Past progress is kept.</p>}
+            <div className="mt-1"><ProgressBar pct={Math.min(100, p.pct)} tone={p.status === 'achieved' || p.status === 'exceeded' ? 'emerald' : 'neutral'} /></div>
+            {g.achievedAt && <p className="mt-1 flex items-center gap-1 text-xs text-emerald-800 dark:text-emerald-300"><Trophy size={12} /> Achieved {new Date(g.achievedAt).toLocaleString()} — exact earning activity above. No duplicate completion events.</p>}
+            {p.status === 'missed' && <p className="mt-1 text-xs text-[var(--text-muted)]">Missed — adjust the target or set a fresh goal. Past progress is kept.</p>}
           </Card>
         );
       })}
@@ -139,9 +139,9 @@ function displayCurrent(metric: GoalMetric, v: number): string {
 
 function StatusBadge({ status }: { status: string }) {
   const color = status === 'achieved' || status === 'exceeded'
-    ? 'bg-emerald-500/15 text-emerald-300'
-    : status === 'missed' ? 'bg-red-500/15 text-red-300'
-      : status === 'paused' ? 'bg-white/10 text-slate-300'
-        : 'bg-violet-500/20 text-violet-200';
+    ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300'
+    : status === 'missed' ? 'bg-red-500/15 text-red-800 dark:text-red-300'
+      : status === 'paused' ? 'bg-[var(--surface-hover)] text-[var(--text)]'
+        : 'bg-[var(--surface-soft)] text-[var(--text)]';
   return <span className={`rounded-full px-2 py-0.5 text-[11px] ${color}`}>{status}</span>;
 }

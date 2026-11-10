@@ -55,8 +55,9 @@ scoped to the signed-in account. A local IndexedDB path remains for automated te
 progressGameTracker/
 ├── frontend/    # React + Vite + TS UI; account UI + learning data views
 ├── backend/     # Node + Express: YouTube metadata, auth, accounts, MongoDB
-├── docs/        # user-facing setup docs
-├── docs/user-doc/audit2/ # numbered chronological verification archive
+├── docs/        # user-facing setup docs (currently MIGRATION_RUNBOOK/ROLLBACK only)
+├── docs/user-doc/MIGRATION_RUNBOOK.md # legacy → unified cutover gates
+├── docs/user-doc/MIGRATION_ROLLBACK.md # abort / reverse / retirement criteria
 ├── render.yaml  # backend deploy config (rootDir: backend)
 ├── README.md / HOW_TO_USE_LEARNQUEST.md
 ```
@@ -239,22 +240,18 @@ Frontend (`frontend/.env.local`, optional — template: `frontend/.env.example`)
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `VITE_API_BASE_URL` | API origin prefix; empty = same-origin `/api` (dev proxy handles it) | _(empty)_ |
+| `VITE_API_BASE_URL` | **Ignored by the current code.** `frontend/src/services/api/http.ts` forces same-origin `/api`; setting this has no effect | _(empty)_ |
 
-Production has two supported connection layouts; see
-[Production deployment](#production-deployment):
-
-- **Same-origin `/api` proxy (recommended):** keep `VITE_API_BASE_URL` empty
-  and add a Vercel rewrite from `/api/*` to the Render service. The session
-  cookie stays first-party.
-- **Same-site custom domains:** serve the app at `app.example.com` and the API
-  at `api.example.com`, then set `VITE_API_BASE_URL=https://api.example.com`
-  (no trailing slash, no `/api` suffix) on Vercel **Production** and redeploy.
+The only supported production connection layout is the **same-origin `/api`
+proxy**: keep a Vercel rewrite from `/api/*` to the Render service. The
+session cookie stays first-party. Same-site custom domains (`app.example.com`
++ `api.example.com`) are an **architecture that would require code changes**,
+not a supported toggle today: the client deliberately ignores
+`VITE_API_BASE_URL`, and the CSP allows `connect-src 'self'` only.
 
 Do not point a `*.vercel.app` frontend directly at `*.onrender.com`. That is a
-cross-site request, and the `SameSite=Lax` session cookie is not sent. The app
-tolerates a trailing slash, and the status pill re-checks on tab focus after an
-outage or cold start.
+cross-site request, and the `SameSite=Lax` session cookie is not sent. The
+status pill re-checks on tab focus after an outage or cold start.
 
 Order of operations: copy `backend/.env.example` → `backend/.env`, fill in
 MongoDB/Google/Brevo credentials, generate unique `SESSION_SECRET` and
@@ -306,10 +303,12 @@ Run each from its own directory (`frontend/` or `backend/`):
     `VITE_API_BASE_URL` stays empty so the session cookie is first-party.
   - Render sets `TRUST_PROXY_HOPS=2` for the exact browser → Vercel → Render →
     Express chain. Never raise it beyond the number of proxies actually
-    present.
-  Register the exact callback in Google Cloud. Same-site custom domains remain
-  the only supported alternative; a direct `*.vercel.app` → `*.onrender.com`
-  API origin is not supported with the `SameSite=Lax` cookie.
+    present. **Unconfirmed here:** whether Vercel's rewrite preserves the real
+    client IP in `X-Forwarded-For`; verify `req.ip` distribution after deploy
+    before tightening per-IP rate-limit assumptions.
+  Register the exact callback in Google Cloud. A direct `*.vercel.app` → `*.onrender.com`
+  API origin is not supported with the `SameSite=Lax` cookie; same-site custom
+  domains would require code changes (see frontend env section), not only env vars.
 - **Frontend → Vercel** (or any static host): project root `frontend/`,
   build `npm run build`, output `dist`. Keep `frontend/vercel.json` at the
   project root so the rewrite is applied. Do not configure a direct
@@ -354,6 +353,9 @@ Run each from its own directory (`frontend/` or `backend/`):
 
 ## Data persistence and privacy
 
+- **Backup export (restore-compatible):** Reports and the Account page can download Backup JSON v3 (and import v1/v2) with the full 20-domain state — all playlists, progress, ranges, checkpoints, modules, sessions, goals, XP, achievements, segments, play sessions, queue, flex goals, challenge, rank history, settings, preferences and active playlist. Restore is atomic; a pre-restore backup is downloaded before confirmation; the backup is never partially applied.
+- **Account export (organized, human-readable):** Account page can download a structured `.zip` archive (`LearnQuest-Account-Export/`) with `manifest.json`, `account/profile.json`, one JSON file per learning domain (`learning-data/*.json`), and flat CSV reports (`reports/videos.csv`, `reports/sessions.csv`, `reports/checkpoints.csv`). See `frontend/src/services/exports/accountExport.ts` and `frontend/src/services/exports/zip.ts`. Contains no passwords, no session cookies, no tokens, no API keys.
+
 - In production, learning records (playlists, progress, sessions, goals,
   modules, checkpoints, revision data, settings, XP) are stored in MongoDB
   and scoped by the authenticated `userId`. The browser is not treated as the
@@ -373,8 +375,8 @@ Run each from its own directory (`frontend/` or `backend/`):
   `LQ_USER_DATA_CUTOVER_ACK=lq-data-to-user-data-v1`; startup fails closed
   without it, and an empty or unavailable unified store never falls back to
   legacy data. No data has been migrated or retired live. See
-  [Report 24](./docs/user-doc/audit2/24_LEARNQUEST_ACCOUNT_IDENTITY_UNIFIED_MIGRATION_AND_RESPONSIVE_REPORT_2026-10-31.md)
-  and the [migration runbook](./docs/user-doc/MIGRATION_RUNBOOK.md) for the dry-run, inspection, and guarded retirement procedures.
+  [migration runbook](./docs/user-doc/MIGRATION_RUNBOOK.md)
+  and the [migration rollback runbook](./docs/user-doc/MIGRATION_ROLLBACK.md) for the dry-run, inspection, guarded cutover and abort steps (the historical `docs/user-doc/audit2/` audit archive is not present in this tree).
 - Passwords are hashed with Argon2id. Raw passwords, password hashes, raw
   email action tokens, and session tokens are never included in account
   exports.
@@ -410,10 +412,9 @@ Run each from its own directory (`frontend/` or `backend/`):
   publicly reachable Render/Vercel deployment observed during this pass was
   stale: `/api/auth/config`, `/api/auth/session`, and `/api/account/data`
   returned 404 and the frontend bundle did not contain the current auth UI.
-  Redeploy the matching backend and frontend before judging live behavior. See
-  [Report 25](./docs/user-doc/audit2/25_LEARNQUEST_FINAL_RELEASE_QUALITY_AND_READINESS_AUDIT_2026-11-01.md)
-  and the [audit archive](./docs/user-doc/audit2/README.md) for the exact
-  verification boundary and owner-side checks.
+  Redeploy the matching backend and frontend before judging live behavior. The
+  `docs/user-doc/audit2/` report archive referenced here is not present in this
+  working tree.
 - The `lq_user_data` migration and legacy retirement were **not** run against
   Atlas. The dry-run tool, checksums, idempotent copy path, read-only inspection,
   guarded retirement command, and regression tests are local only. Legacy
@@ -422,8 +423,7 @@ Run each from its own directory (`frontend/` or `backend/`):
   deliberately switches the runtime store.
 - Timed in-browser playback events, overnight soak runs, live quota metering,
   2000+-video stress, and live storage-quota exhaustion are verified by
-  unit/integration tests and inspection — not by live runs here. See
-  [Report 25](./docs/user-doc/audit2/25_LEARNQUEST_FINAL_RELEASE_QUALITY_AND_READINESS_AUDIT_2026-11-01.md).
+  unit/integration tests and inspection — not by live runs here.
 - Playlists are capped at **1000 entries** per fetch (larger ones are rejected
   with a clear error, never silently truncated).
 - Quota costs ≈ 5 units per 100-video import/refresh, ≈ 21 per 500-video
@@ -448,7 +448,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 | Player won't embed (101/150) | Use Open on YouTube; log a self-reported History entry |
 | Totals look wrong | Confirm range endpoints and unresolved flags; content duration ≠ study time |
 | Port conflict (`EADDRINUSE`) | Stop the other process or change `PORT` in `backend/.env` |
-| Frontend can't reach backend | Check the chosen topology in [Production deployment](#production-deployment): same-origin `/api` proxy or same-site custom domains. For custom domains, verify `VITE_API_BASE_URL` (no trailing slash or `/api` suffix, then redeploy) and `CORS_ORIGIN`. A `*.vercel.app` → `*.onrender.com` direct API URL fails authentication because the Lax cookie is cross-site |
+| Frontend can't reach backend | Only the same-origin `/api` proxy layout is supported (Vercel rewrite → Render). Verify the rewrite target and `CORS_ORIGIN`/`APP_ORIGIN` match the Vercel origin, confirm the backend is awake (`/api/ready`; after the cold-start changes the app shows a "server starting" state and auto-resumes), and watch `/api/health` vs `/api/ready`. A `*.vercel.app` → `*.onrender.com` direct API URL fails authentication because the Lax cookie is cross-site |
 | Another profile/device did not update after **Sign out all** | Confirm the other client is open and authenticated, then check the browser Network panel for a `200 text/event-stream` request to `/api/auth/events`. A `404` means that build was not deployed with the SSE route. A proxy that buffers external rewrites, a MongoDB user lacking `lq_auth_events` permissions, or a backend restart can interrupt delivery; the revoked session still fails on the next request. Reconnect/reload revalidates and signs it out |
 | Account → Security says “rate-limiting requests” | The request was a genuine 429 from the general API limiter, not a session failure. The screen preserves the last loaded list, disables Refresh until `Retry-After` expires, and clears the notice afterwards. If it repeats under normal use, inspect the Network panel for duplicate `/api/account/sessions` calls or an SSE reconnect loop; do not raise or disable the limiter blindly |
 | `STREAM_LIMIT` or repeated SSE reconnects | Close excess LearnQuest tabs for the account (20-stream cap) or check the backend process total (1,000). The client advertises a 30-second retry and uses capped exponential backoff, so reconnects should not form a tight loop. Reconnects are expected after redeploys, free-tier spin-down, or network changes; the client revalidates the session on every reconnect |
@@ -457,15 +457,7 @@ Run each from its own directory (`frontend/` or `backend/`):
 ## Documentation
 
 - [HOW_TO_USE_LEARNQUEST.md](./HOW_TO_USE_LEARNQUEST.md) — complete user manual.
-- [docs/user-doc/audit2/README.md](./docs/user-doc/audit2/README.md) — indexed audit archive and historical summaries; reports 22–25 are present.
-- [Report 25](./docs/user-doc/audit2/25_LEARNQUEST_FINAL_RELEASE_QUALITY_AND_READINESS_AUDIT_2026-11-01.md) — final release quality, security, data-integrity and readiness audit.
-- [Report 24](./docs/user-doc/audit2/24_LEARNQUEST_ACCOUNT_IDENTITY_UNIFIED_MIGRATION_AND_RESPONSIVE_REPORT_2026-10-31.md) — account identity, Unified migration implementation, Arena and responsive work.
-- [Report 23](./docs/user-doc/audit2/23_LEARNQUEST_COMPLETE_IMPLEMENTATION_AND_REGRESSION_REPORT_2026-10-30.md) — Phase 23 append persistence, Focus hardening and regression report.
-- [Report 22](./docs/user-doc/audit2/22_LEARNQUEST_COMPLETE_PRODUCT_SECURITY_QUALITY_AUDIT_2026-10-30.md) — product, security, simulation and quality audit.
-- [docs/user-doc/MIGRATION_RUNBOOK.md](./docs/user-doc/MIGRATION_RUNBOOK.md) — forward migration, backup/restore proof and cutover gates.
-- [docs/user-doc/MIGRATION_ROLLBACK.md](./docs/user-doc/MIGRATION_ROLLBACK.md) — reverse migration and rollback gates.
-- [docs/user-doc/ARENA_COMPLETE_GUIDE.md](./docs/user-doc/ARENA_COMPLETE_GUIDE.md) — documented Arena v2 contract.
-
-Historical reports 01–21 are summarized in the archive; their original files
-were removed in Phase 23 and remain recoverable from Git history as described
-there.
+- [docs/README.md](./docs/README.md) — honest status of the docs tree (index + drift list).
+- [docs/user-doc/MIGRATION_RUNBOOK.md](./docs/user-doc/MIGRATION_RUNBOOK.md) — forward migration, cutover and verification gates (restored 2026-11-10).
+- [docs/user-doc/MIGRATION_ROLLBACK.md](./docs/user-doc/MIGRATION_ROLLBACK.md) — reverse migration, abort and retirement criteria (restored 2026-11-10).
+- The historical `docs/user-doc/audit2/` archive and `docs/user-doc/ARENA_COMPLETE_GUIDE.md` are **not present** in this repository snapshot and their former links are retired; see Git history if you need the old reports.

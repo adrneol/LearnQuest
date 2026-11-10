@@ -90,7 +90,7 @@ export function PopupShell({ anchor, open, onClose, children, minHeight = 200 }:
     <div
       ref={shellRef}
       role="presentation"
-      className="fixed z-[70] overflow-hidden rounded-xl border border-white/15 bg-[#141830] shadow-2xl"
+      className="fixed z-[70] overflow-hidden rounded-lg border border-[var(--border-strong)] bg-[var(--surface-strong)] shadow-2xl"
       style={{
         top: pos.top ?? undefined,
         bottom: pos.bottom ?? undefined,

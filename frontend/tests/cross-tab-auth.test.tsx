@@ -118,7 +118,7 @@ function mockAuthenticatedFetch(opts: { logoutStatus?: number } = {}): string[] 
     if (u.endsWith('/api/auth/session')) {
       return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
     }
-    if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+    if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
     if (u.endsWith('/api/auth/password/reset/validate')) return json({ ok: true, valid: true });
     if (u.endsWith('/api/auth/password/reset')) return json(null, 204);
     if (u.endsWith('/api/auth/logout-all')) return json(null, 204);
@@ -186,7 +186,7 @@ describe('two independently initialized same-browser tabs', () => {
       if (u.endsWith('/api/auth/session')) {
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       if (u.endsWith('/api/auth/logout')) {
         markLogoutStarted();
         return logoutResponse;

@@ -9,7 +9,7 @@ the only registration path; password sign-in and single-use email-link recovery
 are available after registration.
 
 > Start with [A](#a-getting-started), then follow the journey in order.
-> Technical verification lives in [`docs/user-doc/audit2/`](./docs/user-doc/audit2/).
+> Technical verification lives in [`docs/user-doc/MIGRATION_RUNBOOK.md`](./docs/user-doc/MIGRATION_RUNBOOK.md).
 
 ## A. Getting started
 
@@ -106,12 +106,25 @@ Google Cloud immediately and update the replacement in Render.
   until verification. Successful verification signs out all sessions and
   notifies the previous address.
 - **Account settings** stores learning preferences (timezone, default session
-  length, break, minimum viable session) in your account, offers a JSON export
-  of account data, and supports permanent account deletion. Deletion requires
-  your current password (or a fresh Google reauthentication if the account is
-  Google-only), a recent reauthentication window, and the exact phrase
-  `DELETE MY ACCOUNT`. Export first; deletion cannot be undone through
-  LearnQuest.
+  length, break, minimum viable session) in your account, and supports
+  permanent account deletion. Deletion requires your current password (or a
+  fresh Google reauthentication if the account is Google-only), a recent
+  reauthentication window, and the exact phrase `DELETE MY ACCOUNT`. Export
+  first; deletion cannot be undone through LearnQuest.
+
+### Account export and full backup
+
+The Account page offers two downloads with different purposes:
+
+- **Account export (organized .zip)** — `LearnQuest-Account-Export/` with
+  `README.md`, `manifest.json`, `account/profile.json`, one JSON file per
+  learning domain (`learning-data/*.json`), and CSV reports
+  (`reports/videos.csv`, `reports/sessions.csv`,
+  `reports/checkpoints.csv`). Best for archiving and inspection. Contains no
+  passwords, no session cookies, no tokens and no API keys.
+- **Full backup (restore-compatible Backup JSON)** — the versioned v3 envelope
+  validated atomically by LearnQuest before restore. Use this one for moving or
+  restoring an account; a pre-restore backup is downloaded before confirmation.
 
 ### Your first visit: a valid empty account
 A brand-new account does **not** need a playlist, note, focus session, or
@@ -357,13 +370,19 @@ network, no real leaderboard.
   (unresolved last), title sort, pagination (Library 25/page; changing sort
   returns to page 1). Sorting never mutates stored order; positions stay
   canonical.
-- **Exports** — Backup JSON (everything, versioned), Videos/Sessions/
-  Checkpoints CSVs with playlist/position identity. Restore validates before
+- **Exports** — two formats with different purposes (both from the Account page):
+  (1) **Account export (.zip)** — organized, readable folder; excluded from restore;
+  (2) **Full backup (Backup JSON)** (restore-compatible) — versioned; restored through **Restore backup**;
+  Videos/Sessions/Checkpoints CSVs with playlist/position identity. Restore validates before
   touching data and reports row-level problems.
 
 ## G. Timezone and dynamic time
 
-- **Settings → Display timezone** (searchable picker with live UTC offsets).
+- **Settings → Display timezone** — full IANA timezone database (grouped by
+  region; includes `Asia/Kolkata`, `Asia/Calcutta`, `America/New_York`,
+  `Europe/London`, `Australia/Sydney`, `Pacific/Auckland`, `Etc/GMT` zones and
+  aliases). Searchable by city, region, IANA identifier, offset and alias.
+  Live UTC offsets update for DST; the current device zone remains selectable.
   It changes grouping and display only — stored UTC events are never
   rewritten, and reports recompute instantly without refetching.
 - Day grouping, daily summaries, revision overdue, streaks, weekly windows,
@@ -376,7 +395,7 @@ network, no real leaderboard.
   inventing time.
 - Long-horizon behaviors (overnight soak, live clock-change runs) are
   implemented but were verified by unit/integration tests and inspection in
-  this environment — see `docs/user-doc/audit2/04_V7_FINAL_ACCEPTANCE.md`.
+  this environment — verified by unit/integration tests and source inspection.
 
 ## H. Backup, restore, and data safety
 
@@ -443,7 +462,7 @@ network, no real leaderboard.
 | Import fails / invalid playlist | Re-paste a `youtube.com/playlist?list=ID` link or raw ID; check public visibility |
 | API key missing/invalid/restricted | Re-check key + restrictions in Google Cloud; restart backend; Recheck in Settings |
 | Quota exhausted | Wait for the daily reset; use JSON import meanwhile (~5 units per 100-video import, ~21 per 500) |
-| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — the status pill re-checks on tab focus, or press Recheck in Settings); check `PORT`/`CORS_ORIGIN` and both dev servers. Production must use a cookie-safe topology: either a same-origin Vercel `/api` rewrite (leave `VITE_API_BASE_URL` empty) or same-site custom domains (`app.example.com` + `api.example.com`). A direct `*.vercel.app` → `*.onrender.com` API URL is cross-site and the `SameSite=Lax` session cookie is not sent; see [Production deployment](./README.md#production-deployment) |
+| Backend slow to start / unreachable | Wait for cold start (Render free spins down when idle — after the 2026-11-10 changes the app detects `503`/timeout via `/api/ready`, shows a "server starting…" state, auto-retries with backoff, and resumes bootstrap automatically; the status pill re-checks on tab focus). If it still fails, check `PORT`, `CORS_ORIGIN`, and both dev servers. Production must use the same-origin Vercel `/api` rewrite (`VITE_API_BASE_URL` is ignored; same-site custom domains are not supported without code changes). A direct `*.vercel.app` → `*.onrender.com` API URL is cross-site and the `SameSite=Lax` session cookie is not sent; see [Production deployment](./README.md#production-deployment) |
 | Refresh fails | Retry Refresh active — failures never poison the cache or delete progress |
 | Unresolved videos | Expected for deleted/private/region-blocked items; totals stay incomplete-labeled |
 | Focus session lost to reload/sleep | Reopen Focus: a snapshot is recovered **paused**. Time while the page was closed is never counted; resume or finish what was actually observed, or record a History self-reported entry |

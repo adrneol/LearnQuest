@@ -180,14 +180,17 @@ describe('repository cutover to lq_user_data', () => {
     expect(reread.version).toBe(1);
   });
 
-  it('fails rather than silently using legacy when unified is selected without data', async () => {
+  it('fails closed rather than silently using legacy when unified is selected without data', async () => {
     await seedLegacy(USER_A);
     process.env.LQ_USER_DATA_STORE = 'unified';
+    // The empty-unified guard refuses to present an empty account when legacy
+    // rows exist: a silent read would hide real data behind the wrong layout.
     // The config gate is enforced separately; this proves the repository does
-    // not fall back to the populated legacy collection.
-    const read = await readUserState(store, USER_A);
-    expect(read.state.playlists).toEqual({});
-    expect(read.state.activeId).toBeNull();
+    // not fall back to the populated legacy collection either.
+    await expect(readUserState(store, USER_A)).rejects.toMatchObject({
+      status: 503,
+      code: 'MIGRATION_NOT_APPLIED',
+    });
   });
 
   it('rejects an invalid store selection', async () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Download, LogOut, ShieldCheck, UserRound, Settings2 } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { notify } from '../../services/notifications/notify.js';
+import { downloadZip } from '../../services/exports/zip.js';
 
 export type AccountSection = 'profile' | 'settings' | 'security';
 
@@ -60,7 +61,8 @@ export function AccountMenu({ onNavigate }: { onNavigate: (section: AccountSecti
   const exportData = async () => {
     setBusy(true);
     try {
-      await s.exportAccountData();
+      const { zip } = await s.exportAccountBundle();
+      downloadZip(`learnquest-account-export-${new Date().toISOString().slice(0, 10)}.zip`, zip);
     } catch (e: any) {
       notify(e?.message ?? 'Export failed.');
     } finally {
@@ -88,33 +90,33 @@ export function AccountMenu({ onNavigate }: { onNavigate: (section: AccountSecti
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Account menu for ${label}`}
-        className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2 py-1.5 text-left hover:bg-white/10"
+        className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-[var(--surface-hover)]"
       >
-        <span aria-hidden="true" className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black text-white">
+        <span aria-hidden="true" className="grid h-7 w-7 place-items-center rounded-full bg-[var(--surface-hover)] text-[10px] font-bold text-[var(--text)]">
           {initials(label)}
         </span>
         <span className="hidden max-w-[150px] sm:block">
-          <span className="block truncate text-xs font-semibold text-slate-100">{label}</span>
-          <span className="block truncate text-[10px] text-slate-400">@{user.username ?? 'account'}</span>
+          <span className="block truncate text-xs font-semibold text-[var(--text)]">{label}</span>
+          <span className="block truncate text-[10px] text-[var(--text-muted)]">@{user.username ?? 'account'}</span>
         </span>
-        <ChevronDown size={14} className={`text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-[var(--text-muted)] transition ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
         <div
           ref={menu}
           role="menu"
           aria-label="Account"
-          className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[#141830] p-1.5 shadow-2xl"
+          className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-1 shadow-md"
         >
           <div className="px-2 py-1.5">
             <p className="truncate text-xs font-semibold">{label}</p>
-            <p className="truncate text-[10px] text-slate-400">{user.email}</p>
+            <p className="truncate text-[10px] text-[var(--text-muted)]">{user.email}</p>
           </div>
           <MenuButton icon={<UserRound size={14} />} onClick={() => go('profile')}>Profile</MenuButton>
           <MenuButton icon={<Settings2 size={14} />} onClick={() => go('settings')}>Account settings</MenuButton>
           <MenuButton icon={<ShieldCheck size={14} />} onClick={() => go('security')}>Security and active sessions</MenuButton>
           <MenuButton icon={<Download size={14} />} onClick={exportData} disabled={busy}>Export account data</MenuButton>
-          <div className="my-1 h-px bg-white/10" />
+          <div className="my-1 h-px bg-[var(--surface-hover)]" />
           <MenuButton icon={<LogOut size={14} />} onClick={signOut} disabled={busy}>Sign out</MenuButton>
         </div>
       )}
@@ -129,9 +131,9 @@ function MenuButton({ children, icon, onClick, disabled }: { children: ReactNode
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
-      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm text-slate-200 hover:bg-white/10 disabled:opacity-50"
+      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
     >
-      <span className="text-slate-400">{icon}</span>
+      <span className="text-[var(--text-muted)]">{icon}</span>
       {children}
     </button>
   );

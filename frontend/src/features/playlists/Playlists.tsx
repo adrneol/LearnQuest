@@ -54,12 +54,12 @@ export function Onboarding({ onGo }: { onGo: (t: Tab) => void }) {
 
   const greeting = s.authUser?.displayName || s.authUser?.username;
   return (
-    <Card className="border-violet-500/30">
-      <p className="text-[11px] font-bold uppercase tracking-widest text-cyan-300">Your account is ready</p>
+    <Card className="border-[var(--border-strong)]">
+      <p className="text-[11px] font-bold uppercase tracking-widest text-[var(--text-faint)]">Your account is ready</p>
       <h1 className="mt-1 text-xl font-bold">
         {greeting ? `Welcome to LearnQuest, ${greeting}.` : 'Welcome to LearnQuest.'}
       </h1>
-      <p className="mt-1 text-sm text-slate-400">
+      <p className="mt-1 text-sm text-[var(--text-muted)]">
         Add your first public YouTube playlist to begin. Durations are fetched per video (never averaged), and every
         total is computed from real data. Nothing is saved until the server confirms the write.
       </p>
@@ -71,13 +71,13 @@ export function Onboarding({ onGo }: { onGo: (t: Tab) => void }) {
           onChange={(e) => setUrl(e.target.value)}
           aria-label="Playlist URL or ID"
         />
-        <Btn variant="primary" onClick={add} disabled={busy || !url.trim()}>
+        <Btn variant="primary" className="shrink-0 whitespace-nowrap" onClick={add} disabled={busy || !url.trim()}>
           <Plus size={15} /> {busy ? 'Fetching…' : 'Add your first playlist'}
         </Btn>
       </div>
-      {err && <p className="mt-2 text-sm text-red-300">{err} You can also import a JSON snapshot in Reports.</p>}
-      <p className="mt-2 text-xs text-slate-500">
-        Example test target: <code className="text-slate-400">https://www.youtube.com/playlist?list=PLu0W_9lII9agq5TrH9XLIKQvv0iaF2X3w</code> (used only as a test case — never hardcoded).
+      {err && <p className="mt-2 text-sm text-red-800 dark:text-red-300">{err} You can also import a JSON snapshot in Reports.</p>}
+      <p className="mt-2 text-xs text-[var(--text-faint)]">
+        Example test target: <code className="text-[var(--text-muted)]">https://www.youtube.com/playlist?list=PLu0W_9lII9agq5TrH9XLIKQvv0iaF2X3w</code> (used only as a test case — never hardcoded).
       </p>
     </Card>
   );

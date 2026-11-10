@@ -117,7 +117,7 @@ export function AnnotationFields({
           aria-describedby={dateInvalid ? `${prefix}-date-error` : undefined}
         />
         {dateInvalid && (
-          <span id={`${prefix}-date-error`} className="mt-1 block text-[11px] text-red-300" role="alert">
+          <span id={`${prefix}-date-error`} className="mt-1 block text-[11px] text-red-800 dark:text-red-300" role="alert">
             Choose a valid calendar date or leave it empty.
           </span>
         )}
@@ -158,7 +158,7 @@ export function AnnotationFields({
         </Field>
       </div>
       <fieldset className="sm:col-span-2" disabled={disabled}>
-        <legend className="mb-1 text-xs font-medium text-slate-400">Learning evidence</legend>
+        <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">Learning evidence</legend>
         <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
           <label className="flex items-center gap-1.5">
             <input
@@ -185,7 +185,7 @@ export function AnnotationFields({
             Built example
           </label>
           {showNeedsRevision && (
-            <label className="flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-200">
+            <label className="flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-800 dark:text-amber-200">
               <input
                 type="checkbox"
                 checked={values.needsRevision}
@@ -195,7 +195,7 @@ export function AnnotationFields({
             </label>
           )}
         </div>
-        <p className="mt-1 text-[10px] text-slate-500">
+        <p className="mt-1 text-[10px] text-[var(--text-faint)]">
           An unchecked box means “not recorded” until you toggle it; unchecking a recorded box explicitly records “not done”.
         </p>
       </fieldset>

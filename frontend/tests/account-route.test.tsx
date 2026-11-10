@@ -100,7 +100,7 @@ function mockCloud(state: unknown = EMPTY_STATE) {
     if (u.endsWith('/api/auth/session')) {
       return json({ authenticated: true, user: USER, csrfToken: 'csrf-route', ...CONFIG });
     }
-    if (u.endsWith('/api/account/data')) return json({ ok: true, state, version: 0 });
+    if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state, version: 0 });
     if (u.endsWith('/api/account/sessions')) return json({ sessions: [] });
     return json({ error: 'not found' }, 404);
   }) as any;
@@ -196,8 +196,7 @@ describe('standalone account route', () => {
       </StoreProvider>,
     );
 
-    expect(await screen.findByText(/Active playlist:/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Playlist Leak Canary/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/N=2/).length).toBeGreaterThan(0);
+    expect(await screen.findAllByText(/Playlist Leak Canary/)).not.toHaveLength(0);
+    expect((await screen.findAllByText(/N=2/)).length).toBeGreaterThan(0);
   });
 });

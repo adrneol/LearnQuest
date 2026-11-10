@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   computePlaylistProgress,
   computeRangeProgress,
@@ -51,8 +51,10 @@ import type {
 import { kvGet, kvSet, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
 import { mergeAccountState, deepEqual, type MergeConflict } from '../services/persistence/cloudMerge.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
+import { buildAccountExport } from '../services/exports/accountExport.js';
 import { notify } from '../services/notifications/notify.js';
 import { setCsrfToken } from '../services/api/http.js';
+import { waitForBackendReady, getReadinessSnapshot, subscribeReadiness, markBackendUnavailable } from '../services/api/readiness.js';
 import {
   broadcastAuthChange, broadcastAuthSignIn, createAuthSyncSourceId, subscribeAuthChange,
   type AuthSyncReason,
@@ -193,6 +195,8 @@ interface Store {
   revokeAccountSession: (sessionId: string) => Promise<void>;
   deleteAccount: (confirmPhrase: string, password?: string) => Promise<void>;
   exportAccountData: () => Promise<void>;
+  /** Human-readable structured .zip export (see services/exports/accountExport.ts). */
+  exportAccountBundle: () => Promise<{ zip: Uint8Array; manifest: Record<string, unknown> }>;
   archivePlaylistManaged: (playlistId: string) => Promise<void>;
   restorePlaylistManaged: (playlistId: string) => Promise<void>;
   deletePlaylistManaged: (playlistId: string, confirmTitle: string) => Promise<void>;
@@ -659,6 +663,9 @@ function xpAttributableToPlaylist(
 
 export function StoreProvider({ children, mode: modeProp }: { children: React.ReactNode; mode?: 'local' | 'cloud' }) {
   const mode = modeProp ?? DEFAULT_MODE;
+  // Subscribed unconditionally at the top of the component so hook order is
+  // stable across every render branch below.
+  const readiness = useSyncExternalStore(subscribeReadiness, getReadinessSnapshot);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playlists, setPlaylists] = useState<Record<string, PlaylistSnapshot>>({});
@@ -1093,6 +1100,40 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setReady(true);
     } catch (e: any) {
       if (generation !== cloudLoadGeneration.current) return;
+      // A waking backend can 503/timeout on data. Give it one readiness-gated
+      // retry before surfacing an error (bounded; never retries 401/409).
+      const retryable = e?.status === 503 || e?.status === 502 || e?.status === 504 || e?.status === 0;
+      if (retryable) {
+        const ready = await waitForBackendReady({ maxAttempts: 5, maxWaitMs: 60_000 });
+        if (ready && generation === cloudLoadGeneration.current) {
+          try {
+            const retry = await fetchAccountData();
+            if (generation !== cloudLoadGeneration.current) return;
+            if (retry.userId && user && retry.userId !== user.userId) {
+              clearLocalSession('This browser is now signed in to a different account. The previous account data was cleared. Sign in again to continue.');
+              return;
+            }
+            const normalized = normalizeLoadedState(retry.state as Partial<LoadedState>, defaultPreferences());
+            applyState(normalized.state);
+            serverVersionRef.current = retry.version;
+            setServerVersion(retry.version);
+            lastSyncedItemsRef.current = cloudPayload(normalized.state);
+            remoteBaselineRef.current = { ...lastSyncedItemsRef.current };
+            heldCollectionsRef.current.clear();
+            cloudConflictsRef.current = [];
+            setCloudConflicts([]);
+            cloudUserRef.current = user.userId;
+            lastSessionCheckRef.current = Date.now();
+            setSyncStatus('idle');
+            setSyncError(null);
+            setMigrationReadOnly(false);
+            setReady(true);
+            return;
+          } catch {
+            // fall through to the error state below
+          }
+        }
+      }
       setLoadError(e?.message ?? 'LearnQuest could not load your cloud learning data. Nothing was overwritten; retry the load.');
       setReady(false);
     }
@@ -1103,7 +1144,38 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setAuthReady(false);
     setAuthError(null);
     try {
-      const session = await fetchSession();
+      // A cold Render instance answers 503/timeout/network until Mongo is
+      // ready. Wait (bounded, shared, retry-aware) instead of failing the
+      // login screen on first paint. If the session fetch itself then hits a
+      // retryable failure (backend slept again between probe and session), do
+      // one readiness-gated retry — never more, never for 401/403/409.
+      let session;
+      const ready = await waitForBackendReady();
+      if (!ready) {
+        setAuthError('The LearnQuest server is taking longer to start than usual. Your data is safe — retry now, or wait a minute and reload.');
+        setReady(false);
+        setAuthReady(true);
+        return;
+      }
+      try {
+        session = await fetchSession();
+      } catch (first: any) {
+        const retryable = first?.status === 503 || first?.status === 502 || first?.status === 504 || first?.status === 0;
+        if (!retryable) throw first;
+        markBackendUnavailable();
+        const readyAgain = await waitForBackendReady({ maxAttempts: 5, maxWaitMs: 60_000 });
+        if (epoch !== authEpoch.current) {
+          setAuthReady(true);
+          return;
+        }
+        if (!readyAgain) {
+          setAuthError('The LearnQuest server is still starting. Your data is safe — retry now, or wait a minute and reload.');
+          setReady(false);
+          setAuthReady(true);
+          return;
+        }
+        session = await fetchSession();
+      }
       if (epoch !== authEpoch.current) {
         // Another tab invalidated the browser session while this bootstrap
         // request was in flight. Keep the public configuration so a sign-in
@@ -1849,7 +1921,24 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     },
     exportAccountData: async () => {
       await downloadAccountExport();
-      setLastDiff('Account export downloaded. It contains your learning data but no passwords or sign-in tokens.');
+      setLastDiff('Account export downloaded. It contains your profile and learning data but no passwords or tokens.');
+    },
+    exportAccountBundle: async () => {
+      const state: BackupState = {
+        playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals,
+        xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge,
+        challengeEnabled, rankHistory, settings,
+      };
+      const current = authUser;
+      return buildAccountExport(state, {
+        username: current?.username ?? null,
+        displayName: current?.displayName ?? null,
+        email: current?.email ?? '',
+        timezone: prefs.timezone,
+        hasPassword: current?.hasPassword ?? false,
+        googleLinked: current?.googleLinked ?? false,
+        memberSince: current?.createdAt ?? new Date(0).toISOString(),
+      });
     },
     archivePlaylistManaged: async (playlistId) => {
       if (mode === 'local') {
@@ -2442,9 +2531,25 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
 
   if (mode === 'cloud') {
     if (!authReady) {
+      const waking = readiness.state === 'waking';
       return (
-        <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
-          <p className="text-lg font-semibold">Connecting to your LearnQuest account…</p>
+        <div className="mx-auto max-w-3xl p-8" role="status" aria-label="Connecting to your LearnQuest account">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 animate-spin rounded-full border-2 border-[var(--border-strong)] border-t-[var(--accent)]" aria-hidden="true" />
+            <div>
+              <p className="text-lg font-semibold text-[var(--text)]">{waking ? 'Server starting…' : 'Connecting to your LearnQuest account…'}</p>
+              <p className="mt-0.5 text-sm text-[var(--text-muted)]">
+                {waking
+                  ? `${readiness.detail} (attempt ${readiness.attempt} of ${readiness.maxAttempts})`
+                  : 'Checking your account…'}
+              </p>
+            </div>
+          </div>
+          <div className="mt-6 space-y-2" aria-hidden="true">
+            {[80, 100, 60, 90].map((w, i) => (
+              <div key={i} className="h-10 animate-pulse rounded-lg bg-[var(--surface-soft)]" style={{ width: `${w}%` }} />
+            ))}
+          </div>
         </div>
       );
     }
@@ -2480,10 +2585,18 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       return <AccountErrorScreen message={loadError} onRetry={() => { void loadCloud(authUser); }} onSignOut={() => { void value.signOut(); }} />;
     }
     if (!ready) {
+      const waking = readiness.state === 'waking';
       return (
-        <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
-          <p className="text-lg font-semibold">Loading your cloud learning data…</p>
-          <p className="mt-1 text-sm text-slate-500">Saved learning data is being loaded from your account.</p>
+        <div className="mx-auto max-w-3xl space-y-4 p-8" role="status" aria-label="Loading your LearnQuest data">
+          <div className="h-32 animate-pulse rounded-lg bg-[var(--surface-soft)]" />
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[0, 1, 2].map((i) => <div key={i} className="h-32 animate-pulse rounded-lg bg-[var(--surface-soft)]" />)}
+          </div>
+          <p className="text-center text-sm text-[var(--text-muted)]">
+            {waking
+              ? `${readiness.detail} (attempt ${readiness.attempt} of ${readiness.maxAttempts})`
+              : 'Saved learning data is being loaded from your account…'}
+          </p>
         </div>
       );
     }

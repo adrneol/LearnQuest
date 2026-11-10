@@ -176,7 +176,7 @@ export function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm sm:p-4"
+      className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-black/60 p-3 sm:p-4"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
@@ -191,13 +191,13 @@ export function Modal({
         aria-busy={busy || undefined}
         tabIndex={-1}
         data-lq-modal={testId ?? 'dialog'}
-        className={`my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-[#141830] p-4 text-slate-200 shadow-2xl outline-none sm:max-h-[calc(100dvh-2rem)] sm:p-5 ${panelClassName}`}
+        className={`my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-[var(--border-strong)] bg-[var(--surface-strong)] p-4 text-[var(--text)] shadow-2xl outline-none sm:max-h-[calc(100dvh-2rem)] sm:p-5 ${panelClassName}`}
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="text-base font-bold sm:text-lg">{title}</h2>
             {description && (
-              <div id={descriptionId} className="mt-1 text-sm text-slate-300">{description}</div>
+              <div id={descriptionId} className="mt-1 text-sm text-[var(--text)]">{description}</div>
             )}
           </div>
           {showCloseButton && (
@@ -206,7 +206,7 @@ export function Modal({
               onClick={() => { if (!busy) onClose(); }}
               aria-label={closeLabel}
               disabled={busy}
-              className="rounded-xl p-1.5 text-slate-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-lg p-1.5 text-[var(--text)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <X size={17} />
             </button>

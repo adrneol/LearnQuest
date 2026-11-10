@@ -7,7 +7,7 @@ description: "Use when modifying, reviewing, debugging, or testing the LearnQues
 
 This is a repository-specific engineering skill. Load it before changing LearnQuest source, tests, storage, authentication, calculations, or UI.
 
-The observations below were verified against the working tree at HEAD `3107d11` on 2026-10-31. The repository is actively changing and can contain uncommitted user work. Re-inspect the current source before relying on any detail. **Current source and executed test results outrank README claims, audit reports, and prompts.**
+The observations below were verified against the working tree at HEAD `7391d9c` on 2026-11-10 (audit Phase 1 -> Phase 2 refresh). The repository is actively changing and can contain uncommitted user work. Re-inspect the current source before relying on any detail. **Current source and executed test results outrank README claims, audit reports, and prompts.**
 
 ## Non-negotiable safeguards
 
@@ -50,7 +50,8 @@ backend/src/auth/             Sessions, accounts, OAuth, action tokens, write le
 backend/src/services/         Learning-data validation, account lifecycle, playlists
 backend/src/db/               Mongo adapters, lifecycle, indexes, in-memory tests support
 backend/src/scripts/          Migration, inspection, diagnostics, retirement tools
-docs/user-doc/audit2/         Chronological audit/report archive
+docs/user-doc/MIGRATION_RUNBOOK.md # legacy → unified cutover gates (restored 2026-11-10)
+docs/user-doc/MIGRATION_ROLLBACK.md # abort / reverse / retirement criteria (restored 2026-11-10)
 ```
 
 ## Architecture and invariants
@@ -59,15 +60,18 @@ docs/user-doc/audit2/         Chronological audit/report archive
 
 - Navigation is hash-based (`#dash`, `#learn`, `#account/security`, and so on) in `frontend/src/app/App.tsx`. There is **no React Router and no Next.js**. Do not introduce Next.js, RSC, server actions, Next server APIs, or a second router for a small navigation change.
 - Heavy chart screens use React 18 `lazy()` and `Suspense`. Preserve code-splitting when adding screens.
+- Charts with long categorical axes use `frontend/src/components/charts/PanChart.tsx` (custom horizontal explorer: pointer/touch drag, shift+wheel/deltaX, keyboard, range slider, fixed Y-axis strip). `DurationBars`, `CumulativeLine`, `CumulativeChart` and the Analytics distribution are the integration points. Do not swap back to native horizontal scrollbars.
 - `StoreProvider` in `frontend/src/app/store.tsx` is the central state/action layer. Put persistence, authentication, and domain mutations behind existing store actions rather than adding independent component-level storage or calculations.
 - Local mode uses IndexedDB (`frontend/src/services/persistence/db.ts`). Test mode defaults to local; every other mode defaults to cloud. Cloud mode must not silently fall back to IndexedDB or present a failed cloud read as an empty account.
 - Cloud writes use optimistic versions and a three-way merge: last server-confirmed base, local pending state, and newest server state. `frontend/src/services/persistence/cloudMerge.ts` merges by stable record identity, never array index, and surfaces conflicts for an explicit keep-local/use-server decision. Do not replace this with last-write-wins or a silent reload.
-- `frontend/src/services/api/http.ts` deliberately keeps browser requests same-origin under `/api`, includes credentials, adds the CSRF token to mutations, and distinguishes session expiry from ordinary wrong-credential errors. Preserve those distinctions. Do not add tokens to `localStorage` or build cross-origin API calls without reviewing cookie, CSP, and proxy behavior.
+- `frontend/src/services/api/readiness.ts` is the singleton backend-readiness coordinator (bounded exponential backoff + jitter, `Retry-After`, distinguishes 503/timeout from 401). `store.tsx bootstrap`/`loadCloud` must use it for cold-start auto-resume; never treat `503`/`TIMEOUT`/`NETWORK` as an expired session.
+- `frontend/src/services/api/http.ts` deliberately keeps browser requests same-origin under `/api`, includes credentials, adds the CSRF token to mutations, and distinguishes session expiry from ordinary wrong-credential errors. Preserve those distinctions. Do not add tokens to `localStorage` or build cross-origin API calls without reviewing cookie, CSP, and proxy behavior. No frontend fetch may retry non-idempotent ops; readiness retries are GET-only and capped.
 
 ### Backend and authentication
 
 - `backend/src/app.ts` mounts `/api/auth`, `/api/account`, `/api/playlists`, and playlist metadata routes. Express validation, rate limiting, trusted-origin checks, Helmet, CORS, and JSON limits are part of the security boundary.
-- Sessions are server-side and cookie-based: production uses a `__Host-lq_session` cookie with `Secure`, `HttpOnly`, and `SameSite=Lax`; development uses the non-prefixed name. Mutations require `X-CSRF-Token` and a trusted origin.
+- Sessions are server-side and cookie-based: production uses a `__Host-lq_session` cookie with `Secure`, `HttpOnly`, and `SameSite=Lax`; development uses the non-prefixed name. Mutations require `X-CSRF-Token` and a trusted origin. `requireAuth` refreshes the cookie `Max-Age` on each touch (sliding renewal bounded by absolute expiry); never weaken HttpOnly/Secure/SameSite. `revokeAllSessions` is atomic via write-lease; onboarding expiry (`google_register` 30-min) is enforced in `requireAuth` for all gated paths.
+- `POST /auth/logout` is idempotent without CSRF (SameSite+Lax+trusted-origin protected); `logout-all` uses `auth+csrf` inside the same atomic lease.
 - Google is the only registration path. Password sign-in is available after onboarding. Email actions are single-use, purpose-bound, HMAC-digested, expiring tokens. Sensitive actions use a recent-reauthentication window.
 - Account deletion is a resumable, verified cascade across all account-scoped collections, not a single document delete. Do not simplify it to a cascade that can report success early.
 - Keep secrets server-side. YouTube metadata fetching, Google OAuth, Brevo email, and MongoDB credentials never belong in frontend code or `VITE_*` variables.
@@ -75,8 +79,10 @@ docs/user-doc/audit2/         Chronological audit/report archive
 ### Storage
 
 - Learning state has 20 user collections: `playlists`, `meta`, `progress`, `ranges`, `checkpoints`, `modules`, `sessions`, `goals`, `xp`, `achievements`, `segments`, `playSessions`, `queue`, `flexGoals`, `challenge`, `challengeEnabled`, `rankHistory`, `settings`, `prefs`, and `activeId`.
-- `LQ_USER_DATA_STORE=legacy` is the default and confirmed production mode. It reads/writes `lq_data_*` collections. `unified` uses `lq_user_data` and requires an explicit cutover acknowledgement in production. There is no automatic fallback and no dual-write. Do not imply that a passing test makes unified production-ready.
+- `LQ_USER_DATA_STORE=legacy` is the default and confirmed production mode. It reads/writes `lq_data_*` collections. `unified` uses `lq_user_data` and requires an explicit cutover acknowledgement in production. There is no automatic fallback and no dual-write. Do not imply that a passing test makes unified production-ready. Cutover is gated by owner approval of backup/dry-run/parity evidence; M7 requires explicit sign-off separate from implementation.
+- Backfill guard: `readUserState` hard-fails when unified is selected but empty while legacy is non-empty (empty-unified trap). Frontend rejects `schemaVersion !== 1` explicitly with a 502 and never initializes blank state.
 - `GET /api/account/data` returns `{ ok, schemaVersion, loadedAt, state, version }` with every learning domain present. State writes are validated server-side, bounded by a default 8 MB envelope, versioned in `lq_state_versions`, and applied transactionally where the store supports transactions.
+- Account export & full backup are two products: `frontend/src/services/exports/accountExport.ts` builds the organized `LearnQuest-Account-Export/` ZIP (README, manifest, one JSON per domain, CSV reports) — no secrets; it does NOT restore. `buildBackup`/`validateBackup`/`importBackup` (services/persistence/backup.ts) is the restore-compatible Backup JSON v3. Keep both; do not merge or replace either.
 - Adding a new persisted domain is cross-cutting: frontend types/defaults/store, backup/import, cloud merge behavior, backend `USER_COLLECTIONS`, collection kind and bounds, indexes, deletion scope, migration mapping, and regression tests. Do not add frontend state that assumes the server already persists it.
 
 ### Domain rules that must remain true
@@ -94,10 +100,21 @@ docs/user-doc/audit2/         Chronological audit/report archive
 
 ### UI and accessibility
 
-- Preserve the established dark glass design: deep navy surfaces (`#0b0e1a` family), violet/cyan accents, Tailwind utility styling, and compact cards. Reuse the primitives in `frontend/src/components/ui/ui.tsx` (`Card`, `Btn`, `Field`, `inputCls`, `ProgressBar`, `Empty`), dialogs/popups, and existing chart theme.
+- Design system: CSS variables under `:root[data-theme="dark"|"light"]` in `frontend/src/styles/index.css`; neutral monochrome palette (graphite/charcoal dark, off-white light), single inverted-neutral accent (`--accent`, near-white on dark / near-black on light, with `--accent-text` as its foreground). Semantic colors are reserved for genuine success/warning/destructive meaning. No purple/violet/indigo, no glow, no gradients, no glassmorphic blur. Global `.glass` and radial gradients removed; `Card` is a flat `bg-[var(--surface)] border`. Charts read tokens from `frontend/src/components/charts/theme.ts` (`useChartTheme()` hook) and never hardcode hex; primary series is a neutral near-monochrome tone. `frontend/src/app/theme.ts` owns get/init/set/system, persisted in `localStorage lq-theme`, applied pre-paint via inline script in `index.html` (no FOUC). `components/ui/ui.tsx` primitives (`Card`, `Btn`, `Field`, `inputCls`, `ProgressBar`, `Empty`, plus `Skeleton`, `CheckField`, `SectionHeading`) are theme-tokenized with the neutral accent for `primary` buttons.
+- Sidebar: `frontend/src/app/App.tsx` — Groups Learn/Plan/Insights/Manage with Account footer entry distinct from tab; icons hierarchical (Dashboard `LayoutDashboard`); active state is a restrained neutral (subtle surface + 2px `--text` indicator + semibold), no permanent connection-status badge in sidebar/footer/header, `SyncIndicator` is transient-only (in-flight, failure-with-retry, conflicts).
+- Zero-AI-slop directive (2026-11-10): every screen must read as deliberately designed for LearnQuest — no decorative gradients, no permanent status badges, no purple accents, no repetitive card-within-card layouts, minimal explanatory copy. Security notices and destructive-action warnings are preserved verbatim in content, only de-decorated visually. Confirmed scope: Account, Settings, Sidebar/header, shared primitives, charts, Dashboard, global token sweep. Pages not individually redesigned line-by-line get the same token system automatically; deeper per-page copy/hierarchy audits remain as follow-up work if requested.
 - Desktop uses a sidebar; mobile uses a focus-trapped drawer. Keep the existing `max-w-6xl` content rhythm and `sm:`/`lg:` responsive behavior. Verify affected pages at narrow and wide widths.
 - Preserve keyboard access, visible `focus-visible` rings, labeled controls, `role`/`aria-*` semantics, reduced-motion behavior, disabled/loading states, and explicit empty/error states. Do not reduce accessibility to make a test pass.
 - Copy must remain honest: “verified” only for observed evidence, “self-reported” for manual history, “efficiency” for the ratio, “Arena” for the simulation. Avoid presenting a provisional or fictional score as a fair real ranking.
+
+## Skill hierarchy
+
+- `learnquest-engineering` = authoritative project engineering rules (this file).
+- `frontend-design` = visual design direction and implementation (read it before redesigning screens).
+- `impeccable` (`.opencode/skills/impeccable`, project-local via `impeccable install --scope=project`) = design critique, polish, detector and visual QA. Ask before enabling the hook. `impeccable.cmd context` prints the loaded directive; detector via `.opencode/skills/impeccable/scripts/impeccable.cmd detect --json <files>`.
+- `web-design-guidelines` = accessibility/responsive/UX review skill (fetches fresh rules from the canonical source URL each review).
+- Specialists `mongodb-schema-design`, `security-best-practices`, `playwright-best-practices-for-agents`, `vercel-react-best-practices` remain subject to the restrictions table below. No specialist skill may override LearnQuest's security, data integrity or business-logic invariants.
+- LearnQuest's explicit brief (graphite/near-black neutral palette, calm restrained UI, no forbidden purple/violet/indigo decoration) wins over any skill's default aesthetic suggestions, consistent with `frontend-design`'s "the brief's own words always win".
 
 ## Commands and test strategy
 
@@ -111,6 +128,8 @@ npm run typecheck
 npm run lint
 npm run build                    # tsc --noEmit + Vite production build
 npm run dev
+npm run preview                  # serves dist/ as production preview (no /api)
+node tests/browser/*.mjs         # real-browser harnesses/probes (Chromium via playwright-core)
 ```
 
 ```powershell
@@ -132,7 +151,7 @@ Testing rules:
 - Add route tests with Supertest and in-memory stores for backend behavior; never require live MongoDB, Google, or Brevo.
 - Use `fake-indexeddb` for local persistence and fake timers where timing is deterministic.
 - Run the focused test first, then the affected app suite, typecheck, lint, and build as risk dictates. If a command was not run, say so.
-- No Playwright configuration/spec or Playwright dependency is present in this snapshot. jsdom tests are not real-browser E2E and cannot prove BroadcastChannel timing, iframe behavior, sleep/visibility, or cross-device propagation. Do not claim they do.
+- No Playwright configuration/spec for the `@playwright/test` runner exists in this repository. The real harness is hand-rolled `playwright-core 1.64.1` with `frontend/tests/browser/*.mjs` (chromium + firefox), run via `npm run test:browser*`. jsdom tests are not real-browser E2E and cannot prove BroadcastChannel timing, iframe behavior, sleep/visibility, or cross-device propagation. Do not claim they do. If an existing/authorized suite is added later, follow `playwright-best-practices-for-agents` (locator priority, web-first assertions, isolation, auth-state reuse, no-hard-wait).
 - There is no confirmed automated accessibility, load, or security-penetration suite. Component focus-trap tests are not a full accessibility audit.
 
 ## Eight-step workflow
@@ -168,15 +187,16 @@ Use this evidence order:
 1. Current source code and schema definitions.
 2. Tests actually executed in this session.
 3. `README.md` and `HOW_TO_USE_LEARNQUEST.md` (useful intent, but can lag source).
-4. `docs/user-doc/audit2/22_..._2026-10-30.md` and earlier reports (report-only, point-in-time evidence; often list intentionally unimplemented remediation).
+4. `docs/user-doc/MIGRATION_RUNBOOK.md` and `MIGRATION_ROLLBACK.md` (authoritative for the storage cutover; the former `docs/user-doc/audit2/` archive is absent from this tree — do not cite it).
 5. `LEARNQUEST_PHASE_23_...txt` (future scope, not an implementation instruction unless explicitly requested).
 
 Known discrepancies observed at this snapshot—verify them before repeating them as fact:
 
-- The README links to `docs/DEPLOYMENT_MULTIUSER.md`, which was not present in the inspected docs tree. Deployment claims may be historical.
+- The README no longer promotes `VITE_API_BASE_URL`; the manual may still lag in places. Current contract: http.ts forces same-origin `/api`; cookies are first-party via the Vercel rewrite. Do not “fix” either side without checking the current deployment contract, cookie policy, and tests.
 - README/manual describe an alternate same-site custom-domain API topology using `VITE_API_BASE_URL`; current `http.ts` deliberately forces same-origin `/api`. Do not “fix” either side without checking the current deployment contract, cookie policy, and tests.
 - Historical audit test-file counts and status claims can differ from the current working tree, which contains additional untracked tests and source files. Count and re-run; never quote old counts as current verification.
-- The local environment used for investigation may be Node 24.11.0 while both packages declare `>=24.22.1 <25`. This is a documented limitation, not permission to change engines or dependencies. Report runtime mismatch if it affects verification.
+- Node runtime verified `v24.22.2` at 2026-11-10 (engines `>=24.22.1 <25` satisfied).
+- Current docs tree: `docs/` may still be deleted in some checkouts — re-check `read docs` before relying on README links to `docs/user-doc/...`. Restored in Phase 2/3: `docs/user-doc/MIGRATION_RUNBOOK.md` and `MIGRATION_ROLLBACK.md` (see `docs/README.md`).
 - Audit report 22 states that real-browser E2E, live MongoDB writes/migration, live production checks, load testing, and accessibility audits were not performed. Preserve those limits in any follow-up report.
 
 If source and documentation disagree, do not silently rewrite the docs or the code. State the discrepancy and follow the user's requested scope. Unless asked for a docs update, keep report-only files unchanged.

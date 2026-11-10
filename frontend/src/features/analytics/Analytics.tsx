@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from 'recharts';
 import {
   computePlaylistProgress, snapshotCompleteness, sumEntries, formatSecondsHHMMSS, formatHuman,
@@ -11,10 +11,12 @@ import { useDayTick } from '../../app/dayTick.js';
 import { Card, ProgressBar, Empty } from '../../components/ui/ui.js';
 import { CumulativeChart } from '../../components/charts/CumulativeChart.js';
 import { ProgressDonut } from '../../components/charts/ProgressDonut.js';
-import { TICK, GRID_STROKE, TOOLTIP_STYLE, SERIES, positionTicks } from '../../components/charts/theme.js';
+import { useChartTheme, positionTicks } from '../../components/charts/theme.js';
+import { PanChart, niceTicks } from '../../components/charts/PanChart.js';
 
 export function Analytics() {
   const s = useStore();
+  const { TICK, GRID_STROKE, TOOLTIP_STYLE, SERIES, AXIS_LABEL } = useChartTheme();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const pid = snap?.playlistId;
   const today = useDayTick(s.prefs.timezone);
@@ -98,6 +100,12 @@ export function Analytics() {
     const revOpen = current.filter((p) => hasRevisionSignal(p)).length;
     return { prog, comp, cum, dist, verified, manual, insights, hist, avgConf, confs: confs.length, revOpen, mods };
   }, [snap, pid, s.progress, s.segments, s.sessions, s.playSessions, s.modules, s.prefs, today]);
+  const distMax = data?.dist.length ? Math.max(...data.dist.map((p) => p.min), 1) : 1;
+  const distYTicks = niceTicks(distMax);
+  const distYTop = niceTicks(distMax, 4).slice(-1)[0];
+  const [distMode, setDistMode] = useState<'overview' | 'detail'>('overview');
+  const distCount = data?.dist.length ?? 0;
+  const distOverviewTicks = distCount <= 25 ? 0 : Math.min(Math.max(Math.floor(distCount / 14), 5), 9);
 
   if (!snap || !data) return <Empty title="No active playlist" hint="Analytics respond to the active playlist and real activity." />;
 
@@ -107,7 +115,7 @@ export function Analytics() {
         <Card className="min-w-0">
           <h3 className="text-sm font-bold">Cumulative content</h3>
           <CumulativeChart data={data.cum} heightClass="h-52" complete={data.comp.isComplete} />
-          <details className="mt-2 text-xs text-slate-300">
+          <details className="mt-2 text-xs text-[var(--text)]">
             <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
             <div className="mt-1 overflow-x-auto">
               <table className="w-full text-left text-[11px]">
@@ -115,7 +123,7 @@ export function Analytics() {
                 <thead><tr><th className="pr-3 font-semibold">Position</th><th className="font-semibold">Cumulative time</th></tr></thead>
                 <tbody>
                   {data.cum.filter((_, i) => i === 0 || i === data.cum.length - 1 || i === Math.floor(data.cum.length / 2)).map((p) => (
-                    <tr key={p.pos} className="border-t border-white/5"><td className="pr-3">{p.pos}</td><td>{formatSecondsHHMMSS(p.cumSec)}</td></tr>
+                    <tr key={p.pos} className="border-t border-[var(--border)]"><td className="pr-3">{p.pos}</td><td>{formatSecondsHHMMSS(p.cumSec)}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -123,20 +131,44 @@ export function Analytics() {
           </details>
         </Card>
         <Card className="min-w-0">
-          <h3 className="text-sm font-bold">Duration distribution</h3>
-          <p className="text-[11px] text-slate-500">Minutes per video across the playlist (every resolved entry)</p>
-          <div className="h-52 min-w-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.dist} margin={{ top: 8, right: 8, bottom: 20, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-                <XAxis dataKey="pos" tick={TICK} ticks={data.dist.length ? positionTicks(data.dist[0].pos, data.dist[data.dist.length - 1].pos) : []} minTickGap={8} label={{ value: 'playlist position', position: 'insideBottom', offset: -14, fontSize: 11, fill: '#64748b' }} />
-                <YAxis tick={TICK} width={44} label={{ value: 'min / video', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
-                <Bar dataKey="min" fill={SERIES.cyan} maxBarSize={18} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-bold">Duration distribution</h3>
+            <button
+              type="button"
+              onClick={() => setDistMode((m) => (m === 'overview' ? 'detail' : 'overview'))}
+              aria-pressed={distMode === 'detail'}
+              className="text-[11px] font-semibold text-[var(--text-muted)] underline underline-offset-2 hover:text-[var(--text)]"
+            >
+              {distMode === 'overview' ? 'Explore individual videos' : 'Return to full overview'}
+            </button>
           </div>
-          <details className="mt-2 text-xs text-slate-300">
+          <p className="text-[11px] text-[var(--text-faint)]">Minutes per video across the playlist</p>
+          <div className="h-52 min-w-0">
+            <PanChart count={distCount} slotWidth={12} yTicks={[...distYTicks].reverse().map(String)} ariaLabel="Minutes per resolved video" mode={distMode}>
+              {(_innerWidth) => (
+                <ResponsiveContainer width="100%" height="100%">
+                  {distMode === 'overview' ? (
+                    <BarChart data={data?.dist ?? []} margin={{ top: 6, right: 8, bottom: 18, left: 0 }} barCategoryGap="22%">
+                      <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
+                      <XAxis dataKey="pos" tick={TICK} ticks={distCount ? positionTicks(data!.dist[0].pos, data!.dist[data!.dist.length - 1].pos, distOverviewTicks) : []} minTickGap={8} axisLine={false} tickLine={false} />
+                      <YAxis tick={TICK} width={38} axisLine={false} tickLine={false} domain={[0, distYTop]} ticks={distYTicks} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
+                      <Bar dataKey="min" fill={SERIES.steel} radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  ) : (
+                    <BarChart data={data?.dist ?? []} margin={{ top: 6, right: 0, bottom: 18, left: 44 }} barCategoryGap="18%">
+                      <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
+                      <XAxis dataKey="pos" tick={TICK} ticks={distCount ? positionTicks(data!.dist[0].pos, data!.dist[data!.dist.length - 1].pos, 0) : []} minTickGap={8} axisLine={false} tickLine={false} />
+                      <YAxis hide domain={[0, distYTop]} ticks={distYTicks} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
+                      <Bar dataKey="min" fill={SERIES.steel} radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  )}
+                </ResponsiveContainer>
+              )}
+            </PanChart>
+          </div>
+          <details className="mt-2 text-xs text-[var(--text)]">
             <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
             <div className="mt-1 max-h-40 overflow-auto">
               <table className="w-full text-left text-[11px]">
@@ -144,11 +176,11 @@ export function Analytics() {
                 <thead><tr><th className="pr-3 font-semibold">Position</th><th className="font-semibold">Minutes</th></tr></thead>
                 <tbody>
                   {data.dist.slice(0, 10).map((p) => (
-                    <tr key={p.pos} className="border-t border-white/5"><td className="pr-3">{p.pos}</td><td>{p.min}</td></tr>
+                    <tr key={p.pos} className="border-t border-[var(--border)]"><td className="pr-3">{p.pos}</td><td>{p.min}</td></tr>
                   ))}
                 </tbody>
               </table>
-              {data.dist.length > 10 && <p className="mt-1 text-[11px] text-slate-500">Showing the first 10 of {data.dist.length} resolved entries.</p>}
+              {data.dist.length > 10 && <p className="mt-1 text-[11px] text-[var(--text-faint)]">Showing the first 10 of {data.dist.length} resolved entries.</p>}
             </div>
           </details>
         </Card>
@@ -158,36 +190,36 @@ export function Analytics() {
         <Card>
           <h3 className="text-sm font-bold">Completed vs remaining</h3>
           <ProgressDonut done={data.prog.completedCount} total={data.prog.n} heightClass="h-44" />
-          <p className="text-xs text-slate-400">{data.prog.completedCount}/{data.prog.n} videos · {data.prog.isDurationComplete && data.prog.completedSec !== null ? `${formatSecondsHHMMSS(data.prog.completedSec)} content done` : 'duration total incomplete — count shown'}.</p>
+          <p className="text-xs text-[var(--text-muted)]">{data.prog.completedCount}/{data.prog.n} videos · {data.prog.isDurationComplete && data.prog.completedSec !== null ? `${formatSecondsHHMMSS(data.prog.completedSec)} content done` : 'duration total incomplete — count shown'}.</p>
         </Card>
         <Card>
           <h3 className="text-sm font-bold">Verified vs manual</h3>
-          <p className="mt-2 text-2xl font-bold">{data.verified} <span className="text-xs font-normal text-slate-400">verified</span> · {data.manual} <span className="text-xs font-normal text-slate-400">manual</span></p>
+          <p className="mt-2 text-2xl font-bold">{data.verified} <span className="text-xs font-normal text-[var(--text-muted)]">verified</span> · {data.manual} <span className="text-xs font-normal text-[var(--text-muted)]">manual</span></p>
           <div className="mt-2"><ProgressBar pct={data.verified + data.manual ? (data.verified / (data.verified + data.manual)) * 100 : 0} tone="emerald" /></div>
-          <p className="mt-1 text-xs text-slate-400">Checkboxes are manual by design; only player-observed coverage ≥ threshold counts as verified.</p>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">Checkboxes are manual by design; only player-observed coverage ≥ threshold counts as verified.</p>
         </Card>
         <Card>
           <h3 className="text-sm font-bold">Session lengths</h3>
-          <p className="text-[11px] text-slate-500">Number of recorded sessions per duration bucket (minutes)</p>
+          <p className="text-[11px] text-[var(--text-faint)]">Number of recorded sessions per duration bucket (minutes)</p>
           <div className="h-44 min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data.hist} margin={{ top: 8, right: 8, bottom: 4, left: -8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-                <XAxis dataKey="range" tick={TICK} label={{ value: 'minutes', position: 'insideBottom', offset: 0, fontSize: 11, fill: '#64748b' }} />
-                <YAxis tick={TICK} allowDecimals={false} label={{ value: 'sessions', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
+                <XAxis dataKey="range" tick={TICK} label={{ value: 'minutes', position: 'insideBottom', offset: 0, fontSize: 11, fill: AXIS_LABEL.fill }} />
+                <YAxis tick={TICK} allowDecimals={false} label={{ value: 'sessions', angle: -90, position: 'insideLeft', fontSize: 11, fill: AXIS_LABEL.fill }} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Bar dataKey="n" fill={SERIES.violet} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="n" fill={SERIES.primary} radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <details className="mt-2 text-xs text-slate-300">
+          <details className="mt-2 text-xs text-[var(--text)]">
             <summary className="cursor-pointer font-semibold">View chart data as a table</summary>
             <table className="mt-1 w-full text-left text-[11px]">
               <caption className="sr-only">Recorded session count by duration bucket</caption>
               <thead><tr><th className="pr-3 font-semibold">Minutes</th><th className="font-semibold">Sessions</th></tr></thead>
               <tbody>
                 {data.hist.map((row) => (
-                  <tr key={row.range} className="border-t border-white/5"><td className="pr-3">{row.range}</td><td>{row.n}</td></tr>
+                  <tr key={row.range} className="border-t border-[var(--border)]"><td className="pr-3">{row.range}</td><td>{row.n}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -198,11 +230,11 @@ export function Analytics() {
       <div className="grid min-w-0 gap-4 md:grid-cols-2">
         <Card>
           <h3 className="text-sm font-bold">Modules & learning quality</h3>
-          {data.mods.length === 0 && <p className="text-xs text-slate-500">No modules yet — group playlist positions into chapters on the Modules tab (e.g. “Basics 1–8”). Analytics will summarize remaining work per module here.</p>}
+          {data.mods.length === 0 && <p className="text-xs text-[var(--text-faint)]">No modules yet — group playlist positions into chapters on the Modules tab (e.g. “Basics 1–8”). Analytics will summarize remaining work per module here.</p>}
           {data.mods.map((m) => (
-            <p key={m.name} className="mt-1 text-xs text-slate-300">{m.name} · {m.remainingCount} left{m.remainingSec !== null ? ` · ${formatHuman(m.remainingSec)}` : ''}</p>
+            <p key={m.name} className="mt-1 text-xs text-[var(--text)]">{m.name} · {m.remainingCount} left{m.remainingSec !== null ? ` · ${formatHuman(m.remainingSec)}` : ''}</p>
           ))}
-          <p className="mt-2 text-xs text-slate-400">
+          <p className="mt-2 text-xs text-[var(--text-muted)]">
             Confidence rated on {data.confs} videos{data.avgConf !== null ? ` (avg ${data.avgConf.toFixed(1)}/5)` : ''} · {data.revOpen} with a current review signal (same queue rules as Revision). Mastery is evidence, not a single score.
           </p>
         </Card>
@@ -210,7 +242,7 @@ export function Analytics() {
           <h3 className="text-sm font-bold">Insights (from recorded values)</h3>
           <ul className="mt-1 space-y-1.5 text-sm">
             {data.insights.map((i, k) => (
-              <li key={k} className={`rounded-xl p-2 text-xs ${i.kind === 'good' ? 'bg-emerald-500/10 text-emerald-200' : i.kind === 'warn' ? 'bg-amber-500/10 text-amber-200' : 'bg-white/5 text-slate-300'}`}>{i.text}</li>
+              <li key={k} className={`rounded-lg p-2 text-xs ${i.kind === 'good' ? 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-200' : i.kind === 'warn' ? 'bg-amber-500/10 text-amber-800 dark:text-amber-200' : 'bg-[var(--surface-soft)] text-[var(--text)]'}`}>{i.text}</li>
             ))}
           </ul>
         </Card>

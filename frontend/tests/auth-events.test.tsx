@@ -146,7 +146,7 @@ function mockAuthenticatedFetch(options: { revokeSessionAfterLogin?: boolean } =
       }
       return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
     }
-    if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+    if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
     if (u.endsWith('/api/auth/logout')) return json(null, 204);
     return json({ error: 'not found' }, 404);
   }) as typeof fetch;

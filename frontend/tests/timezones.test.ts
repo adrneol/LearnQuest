@@ -109,4 +109,27 @@ describe('picker catalogue', () => {
     expect(formatOffset(765)).toBe('UTC+12:45');
     expect(formatOffset(null)).toBe('');
   });
+  it('search by UTC offset (base and colon forms)', () => {
+    const zones = getAvailableZones();
+    expect(searchZones('+0530', zones)).toContain('Asia/Kolkata');
+    expect(searchZones('+05:30', zones)).toContain('Asia/Kolkata');
+    expect(searchZones('+0545', zones)).toContain('Asia/Kathmandu');
+  });
+  it('catalogue covers major regions after ICU', () => {
+    const zones = getAvailableZones();
+    for (const z of ['Asia/Calcutta', 'Asia/Kolkata', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Australia/Sydney', 'Pacific/Auckland', 'UTC']) {
+      expect(zones).toContain(z);
+    }
+    for (const region of ['Africa', 'Asia', 'Europe', 'Pacific', 'Australia', 'America', 'Atlantic', 'Antarctica', 'Indian', 'Etc']) {
+      expect(zones.some((z) => z.startsWith(`${region}/`))).toBe(true);
+    }
+  });
+  it('dst transitions adjust computed offsets within zones', () => {
+    const summer = new Date('2026-07-10T12:00:00Z');
+    const winter = new Date('2026-01-10T12:00:00Z');
+    expect(utcOffsetMinutes(summer, 'Europe/London')).toBe(60);
+    expect(utcOffsetMinutes(winter, 'Europe/London')).toBe(0);
+    expect(utcOffsetMinutes(summer, 'America/New_York')).toBe(-240);
+    expect(utcOffsetMinutes(winter, 'America/New_York')).toBe(-300);
+  });
 });

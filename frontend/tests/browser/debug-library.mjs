@@ -1,0 +1,20 @@
+import { chromium } from 'playwright-core';
+import { join } from 'node:path';
+
+const BASE = 'http://localhost:5200';
+const backup = join(process.cwd(), 'test-results', 'demo-backup.json');
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+page.on('console', (msg) => { if (['error', 'warning'].includes(msg.type())) console.log('console', msg.type(), msg.text()); });
+page.on('pageerror', (err) => console.log('pageerror', err.message, err.stack));
+await page.goto(`${BASE}/#/reports`, { waitUntil: 'domcontentloaded' });
+await page.setInputFiles('input[type="file"][accept="application/json"]', backup);
+await page.waitForTimeout(800);
+const btn = page.getByRole('button', { name: 'Restore' });
+if (await btn.count()) await btn.click();
+await page.waitForTimeout(1500);
+await page.goto(`${BASE}/#/learn`, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(1500);
+const text = await page.evaluate(() => document.body.innerText.slice(0, 500));
+console.log('TEXT', JSON.stringify(text));
+await browser.close();

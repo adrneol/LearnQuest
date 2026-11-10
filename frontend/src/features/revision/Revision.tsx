@@ -10,7 +10,7 @@ import type { PlaylistEntry, ProgressRecord } from '../../domain/index.js';
 import {
   AnnotationFields, annotationValuesFrom, isValidRevisionDate, type AnnotationValues,
 } from '../../components/ui/AnnotationFields.js';
-import { Card, Btn, Field, inputCls, Empty } from '../../components/ui/ui.js';
+import { Card, Btn, inputCls, Empty } from '../../components/ui/ui.js';
 
 type Filter = 'all' | 'low' | 'todo-ex' | 'questions' | 'overdue' | 'reviewed';
 type Mode = 'queue' | 'all';
@@ -225,13 +225,13 @@ export function Revision() {
       <div
         ref={toolbarRef}
         style={{ top: 'var(--lq-mobile-header-h, 0px)' }}
-        className="sticky z-20 -mx-1 rounded-2xl border border-white/10 bg-[#0d1122]/95 p-2.5 shadow-xl backdrop-blur md:-mx-0 lg:top-2"
+        className="sticky z-20 -mx-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5 shadow-md md:-mx-0 lg:top-2"
       >
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-[220px] flex-1">
-            <label className="block text-[11px] font-medium text-slate-400" htmlFor="rev-find">Find lesson by position or title</label>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,10rem)_auto]">
+          <div className="col-span-2 sm:col-span-1">
+            <label className="block text-[11px] font-medium text-[var(--text-muted)]" htmlFor="rev-find">Find lesson by position or title</label>
             <div className="relative mt-0.5">
-              <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-slate-500" />
+              <Search size={14} className="pointer-events-none absolute left-2.5 top-[calc(50%+0px)] -translate-y-1/2 text-[var(--text-faint)]" />
               <input
                 id="rev-find"
                 className={`${inputCls} pl-8`}
@@ -247,40 +247,44 @@ export function Revision() {
                 aria-describedby="rev-find-hint"
               />
             </div>
-            <p id="rev-find-hint" className="mt-0.5 text-[10px] text-slate-500">
-              Pure number = playlist position; text = title search across the selected scope. Enter jumps.
+            <p id="rev-find-hint" className="mt-0.5 text-[10px] text-[var(--text-faint)]">
+              Pure number = playlist position; text = title search. Enter jumps.
             </p>
           </div>
-          <Btn variant="primary" onClick={runSearch}><Search size={14} /> Jump</Btn>
-          <div className="w-36">
-            <Field label="Flag position">
-              <input
-                className={inputCls}
-                value={flagPos}
-                onChange={(e) => setFlagPos(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); flagByPosition(); } }}
-                inputMode="numeric"
-                placeholder={`1–${snap.entries.length}`}
-                aria-label="Position to flag for revision"
-              />
-            </Field>
+          <div className="flex items-end">
+            <Btn variant="primary" className="h-full max-h-10 w-full sm:w-auto" onClick={runSearch}><Search size={14} /> Jump</Btn>
           </div>
-          <Btn onClick={flagByPosition}><Plus size={14} /> Flag</Btn>
+          <div>
+            <label className="block text-[11px] font-medium text-[var(--text-muted)]" htmlFor="flag-pos">Flag position</label>
+            <input
+              id="flag-pos"
+              className={`${inputCls} mt-0.5`}
+              value={flagPos}
+              onChange={(e) => setFlagPos(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); flagByPosition(); } }}
+              inputMode="numeric"
+              placeholder={`1–${snap.entries.length}`}
+              aria-label="Position to flag for revision"
+            />
+          </div>
+          <div className="flex items-end">
+            <Btn className="h-full max-h-10 w-full sm:w-auto" onClick={flagByPosition}><Plus size={14} /> Flag</Btn>
+          </div>
         </div>
 
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          <div className="mr-1 inline-flex rounded-full border border-white/10 bg-black/20 p-0.5" role="group" aria-label="Revision scope">
+          <div className="mr-1 inline-flex rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-0.5" role="group" aria-label="Revision scope">
             <button
               onClick={() => { setMode('queue'); setFilter('all'); setMessage(null); }}
               aria-pressed={mode === 'queue'}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${mode === 'queue' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-white/10'}`}
+              className={`rounded-full px-2.5 py-1 text-[11px] ${mode === 'queue' ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
             >
               Revision queue ({queueItems.length})
             </button>
             <button
               onClick={() => { setMode('all'); setFilter('all'); setMessage(null); }}
               aria-pressed={mode === 'all'}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${mode === 'all' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-white/10'}`}
+              className={`rounded-full px-2.5 py-1 text-[11px] ${mode === 'all' ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
             >
               All lessons ({snap.entries.length})
             </button>
@@ -292,20 +296,20 @@ export function Revision() {
                 key={v}
                 onClick={() => { setFilter(v); setMessage(null); setMatches([]); }}
                 aria-pressed={filter === v}
-                className={`rounded-full px-2.5 py-1 text-[11px] ${filter === v ? 'bg-cyan-600 text-white' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}
+                className={`rounded-md px-2.5 py-1 text-[11px] ${filter === v ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'bg-[var(--surface-soft)] text-[var(--text)] hover:bg-[var(--surface-hover)]'}`}
               >
                 {filterLabel(v, mode)} <span className="opacity-70">({count})</span>
               </button>
             );
           })}
-          <span className="ml-auto text-[11px] text-slate-400" role="status">
+          <span className="w-full border-t border-[var(--border)] mt-1.5 pt-1.5 text-[11px] text-[var(--text-muted)]" role="status">
             {mode === 'queue'
               ? `${filtered.length} of ${queueItems.length} queued lesson${queueItems.length === 1 ? '' : 's'}`
               : `${filtered.length} of ${allItems.length} lesson${allItems.length === 1 ? '' : 's'} in playlist`}
           </span>
         </div>
         {message && (
-          <div className={`mt-1.5 flex flex-wrap items-center gap-2 rounded-xl p-1.5 text-xs ${message.kind === 'error' ? 'bg-red-500/10 text-red-200' : 'bg-cyan-500/10 text-cyan-100'}`} role="status">
+          <div className={`mt-1.5 flex flex-wrap items-center gap-2 rounded-lg p-1.5 text-xs ${message.kind === 'error' ? 'bg-red-500/10 text-red-800 dark:text-red-200' : 'bg-cyan-500/10 text-cyan-800 dark:text-cyan-100'}`} role="status">
             <span className="min-w-0 flex-1">{message.text}</span>
             {message.position !== undefined && (
               <button
@@ -328,7 +332,7 @@ export function Revision() {
         {matches.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {matches.map((p) => (
-              <button key={p} onClick={() => jumpTo(p)} className="rounded-lg bg-white/10 px-2 py-1 text-[11px] text-slate-200 hover:bg-white/20">#{p}</button>
+              <button key={p} onClick={() => jumpTo(p)} className="rounded-lg bg-[var(--surface-hover)] px-2 py-1 text-[11px] text-[var(--text)] hover:bg-white/20">#{p}</button>
             ))}
           </div>
         )}
@@ -336,22 +340,22 @@ export function Revision() {
 
       <Card>
         <details>
-          <summary className="cursor-pointer text-sm font-semibold">How the revision queue works <span className="font-normal text-slate-400">(completion ≠ mastery)</span></summary>
-          <p className="mt-1 text-sm text-slate-400">
+          <summary className="cursor-pointer text-sm font-semibold">How the revision queue works <span className="font-normal text-[var(--text-muted)]">(completion ≠ mastery)</span></summary>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             Lessons land here only when they carry a current review signal: flagged <b>needs revision</b>
             (Player, Library, or the flag box), rated confidence 1–2, given a revision date, left with open
             questions, or explicitly marked with unfinished code/exercise/example. Historical notes and key
             concepts are searchable but do not keep a lesson in the queue. Marking a lesson reviewed clears its
             flag and date, records the review, and preserves every annotation.
           </p>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-[var(--text-faint)]">
             Filters: <b>All queued</b> = every active review signal; <b>Reviewed</b> (All lessons) = at least one
             dated review; <b>Low confidence</b> = rating 1–2; <b>Open exercise</b> = flagged or explicitly marked
             unfinished (a missing field is not unfinished); <b>Questions</b> = non-empty question text;
             <b>Overdue</b> = revision date before today in {s.prefs.timezone}. “Reviewed on …” and “Needs revision”
             can both be true — the first is history, the second is current work.
           </p>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-[var(--text-faint)]">
             Use <b>All lessons</b> to browse or search lessons that already left the queue. Search always covers
             the whole playlist, and a reviewed lesson opens there with its notes intact.
           </p>
@@ -361,25 +365,25 @@ export function Revision() {
       {noQueue && mode === 'queue' && (
         <Card>
           <h3 className="text-sm font-bold">Queue clear — nothing needs revision right now</h3>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             A blank queue means no lesson currently carries a review signal — not that your notes disappeared.
             Open <b>All lessons</b> to browse every lesson, including previously reviewed ones.
           </p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-300">
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--text)]">
             <li>Flag a lesson with <b>Needs revision</b> in the Player, the Library table, or the flag box above.</li>
             <li>Rate <b>confidence 1–5</b>, add notes / key concepts / open questions, and optionally set a <b>revision date</b>.</li>
             <li>Filter by low confidence, open exercises, questions, or overdue dates to prioritize.</li>
             <li>Press <b>Mark revised</b> — the flag clears, the review is recorded, and annotations remain.</li>
           </ol>
           <div className="mt-2"><Btn onClick={() => { setMode('all'); setFilter('all'); }}><BookOpen size={14} /> Browse all lessons</Btn></div>
-          <p className="mt-1 text-xs text-slate-500">Only your actions create queue entries. No sample history is ever fabricated.</p>
+          <p className="mt-1 text-xs text-[var(--text-faint)]">Only your actions create queue entries. No sample history is ever fabricated.</p>
         </Card>
       )}
 
       {!noQueue && filtered.length === 0 && (
         <Card>
           <h3 className="text-sm font-bold">No lessons match “{filterLabel(filter, mode)}”</h3>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             {mode === 'queue' ? `The queue has ${queueItems.length} lesson${queueItems.length === 1 ? '' : 's'}` : `The playlist has ${allItems.length} lesson${allItems.length === 1 ? '' : 's'}`},
             {' '}but none meet this filter. Clear it to browse the current scope.
           </p>
@@ -410,17 +414,17 @@ export function Revision() {
       {orphaned.length > 0 && (
         <Card className="border-amber-500/30">
           <details>
-            <summary className="cursor-pointer text-sm font-semibold text-amber-200">
+            <summary className="cursor-pointer text-sm font-semibold text-amber-800 dark:text-amber-200">
               Preserved records removed from this playlist ({orphaned.length})
             </summary>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
               Review history and annotations are kept even though the occurrence no longer exists. They are never
               counted as completion for a current video. Manage deletion in Reports → Playlist changes need review.
             </p>
-            <ul className="mt-2 space-y-1 text-xs text-slate-300">
+            <ul className="mt-2 space-y-1 text-xs text-[var(--text)]">
               {orphaned.slice(0, 20).map(([key, rec]) => (
-                <li key={key} className="rounded-xl bg-white/5 p-2">
-                  <span className="font-mono text-slate-400">#{rec.position} {rec.videoId}</span>
+                <li key={key} className="rounded-lg bg-[var(--surface-soft)] p-2">
+                  <span className="font-mono text-[var(--text-muted)]">#{rec.position} {rec.videoId}</span>
                   {rec.notes ? <span> · {rec.notes}</span> : null}
                   {lastReviewIso(rec) ? <span> · reviewed {reviewDateLabel(lastReviewIso(rec)!, s.prefs.timezone)}</span> : null}
                 </li>
@@ -431,7 +435,7 @@ export function Revision() {
       )}
 
       {mode === 'queue' && !noQueue && (
-        <p className="text-[11px] text-slate-600">
+        <p className="text-[11px] text-[var(--text-faint)]">
           Tip: use All lessons to find a reviewed lesson by title, even after it leaves this queue.
         </p>
       )}
@@ -500,25 +504,25 @@ function RevisionCard({
       tabIndex={-1}
       aria-label={`Revision lesson ${entry.position}: ${entry.title}`}
       style={{ scrollMarginTop: 'calc(var(--lq-mobile-header-h, 0px) + 7rem)' }}
-      className={`rounded-2xl transition ${highlighted ? 'ring-2 ring-cyan-400 ring-offset-2 ring-offset-[#0b0e1a]' : ''}`}
+      className={`rounded-lg transition ${highlighted ? 'ring-2 ring-cyan-400 ring-offset-2 ring-offset-[var(--ring-offset)]' : ''}`}
     >
       <Card>
         <div className="flex flex-wrap items-center gap-2">
           <p className="mr-auto text-sm font-semibold">#{entry.position} {entry.title}</p>
-          {record?.source === 'verified' && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">verified history</span>}
-          {record?.source === 'manual' && <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] text-cyan-300">manual</span>}
+          {record?.source === 'verified' && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-800 dark:text-emerald-300">verified history</span>}
+          {record?.source === 'manual' && <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] text-cyan-800 dark:text-cyan-300">manual</span>}
           {lastIso && (
-            <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">
+            <span className="rounded-full bg-[var(--surface-soft)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">
               revised {reviewDateLabel(lastIso, s.prefs.timezone)}
             </span>
           )}
           {record?.needsRevision && (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-200">needs revision</span>
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-800 dark:text-amber-200">needs revision</span>
           )}
-          {!record && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">no record yet</span>}
+          {!record && <span className="rounded-full bg-[var(--surface-soft)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">no record yet</span>}
         </div>
         {record?.needsRevision && lastIso && (
-          <p className="mt-1 text-[11px] text-amber-200">
+          <p className="mt-1 text-[11px] text-amber-800 dark:text-amber-200">
             Reviewed on {reviewDateLabel(lastIso, s.prefs.timezone)} and flagged again for a new pass. The earlier
             review is history; the current flag is active.
           </p>
@@ -531,7 +535,7 @@ function RevisionCard({
             idPrefix={`revision-${entry.entryId ?? entry.position}`}
           />
         </div>
-        {error && <p className="mt-1 text-xs text-red-300" role="alert">{error}</p>}
+        {error && <p className="mt-1 text-xs text-red-800 dark:text-red-300" role="alert">{error}</p>}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Btn
             onClick={() => s.markReviewed(s.activeId!, entry.position, 'revision')}
@@ -544,11 +548,11 @@ function RevisionCard({
             {record?.needsRevision ? 'Keep flagged' : 'Needs revision'}
           </Btn>
           {lastIso && (
-            <span className="text-[11px] text-slate-500">Last reviewed {reviewDateLabel(lastIso, s.prefs.timezone)}</span>
+            <span className="text-[11px] text-[var(--text-faint)]">Last reviewed {reviewDateLabel(lastIso, s.prefs.timezone)}</span>
           )}
         </div>
         {record?.reviewHistory && record.reviewHistory.length > 0 && (
-          <details className="mt-2 text-[11px] text-slate-400">
+          <details className="mt-2 text-[11px] text-[var(--text-muted)]">
             <summary className="cursor-pointer">Review history ({record.reviewHistory.length})</summary>
             <ul className="mt-1 space-y-0.5">
               {[...record.reviewHistory].reverse().slice(0, 8).map((h) => (

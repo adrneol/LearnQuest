@@ -71,18 +71,18 @@ export function LegacyMigrationCard() {
   return (
     <Card className="border-cyan-500/30">
       <div className="flex flex-wrap items-start gap-3">
-        <HardDriveDownload className="mt-0.5 shrink-0 text-cyan-300" size={20} />
+        <HardDriveDownload className="mt-0.5 shrink-0 text-cyan-800 dark:text-cyan-300" size={20} />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-bold">Local LearnQuest data found in this browser</h2>
           {s.migrationSummary ? (
-            <p role="status" className="mt-1 text-sm text-emerald-200">{s.migrationSummary}</p>
+            <p role="status" className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">{s.migrationSummary}</p>
           ) : (
-            <p className="mt-1 text-sm text-slate-400">
-              This browser has unclaimed legacy data. Importing is an explicit choice: it is merged into <b className="text-slate-200">{s.authUser?.email}</b>,
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              This browser has unclaimed legacy data. Importing is an explicit choice: it is merged into <b className="text-[var(--text)]">{s.authUser?.email}</b>,
               with duplicate IDs skipped and existing cloud records preserved. Nothing is uploaded until you confirm, and a different account never inherits it.
             </p>
           )}
-          {(error || s.migrationError) && <p role="alert" className="mt-2 text-sm text-red-300">{error ?? s.migrationError}</p>}
+          {(error || s.migrationError) && <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-300">{error ?? s.migrationError}</p>}
           <div className="mt-3 flex flex-wrap gap-2">
             {s.migrationAvailable && (
               <>
@@ -98,7 +98,7 @@ export function LegacyMigrationCard() {
               </>
             )}
           </div>
-          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-slate-500">
+          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-[var(--text-faint)]">
             <AlertTriangle size={12} className="mt-0.5 shrink-0" />
             The local source is retained after every failure. Migration is marked complete only after the server confirms the merged account state.
           </p>

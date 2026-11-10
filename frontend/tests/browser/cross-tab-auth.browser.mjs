@@ -204,7 +204,7 @@ function createApi(options = {}) {
     }
     if (path === '/api/auth/config') return fulfillJson(requestRoute, CONFIG);
     if (path === '/api/account/data') {
-      return fulfillJson(requestRoute, { ok: true, state: EMPTY_STATE, version: 0, userId: USER.userId });
+      return fulfillJson(requestRoute, { ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0, userId: USER.userId });
     }
     if (path === '/api/account/sessions') return fulfillJson(requestRoute, { sessions: [] });
     if (path === '/api/auth/password/reset/validate') return fulfillJson(requestRoute, { ok: true, valid: true });

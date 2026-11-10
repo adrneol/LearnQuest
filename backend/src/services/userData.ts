@@ -734,6 +734,31 @@ export async function readUserState(
     throw dataReadError();
   }
 
+  // Fail closed when unified storage is selected before the forward migration
+  // has been applied: an empty unified account would otherwise look like a
+  // brand-new account and a later write would look authoritative. Only
+  // checked when unified is the active layout, so legacy reads are untouched.
+  if (env.userDataStore === 'unified') {
+    const legacySignals = await Promise.all(
+      (['playlists', 'meta', 'progress', 'sessions', 'xp', 'goals', 'checkpoints', 'settings'] as UserCollectionName[])
+        .map(async (name) => ({ name, count: await store.data(name).count({ userId }).catch(() => -1) })),
+    );
+    const legacyNonEmpty = legacySignals.some((s) => s.count > 0);
+    if (legacyNonEmpty) {
+      const unifiedSignals = await Promise.all(
+        USER_COLLECTIONS.map(async (name) => ({ name, count: await store.domainData(name).count({ userId }).catch(() => -1) })),
+      );
+      const unifiedEmpty = unifiedSignals.every((s) => s.count >= 0 && s.count === 0);
+      if (unifiedEmpty) {
+        throw httpError(
+          'The account data backend is configured for unified storage, but no unified records exist for this account while legacy records do. Data would be hidden; the read is refused. Apply the reviewed forward migration (controlled path) before selecting unified.',
+          503,
+          'MIGRATION_NOT_APPLIED',
+        );
+      }
+    }
+  }
+
   await Promise.all(USER_COLLECTIONS.map(async (name) => {
     try {
       const col = store.domainData(name);

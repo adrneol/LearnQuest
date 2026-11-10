@@ -122,7 +122,7 @@ describe('auth response boundary (MongoDB render regression)', () => {
         // object to `setup`, then crashed reading `setup.configured.mongodb`.
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-login' });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       return json({ error: 'not found' }, 404);
     }) as any;
 
@@ -478,7 +478,7 @@ describe('email action links in the browser', () => {
         loginBodies.push(JSON.parse(init.body));
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-after-reset' });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       return json({ error: 'not found' }, 404);
     }) as any;
 

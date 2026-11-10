@@ -98,11 +98,11 @@ export function PlaylistManager() {
   return (
     <Card>
       <h2 className="flex items-center gap-1.5 text-sm font-bold"><Settings2 size={16} /> Your playlists</h2>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-xs text-[var(--text-faint)]">
         Remove a playlist from the dashboard (archived, all learning data kept) or permanently delete it and its attributable data.
         Archived playlists are excluded from this dashboard's active totals and the active-playlist selector.
       </p>
-      {message && <p role="status" className="mt-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-2 text-sm text-emerald-200">{message}</p>}
+      {message && <p role="status" className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-2 text-sm text-emerald-800 dark:text-emerald-200">{message}</p>}
       <ul className="mt-2 divide-y divide-white/5">
         {activeIds.map((id) => {
           const title = s.meta[id]?.customTitle ?? s.playlists[id]?.title ?? id;
@@ -111,23 +111,23 @@ export function PlaylistManager() {
             <li key={id} className="flex flex-wrap items-center gap-2 py-2">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{isActive ? '▶ ' : ''}{title}</p>
-                <p className="truncate text-[11px] text-slate-500">{id} · {s.playlists[id]?.entries.length ?? 0} videos · {s.progress && Object.values(s.progress).filter((p) => p.playlistId === id && p.status === 'done' && p.completedAt).length} completed</p>
+                <p className="truncate text-[11px] text-[var(--text-faint)]">{id} · {s.playlists[id]?.entries.length ?? 0} videos · {s.progress && Object.values(s.progress).filter((p) => p.playlistId === id && p.status === 'done' && p.completedAt).length} completed</p>
               </div>
               {!isActive && <Btn onClick={() => s.setActive(id)}><Play size={13} /> Open</Btn>}
               <Btn onClick={() => open(id)}><Archive size={13} /> Manage / Remove</Btn>
             </li>
           );
         })}
-        {activeIds.length === 0 && <li className="py-3 text-sm text-slate-500">No active playlists. Add one from Library or Reports.</li>}
+        {activeIds.length === 0 && <li className="py-3 text-sm text-[var(--text-faint)]">No active playlists. Add one from Library or Reports.</li>}
       </ul>
       {archiveIds.length > 0 && (
-        <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-2.5">
-          <h3 className="flex items-center gap-1.5 text-xs font-bold text-slate-300"><Archive size={14} /> Archived playlists ({archiveIds.length})</h3>
-          <p className="mt-0.5 text-[11px] text-slate-500">Restoring keeps the same records and never recreates XP.</p>
+        <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5">
+          <h3 className="flex items-center gap-1.5 text-xs font-bold text-[var(--text)]"><Archive size={14} /> Archived playlists ({archiveIds.length})</h3>
+          <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">Restoring keeps the same records and never recreates XP.</p>
           <ul className="mt-1 divide-y divide-white/5">
             {archiveIds.map((id) => (
               <li key={id} className="flex flex-wrap items-center gap-2 py-1.5">
-                <span className="min-w-0 flex-1 truncate text-sm text-slate-300">{s.meta[id]?.customTitle ?? s.playlists[id]?.title ?? id}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-[var(--text)]">{s.meta[id]?.customTitle ?? s.playlists[id]?.title ?? id}</span>
                 <Btn onClick={async () => {
                   try {
                     await s.restorePlaylistManaged(id);
@@ -149,7 +149,7 @@ export function PlaylistManager() {
           description={(
             <>
               <b className="break-words">{dialog.title}</b>
-              <span className="block break-all text-[11px] text-slate-500">{dialog.playlistId}</span>
+              <span className="block break-all text-[11px] text-[var(--text-faint)]">{dialog.playlistId}</span>
             </>
           )}
           onClose={() => { if (!dialog.busy) setDialog(null); }}
@@ -164,10 +164,10 @@ export function PlaylistManager() {
               type="button"
               aria-pressed={dialog.choice === 'archive'}
               onClick={() => setDialog({ ...dialog, choice: 'archive', error: null })}
-              className={`rounded-xl border p-3 text-left ${dialog.choice === 'archive' ? 'border-cyan-400/60 bg-cyan-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+              className={`rounded-lg border p-3 text-left ${dialog.choice === 'archive' ? 'border-cyan-400/60 bg-cyan-500/10' : 'border-[var(--border)] bg-[var(--surface-soft)] hover:bg-[var(--surface-hover)]'}`}
             >
               <span className="flex items-center gap-1.5 text-sm font-semibold"><Archive size={15} /> Remove from dashboard (keep my learning data)</span>
-              <span className="mt-1 block text-xs text-slate-400">
+              <span className="mt-1 block text-xs text-[var(--text-muted)]">
                 Archives this playlist. Progress, notes, review history, Focus sessions, playback evidence, checkpoints, saved ranges, modules, scoped goals, achievements, and XP are preserved.
                 Restore it from Archived playlists without duplicate entries or recreated XP.
               </span>
@@ -176,22 +176,22 @@ export function PlaylistManager() {
               type="button"
               aria-pressed={dialog.choice === 'delete'}
               onClick={() => setDialog({ ...dialog, choice: 'delete', error: null })}
-              className={`rounded-xl border p-3 text-left ${dialog.choice === 'delete' ? 'border-red-400/60 bg-red-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+              className={`rounded-lg border p-3 text-left ${dialog.choice === 'delete' ? 'border-red-400/60 bg-red-500/10' : 'border-[var(--border)] bg-[var(--surface-soft)] hover:bg-[var(--surface-hover)]'}`}
             >
-              <span className="flex items-center gap-1.5 text-sm font-semibold text-red-200"><Trash2 size={15} /> Permanently delete playlist and all its learning data</span>
-              <span className="mt-1 block text-xs text-slate-400">Destructive and cannot be undone through LearnQuest. The public YouTube playlist itself is not changed.</span>
+              <span className="flex items-center gap-1.5 text-sm font-semibold text-red-800 dark:text-red-200"><Trash2 size={15} /> Permanently delete playlist and all its learning data</span>
+              <span className="mt-1 block text-xs text-[var(--text-muted)]">Destructive and cannot be undone through LearnQuest. The public YouTube playlist itself is not changed.</span>
             </button>
           </div>
 
-          <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-2.5 text-[11px] text-slate-400">
-            <p className="font-semibold text-slate-300">Account-owned records associated with this playlist</p>
+          <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5 text-[11px] text-[var(--text-muted)]">
+            <p className="font-semibold text-[var(--text)]">Account-owned records associated with this playlist</p>
             <p className="mt-0.5">{counts.videos} videos · {counts.completed} completed · {counts.annotations} with learning records · {counts.focusSessions} Focus sessions · {counts.playbackSegments} playback segments · {counts.playSessions} play sessions</p>
             <p>{counts.checkpoints} checkpoints · {counts.ranges} saved ranges · {counts.modules} modules · {counts.goals} scoped goals · {counts.xp} attributable XP entries</p>
           </div>
 
           {dialog.choice === 'delete' && (
-            <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5">
-              <p className="flex items-start gap-1.5 text-xs text-red-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2.5">
+              <p className="flex items-start gap-1.5 text-xs text-red-800 dark:text-red-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />
                 This permanently removes the playlist snapshot, stable-entry progress and annotations, review history, playback and Focus evidence, checkpoints, saved ranges, modules, queue records, playlist-scoped goals, and XP entries that can be reliably attributed to this playlist.
                 Genuine account-wide settings, preferences, day goals, and unattributable XP are preserved, and other playlists are not changed.
               </p>
@@ -203,7 +203,7 @@ export function PlaylistManager() {
             </div>
           )}
 
-          {dialog.error && <p role="alert" className="mt-2 rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-200">{dialog.error}</p>}
+          {dialog.error && <p role="alert" className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-800 dark:text-red-200">{dialog.error}</p>}
 
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <Btn onClick={() => setDialog(null)} disabled={dialog.busy}>Cancel</Btn>

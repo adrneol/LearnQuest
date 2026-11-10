@@ -176,10 +176,10 @@ export function HistoryView() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Study history <span className="font-normal text-slate-400">({tz})</span></h2>
+        <h2 className="text-base font-bold">Study history <span className="font-normal text-[var(--text-muted)]">({tz})</span></h2>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {(['today', 'yesterday', 'week', 'month', 'all', 'custom'] as Preset[]).map((p) => (
-            <button key={p} onClick={() => setPreset(p)} className={`rounded-full px-3 py-1 text-xs ${preset === p ? 'bg-violet-600 text-white' : 'bg-white/5 text-slate-300'}`}>{p}</button>
+            <button key={p} onClick={() => setPreset(p)} className={`rounded-full px-3 py-1 text-xs ${preset === p ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'bg-[var(--surface-soft)] text-[var(--text)]'}`}>{p}</button>
           ))}
           {preset === 'custom' && (
             <>
@@ -200,7 +200,7 @@ export function HistoryView() {
           </div>
         </div>
         {preset === 'custom' && range.from > range.to && (
-          <p className="mt-1 text-xs text-red-300" role="alert">Choose a valid custom date range.</p>
+          <p className="mt-1 text-xs text-red-800 dark:text-red-300" role="alert">Choose a valid custom date range.</p>
         )}
         <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-3 lg:grid-cols-6">
           <MiniStat
@@ -225,13 +225,13 @@ export function HistoryView() {
             hint="completion date in range"
           />
         </div>
-        <p className="mt-1 text-[11px] text-slate-500">
+        <p className="mt-1 text-[11px] text-[var(--text-faint)]">
           Every statistic, the session list, and per-video detail use the selected range: <b>{rangeLabel}</b>.
           {preset === 'all' ? ' All-time totals are labelled explicitly.' : ' Use All for all-time totals.'} Cross-midnight intervals are split at {tz} date boundaries.
           Zero values mean no matching record in this range; they are not placeholders. “Verified” means observed Player telemetry, while “self-reported” and “estimated” stay separate.
         </p>
         {nothingRecordedInRange && (
-          <p className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-slate-300" role="status">
+          <p className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2 text-xs text-[var(--text)]" role="status">
             No focus, playback, or coverage records were found in {rangeLabel}. That is a true empty result for this
             range, not missing data. Choose a wider range or All for all-time totals; if you studied before tracking
             existed, add a self-reported entry below.
@@ -242,20 +242,20 @@ export function HistoryView() {
       <Card>
         <h3 className="text-sm font-bold">Sessions in {rangeLabel} ({allRows.length}) — click for detail</h3>
         {allRows.length === 0 ? (
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-[var(--text-faint)]">
             No sessions have been recorded in {rangeLabel}. Zero is the real total for this period. History before
             tracking existed is never fabricated — add a self-reported entry below if needed.
           </p>
         ) : (
           <>
             {allRows.length > 100 && (
-              <p className="text-[11px] text-slate-500">Showing the newest 100 of {allRows.length} sessions. Narrow the range or choose a playlist to see older ones.</p>
+              <p className="text-[11px] text-[var(--text-faint)]">Showing the newest 100 of {allRows.length} sessions. Narrow the range or choose a playlist to see older ones.</p>
             )}
             <ul className="mt-1 max-h-72 space-y-1 overflow-auto text-sm">
               {allRows.slice(0, 100).map((r) => (
-                <li key={r.id} className="rounded-xl bg-white/5 p-2">
+                <li key={r.id} className="rounded-lg bg-[var(--surface-soft)] p-2">
                   <button className="w-full text-left" onClick={() => setOpenId(openId === r.id ? null : r.id)} aria-expanded={openId === r.id}>
-                    <span className="text-xs text-slate-400">{new Date(r.at).toLocaleString('en-US', { timeZone: tz })}</span>
+                    <span className="text-xs text-[var(--text-muted)]">{new Date(r.at).toLocaleString('en-US', { timeZone: tz })}</span>
                     <span className="ml-2">{r.label}</span>
                   </button>
                   {openId === r.id && <SessionDetail row={r} tz={tz} />}
@@ -282,10 +282,10 @@ export function HistoryView() {
               className="flex-1"
             />
           </div>
-          {playlist === 'all' && videoPos !== null && <p className="mt-1 text-xs text-amber-300">Select a specific playlist to inspect one video.</p>}
-          {selectedEntry && !videoCov && <p className="mt-1 text-xs text-slate-500">No verified or self-reported playback segments for #{selectedEntry.position} in {rangeLabel}.</p>}
+          {playlist === 'all' && videoPos !== null && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">Select a specific playlist to inspect one video.</p>}
+          {selectedEntry && !videoCov && <p className="mt-1 text-xs text-[var(--text-faint)]">No verified or self-reported playback segments for #{selectedEntry.position} in {rangeLabel}.</p>}
           {videoCov && (
-            <div className="mt-2 text-xs text-slate-300">
+            <div className="mt-2 text-xs text-[var(--text)]">
               <p>
                 Combined unique {formatHuman(Math.round(videoCov.uniqueSec))} ·
                 {' '}verified {formatHuman(uniqueSeconds(videoSegs.filter((x) => x.source === 'verified')))} ·
@@ -319,10 +319,10 @@ export function HistoryView() {
 
 function MiniStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl bg-white/5 p-2">
+    <div className="rounded-lg bg-[var(--surface-soft)] p-2">
       <p className="truncate text-sm font-bold" title={value}>{value}</p>
-      <p className="text-[11px] text-slate-400">{label}</p>
-      {hint && <p className="mt-0.5 text-[10px] text-slate-500">{hint}</p>}
+      <p className="text-[11px] text-[var(--text-muted)]">{label}</p>
+      {hint && <p className="mt-0.5 text-[10px] text-[var(--text-faint)]">{hint}</p>}
     </div>
   );
 }
@@ -333,25 +333,25 @@ function SessionDetail({ row, tz }: { row: { kind: 'focus' | 'play'; ref: any };
   const start = ref.startedAt ? new Date(ref.startedAt) : null;
   const finish = ref.finishedAt ? new Date(ref.finishedAt) : null;
   return (
-    <dl className="mt-1 grid gap-x-4 gap-y-0.5 rounded-lg bg-black/30 p-2 text-[11px] text-slate-300 sm:grid-cols-2">
-      <div className="flex gap-1"><dt className="text-slate-500">Start</dt><dd>{start && Number.isFinite(start.getTime()) ? start.toLocaleString('en-US', { timeZone: tz }) : 'unknown'}</dd></div>
-      <div className="flex gap-1"><dt className="text-slate-500">Finish</dt><dd>{finish && Number.isFinite(finish.getTime()) ? finish.toLocaleString('en-US', { timeZone: tz }) : 'not recorded'}</dd></div>
+    <dl className="mt-1 grid gap-x-4 gap-y-0.5 rounded-lg bg-[var(--surface-soft)] p-2 text-[11px] text-[var(--text)] sm:grid-cols-2">
+      <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Start</dt><dd>{start && Number.isFinite(start.getTime()) ? start.toLocaleString('en-US', { timeZone: tz }) : 'unknown'}</dd></div>
+      <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Finish</dt><dd>{finish && Number.isFinite(finish.getTime()) ? finish.toLocaleString('en-US', { timeZone: tz }) : 'not recorded'}</dd></div>
       {row.kind === 'focus' ? (
         <>
-          <div className="flex gap-1"><dt className="text-slate-500">Focused</dt><dd>{formatHuman(ref.activeSec ?? 0)}</dd></div>
-          <div className="flex gap-1"><dt className="text-slate-500">Wall clock</dt><dd>{formatHuman(ref.elapsedSec ?? ref.activeSec ?? 0)}</dd></div>
-          <div className="flex gap-1"><dt className="text-slate-500">Paused</dt><dd>{formatHuman(ref.pausedSec ?? 0)}</dd></div>
-          <div className="flex gap-1"><dt className="text-slate-500">Evidence</dt><dd>{ref.estimated ? 'estimated (manual correction)' : 'observed timer'}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Focused</dt><dd>{formatHuman(ref.activeSec ?? 0)}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Wall clock</dt><dd>{formatHuman(ref.elapsedSec ?? ref.activeSec ?? 0)}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Paused</dt><dd>{formatHuman(ref.pausedSec ?? 0)}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Evidence</dt><dd>{ref.estimated ? 'estimated (manual correction)' : 'observed timer'}</dd></div>
         </>
       ) : (
         <>
-          <div className="flex gap-1"><dt className="text-slate-500">Video</dt><dd>#{ref.position} · {ref.videoId}</dd></div>
-          <div className="flex gap-1"><dt className="text-slate-500">Active playback</dt><dd>{formatHuman(ref.activePlaybackSec ?? 0)}</dd></div>
-          <div className="flex gap-1"><dt className="text-slate-500">Unique gain</dt><dd>{formatHuman(ref.uniqueGainSec ?? 0)}</dd></div>
-          <div className="flex gap-1"><dt className="text-slate-500">Evidence</dt><dd>{ref.source === 'verified' ? 'verified Player telemetry' : 'self-reported'}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Video</dt><dd>#{ref.position} · {ref.videoId}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Active playback</dt><dd>{formatHuman(ref.activePlaybackSec ?? 0)}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Unique gain</dt><dd>{formatHuman(ref.uniqueGainSec ?? 0)}</dd></div>
+          <div className="flex gap-1"><dt className="text-[var(--text-faint)]">Evidence</dt><dd>{ref.source === 'verified' ? 'verified Player telemetry' : 'self-reported'}</dd></div>
         </>
       )}
-      {ref.note && <div className="flex gap-1 sm:col-span-2"><dt className="text-slate-500">Note</dt><dd>{ref.note}</dd></div>}
+      {ref.note && <div className="flex gap-1 sm:col-span-2"><dt className="text-[var(--text-faint)]">Note</dt><dd>{ref.note}</dd></div>}
     </dl>
   );
 }
@@ -438,7 +438,7 @@ function ManualEntry({ onSaved }: { onSaved?: (dateKey: string) => string }) {
 
   return (
     <Card>
-      <h3 className="text-sm font-bold">Self-reported entry <span className="font-normal text-slate-400">(pre-tracking history)</span></h3>
+      <h3 className="text-sm font-bold">Self-reported entry <span className="font-normal text-[var(--text-muted)]">(pre-tracking history)</span></h3>
       <div className="mt-2 grid grid-cols-2 gap-2">
         <Dropdown
           label="Playlist"
@@ -453,7 +453,7 @@ function ManualEntry({ onSaved }: { onSaved?: (dateKey: string) => string }) {
         <Field label="Note"><input value={note} onChange={(e) => setNote(e.target.value)} className={inputCls} /></Field>
       </div>
       <div className="mt-2"><Btn variant="primary" onClick={save}><Plus size={14} /> Save self-reported</Btn></div>
-      {msg && <p className="mt-1 text-xs text-slate-300" role="status">{msg}</p>}
+      {msg && <p className="mt-1 text-xs text-[var(--text)]" role="status">{msg}</p>}
     </Card>
   );
 }

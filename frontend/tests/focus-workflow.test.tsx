@@ -104,7 +104,7 @@ describe('Focus end-to-end state machine', () => {
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(screen.getByText('00:01:05')).toBeTruthy(); // active time did not advance
-    expect(screen.getByText(/Elapsed time 00:02:05/)).toBeTruthy();
+    expect(screen.getByText(/00:02:05\s*elapsed/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(35_000); });

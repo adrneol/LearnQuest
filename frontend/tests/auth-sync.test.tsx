@@ -279,7 +279,7 @@ describe('store integration with cross-tab sign-out', () => {
       if (u.endsWith('/api/auth/session')) {
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       return json({ error: 'not found' }, 404);
     }) as any;
     localStorage.setItem('lq-focus-timer-v1', '{"startedAt":1}');
@@ -313,7 +313,7 @@ describe('store integration with cross-tab sign-out', () => {
         if (u.endsWith('/api/auth/session')) {
           return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
         }
-        if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+        if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
         return json({ error: 'not found' }, 404);
       }) as any;
 
@@ -340,7 +340,7 @@ describe('store integration with cross-tab sign-out', () => {
       if (u.endsWith('/api/auth/session')) {
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       return json({ error: 'not found' }, 404);
     }) as any;
     localStorage.setItem('lq-focus-timer-v1', '{"startedAt":1}');
@@ -465,7 +465,7 @@ describe('store integration with cross-tab sign-out', () => {
     await dataRequested;
 
     emitStorageSignOut('password-reset');
-    resolveData(json({ ok: true, state: EMPTY_STATE, version: 0 }));
+    resolveData(json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 }));
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByText(/Your password was reset in another tab/i)).toBeInTheDocument();
@@ -485,7 +485,7 @@ describe('store integration with cross-tab sign-out', () => {
         <div>APP CONTENT</div>
       </StoreProvider>,
     );
-    expect(screen.getByText(/Connecting to your LearnQuest account/i)).toBeInTheDocument();
+    expect(screen.getByText(/Connecting to your LearnQuest account|Server starting/i)).toBeInTheDocument();
 
     emitStorageAuthChange('sign-out');
     resolveSession(json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG }));
@@ -500,7 +500,7 @@ describe('store integration with cross-tab sign-out', () => {
       if (u.endsWith('/api/auth/session')) {
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       if (u.endsWith('/api/account/profile')) {
         return json({ error: 'This session was signed out after a password change. Sign in again.', code: 'SESSION_REVOKED' }, 401);
       }
@@ -531,7 +531,7 @@ describe('store integration with cross-tab sign-out', () => {
       if (u.endsWith('/api/auth/session')) {
         return json({ authenticated: true, user: USER, csrfToken: 'csrf-session', ...CONFIG });
       }
-      if (u.endsWith('/api/account/data')) return json({ ok: true, state: EMPTY_STATE, version: 0 });
+      if (u.endsWith('/api/account/data')) return json({ ok: true, schemaVersion: 1, state: EMPTY_STATE, version: 0 });
       if (u.endsWith('/api/account/profile')) {
         markProfileRequested();
         return profileResponse;

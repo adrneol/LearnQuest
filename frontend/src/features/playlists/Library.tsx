@@ -15,10 +15,12 @@ import { NumberField } from '../../components/ui/NumberField.js';
 import { DurationBars } from '../../components/charts/DurationBars.js';
 import { CumulativeLine } from '../../components/charts/CumulativeLine.js';
 import type { RangePoint } from '../../components/charts/theme.js';
-import { TICK, TOOLTIP_STYLE, positionTicks } from '../../components/charts/theme.js';
+import { useChartTheme, positionTicks } from '../../components/charts/theme.js';
+import { PanChart, niceTicks } from '../../components/charts/PanChart.js';
 
 export function Library() {
   const s = useStore();
+  const { TICK, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const N = snap?.entries.length ?? 0;
   const [q, setQ] = useState('');
@@ -29,6 +31,7 @@ export function Library() {
   const [end, setEnd] = useState(8);
   const [chartView, setChartView] = useState<'bars' | 'cumulative'>('bars');
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [distMode, setDistMode] = useState<'overview' | 'detail'>('overview');
   const PER = 25;
 
   useEffect(() => {
@@ -55,6 +58,14 @@ export function Library() {
   }, [snap, q, filter, sort, progressIndex]);
 
   if (!snap) return <Empty title="No active playlist" hint="Add one to explore videos and ranges." />;
+
+  const distData = snap ? snap.entries.filter((e) => e.durationSec !== null).map((e) => ({ pos: e.position, min: +((e.durationSec! / 60).toFixed(1)) })) : [];
+  const distMaxEntry = distData.length;
+  const distMaxVal = Math.max(...distData.map((d) => d.min), 1);
+  const distYMax = niceTicks(distMaxVal, 4).slice(-1)[0];
+  const distYTickValues = niceTicks(distMaxVal);
+  const distYTicks = [...distYTickValues].reverse().map(String);
+  const distOverviewTicks = distMaxEntry <= 25 ? 0 : Math.min(Math.max(Math.floor(distMaxEntry / 14), 5), 9);
 
   const pages = Math.max(1, Math.ceil(rows.length / PER));
   // Clamp (never a blank page after filtering/playlist switch shrinks the list)
@@ -127,8 +138,8 @@ export function Library() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="text-base font-bold">Range explorer <span className="font-normal text-slate-400">(N={N}, boundaries adapt to this playlist)</span></h2>
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:max-w-md sm:grid-cols-4">
+        <h2 className="text-base font-bold">Range explorer <span className="font-normal text-[var(--text-muted)]">(N={N}, boundaries adapt to this playlist)</span></h2>
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
           <NumberField
             label={`Start (1–${N})`}
             value={start}
@@ -141,9 +152,9 @@ export function Library() {
             onCommit={(v) => { if (v !== null) setEnd(v); }}
             min={1}
           />
-          <div>
+          <div className="min-w-0">
             <Dropdown
-              label="Session length — estimate only, never changes content duration"
+              label="Session length (estimate only)"
               value={String(s.prefs.sessionLenMin)}
               options={[10, 15, 25, 45, 60].map((m) => ({ value: String(m), label: `${m} min` }))}
               onChange={(v) => s.setPrefs({ sessionLenMin: Number(v) })}
@@ -155,13 +166,14 @@ export function Library() {
             </Btn>
           </div>
         </div>
-        {rangeErrMsg && <p className="mt-1 text-sm text-red-300">{rangeErrMsg}</p>}
+        <p className="mt-1 text-[10px] text-[var(--text-faint)]">Session length only estimates how many study blocks a range needs — it never changes recorded durations.</p>
+        {rangeErrMsg && <p className="mt-1 text-sm text-red-800 dark:text-red-300">{rangeErrMsg}</p>}
         <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Range presets">
           {(['full', 'first', 'middle', 'last'] as const).map((p) => (
             <button
               key={p}
               onClick={() => applyPreset(p)}
-              className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300 hover:bg-white/10"
+              className="rounded-full bg-[var(--surface-soft)] px-3 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)]"
             >
               {p === 'full' ? `Full playlist (1–${N})` : p === 'first' ? 'First videos' : p === 'middle' ? 'Middle segment' : 'Final videos'}
             </button>
@@ -169,25 +181,48 @@ export function Library() {
         </div>
         {range && (
           <div className="mt-3 grid min-w-0 gap-3 md:grid-cols-3">
-            <div className="rounded-xl bg-white/5 p-3 text-sm">
-              <p className="text-xs text-slate-400">Videos {start}–{end} · {range.count} entries</p>
-              <p className="text-2xl font-bold font-mono">{formatSecondsHHMMSS(range.totalSec)}{range.isComplete ? '' : ' +?'}</p>
-              <p className="text-xs text-slate-400">{range.resolved} resolved · {range.unresolved} unresolved · ≈{sessionsNeeded(range.totalSec, s.prefs.sessionLenMin * 60)} sessions of {s.prefs.sessionLenMin} min</p>
-              {!range.isComplete && <p className="text-xs text-amber-300">Incomplete — positions {range.unresolvedPositions.join(', ')} unresolved. Not a complete total.</p>}
-              {(() => {
-                const rp = computeRangeProgress(snap, start, end, s.progress);
-                return <p className="mt-1 text-xs text-slate-400">{rp.done}/{rp.count} done{rp.doneSec !== null && rp.totalSec !== null ? ` · ${formatHuman(rp.totalSec - rp.doneSec)} left` : ''}.</p>;
-              })()}
-            </div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg bg-[var(--surface-soft)] p-3 text-sm sm:grid-cols-4 md:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <dt className="text-[11px] text-[var(--text-faint)]">Videos {start}–{end}</dt>
+                <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.count}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-[var(--text-faint)]">Total</dt>
+                <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{formatSecondsHHMMSS(range.totalSec)}{range.isComplete ? '' : ' +?'}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-[var(--text-faint)]">Resolved</dt>
+                <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.resolved}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-[var(--text-faint)]">Unresolved</dt>
+                <dd className="font-mono font-semibold tabular-nums text-[var(--text)]">{range.unresolved}</dd>
+              </div>
+              <div className="col-span-2 sm:col-span-4">
+                <dt className="text-[10px] uppercase tracking-wide text-[var(--text-faint)]">Sessions of {s.prefs.sessionLenMin} min</dt>
+                <dd className="text-xs text-[var(--text-muted)]">≈{sessionsNeeded(range.totalSec, s.prefs.sessionLenMin * 60)} needed</dd>
+              </div>
+              {!range.isComplete && (
+                <div className="col-span-2 sm:col-span-4">
+                  <p className="text-xs text-amber-800 dark:text-amber-300">Incomplete — positions {range.unresolvedPositions.join(', ')} unresolved. Not a complete total.</p>
+                </div>
+              )}
+              <div className="col-span-2 sm:col-span-4">
+                {(() => {
+                  const rp = computeRangeProgress(snap, start, end, s.progress);
+                  return <p className="text-xs text-[var(--text-muted)]"><b>{rp.done}/{rp.count}</b> done{rp.doneSec !== null && rp.totalSec !== null ? ` · ${formatHuman(rp.totalSec - rp.doneSec)} left` : ''}.</p>;
+                })()}
+              </div>
+            </dl>
             <div className="min-w-0 md:col-span-2">
-              <div className="mb-2 inline-flex rounded-xl border border-white/10 bg-black/30 p-0.5" role="group" aria-label="Chart view">
+              <div className="mb-2 inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-0.5" role="group" aria-label="Chart view">
                 {(['bars', 'cumulative'] as const).map((v) => (
                   <button
                     key={v}
                     onClick={() => setChartView(v)}
                     aria-pressed={chartView === v}
                     className={`rounded-[10px] px-3 py-1.5 text-xs font-medium transition ${
-                      chartView === v ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                      chartView === v ? 'bg-[var(--accent)] text-[var(--accent-text)] shadow' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
                     }`}
                   >
                     {v === 'bars' ? 'Video duration' : 'Cumulative duration'}
@@ -203,7 +238,7 @@ export function Library() {
           </div>
         )}
         {sel && (
-          <p className="mt-2 text-xs text-slate-300">
+          <p className="mt-2 text-xs text-[var(--text)]">
             Row selection ({selEntries.length}): <span className="font-mono">{formatSecondsHHMMSS(sel.totalSec)}{sel.isComplete ? '' : ' +?'}</span> — non-contiguous selection sum, not a continuous range.
             <button className="ml-2 underline" onClick={() => setSelected(new Set())}>Clear</button>
           </p>
@@ -213,7 +248,7 @@ export function Library() {
       <Card>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[180px]">
-            <Search size={14} className="absolute left-2.5 top-2.5 text-slate-500" />
+            <Search size={14} className="absolute left-2.5 top-2.5 text-[var(--text-faint)]" />
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search titles…" className={`${inputCls} pl-8`} aria-label="Search videos" />
           </div>
           <div className="w-[calc(50%-0.25rem)] min-w-0 sm:w-40">
@@ -243,7 +278,7 @@ export function Library() {
               onChange={(v) => { setSort(v as EntrySortKey); setPage(0); }}
             />
           </div>
-          <span className="text-xs text-slate-500">{rows.length} shown</span>
+          <span className="text-xs text-[var(--text-faint)]">{rows.length} shown</span>
         </div>
         {/*
           Phones get a real card list: no 640px horizontal canvas, no clipped
@@ -257,7 +292,7 @@ export function Library() {
             const done = isProgressComplete(rec);
             const conf = rec?.confidence;
             return (
-              <li key={e.position} className={`rounded-xl border border-white/10 p-3 ${done ? 'bg-emerald-500/5' : 'bg-white/[0.02]'}`}>
+              <li key={e.position} className={`rounded-lg border border-[var(--border)] p-3 ${done ? 'bg-emerald-500/5' : 'bg-white/[0.02]'}`}>
                 <div className="flex min-w-0 items-start gap-2">
                   <input
                     type="checkbox"
@@ -268,12 +303,12 @@ export function Library() {
                   />
                   <div className="min-w-0 flex-1">
                     <p className="break-words text-sm font-medium" title={e.title}>{e.title}</p>
-                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--text-muted)]">
                       <span className="font-mono">#{e.position}</span>
                       <span className="font-mono">{e.durationSec !== null ? formatSecondsHHMMSS(e.durationSec) : 'unresolved'}</span>
-                      <span className={done ? 'text-emerald-300' : 'text-slate-500'}>{done ? 'done' : 'not done'}</span>
-                      {conf ? <span className="text-cyan-300">confidence {conf}/5</span> : null}
-                      {rec?.needsRevision ? <span className="text-amber-300">needs revision</span> : null}
+                      <span className={done ? 'text-emerald-800 dark:text-emerald-300' : 'text-[var(--text-faint)]'}>{done ? 'done' : 'not done'}</span>
+                      {conf ? <span className="text-cyan-800 dark:text-cyan-300">confidence {conf}/5</span> : null}
+                      {rec?.needsRevision ? <span className="text-amber-800 dark:text-amber-300">needs revision</span> : null}
                     </p>
                   </div>
                   {e.videoId ? (
@@ -282,7 +317,7 @@ export function Library() {
                       target="_blank"
                       rel="noreferrer"
                       aria-label={`Open video ${e.position} on YouTube`}
-                      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10"
+                      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
                     >
                       <ExternalLink size={17} />
                     </a>
@@ -293,9 +328,9 @@ export function Library() {
                     type="button"
                     onClick={() => s.toggleDone(snap.playlistId, e.position, e.videoId)}
                     aria-label={done ? `Mark video ${e.position} incomplete` : `Mark video ${e.position} complete`}
-                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-white/5 px-2.5 text-xs text-slate-200"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--surface-soft)] px-2.5 text-xs text-[var(--text)]"
                   >
-                    {done ? <CheckCircle2 size={16} className="text-emerald-400" /> : <Circle size={16} className="text-slate-500" />}
+                    {done ? <CheckCircle2 size={16} className="text-emerald-700 dark:text-emerald-400" /> : <Circle size={16} className="text-[var(--text-faint)]" />}
                     {done ? 'Done' : 'Not done'}
                   </button>
                   <button
@@ -309,9 +344,9 @@ export function Library() {
                     }}
                     aria-label={rec?.needsRevision ? `Unflag video ${e.position} for revision` : `Flag video ${e.position} for revision`}
                     aria-pressed={!!rec?.needsRevision}
-                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-white/5 px-2.5 text-xs text-slate-200"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--surface-soft)] px-2.5 text-xs text-[var(--text)]"
                   >
-                    <BookmarkPlus size={16} className={rec?.needsRevision ? 'text-amber-300' : 'text-slate-500'} />
+                    <BookmarkPlus size={16} className={rec?.needsRevision ? 'text-amber-800 dark:text-amber-300' : 'text-[var(--text-faint)]'} />
                     {rec?.needsRevision ? 'Unflag revision' : 'Needs revision'}
                   </button>
                 </div>
@@ -322,7 +357,7 @@ export function Library() {
         <div className="mt-2 hidden overflow-x-auto md:block">
           <table className="w-full min-w-[640px] text-sm">
             <thead>
-              <tr className="text-left text-xs text-slate-400">
+              <tr className="text-left text-xs text-[var(--text-muted)]">
                 <th className="p-2">Sel</th><th className="p-2">Done</th><th className="p-2">Revise</th><th className="p-2">#</th><th className="p-2">Title</th><th className="p-2 text-right">Duration</th><th className="p-2">Open</th>
               </tr>
             </thead>
@@ -333,11 +368,11 @@ export function Library() {
                 const done = isProgressComplete(rec);
                 const conf = rec?.confidence;
                 return (
-                  <tr key={e.position} className={`border-t border-white/5 ${done ? 'bg-emerald-500/5' : ''} ${e.durationSec === null ? 'opacity-70' : ''}`}>
+                  <tr key={e.position} className={`border-t border-[var(--border)] ${done ? 'bg-emerald-500/5' : ''} ${e.durationSec === null ? 'opacity-70' : ''}`}>
                     <td className="p-2"><input type="checkbox" checked={selected.has(e.position)} onChange={() => toggleSel(e.position)} aria-label={`Select video ${e.position}`} /></td>
                     <td className="p-2">
                       <button onClick={() => s.toggleDone(snap.playlistId, e.position, e.videoId)} aria-label={done ? `Mark video ${e.position} incomplete` : `Mark video ${e.position} complete`}>
-                        {done ? <CheckCircle2 size={18} className="text-emerald-400" /> : <Circle size={18} className="text-slate-500" />}
+                        {done ? <CheckCircle2 size={18} className="text-emerald-700 dark:text-emerald-400" /> : <Circle size={18} className="text-[var(--text-faint)]" />}
                       </button>
                     </td>
                     <td className="p-2">
@@ -352,16 +387,16 @@ export function Library() {
                         aria-label={rec?.needsRevision ? `Unflag video ${e.position} for revision` : `Flag video ${e.position} for revision`}
                         aria-pressed={!!rec?.needsRevision}
                       >
-                        <BookmarkPlus size={17} className={rec?.needsRevision ? 'text-amber-300' : 'text-slate-600'} />
+                        <BookmarkPlus size={17} className={rec?.needsRevision ? 'text-amber-800 dark:text-amber-300' : 'text-[var(--text-faint)]'} />
                       </button>
                     </td>
-                    <td className="p-2 font-mono text-slate-400">{e.position}</td>
+                    <td className="p-2 font-mono text-[var(--text-muted)]">{e.position}</td>
                     <td className="max-w-[320px] truncate p-2" title={e.title}>
-                      {e.title} {conf ? <span className="text-[11px] text-cyan-300">· conf {conf}/5</span> : ''} {rec?.needsRevision ? <span className="text-[11px] text-amber-300">· revise</span> : ''}
+                      {e.title} {conf ? <span className="text-[11px] text-cyan-800 dark:text-cyan-300">· conf {conf}/5</span> : ''} {rec?.needsRevision ? <span className="text-[11px] text-amber-800 dark:text-amber-300">· revise</span> : ''}
                     </td>
-                    <td className="p-2 text-right font-mono">{e.durationSec !== null ? formatSecondsHHMMSS(e.durationSec) : <span className="text-amber-300">unresolved</span>}</td>
+                    <td className="p-2 text-right font-mono">{e.durationSec !== null ? formatSecondsHHMMSS(e.durationSec) : <span className="text-amber-800 dark:text-amber-300">unresolved</span>}</td>
                     <td className="p-2">
-                      {e.videoId ? <a href={`https://www.youtube.com/watch?v=${e.videoId}&list=${snap.playlistId}`} target="_blank" rel="noreferrer" aria-label={`Open video ${e.position} on YouTube`}><ExternalLink size={15} className="text-slate-400" /></a> : '—'}
+                      {e.videoId ? <a href={`https://www.youtube.com/watch?v=${e.videoId}&list=${snap.playlistId}`} target="_blank" rel="noreferrer" aria-label={`Open video ${e.position} on YouTube`}><ExternalLink size={15} className="text-[var(--text-muted)]" /></a> : '—'}
                     </td>
                   </tr>
                 );
@@ -371,25 +406,52 @@ export function Library() {
         </div>
         <div className="mt-2 flex items-center justify-between text-sm">
           <Btn onClick={() => setPage((p) => Math.max(0, Math.min(p, pages - 1) - 1))} disabled={safePage === 0}><ChevronLeft size={14} /> Prev</Btn>
-          <span className="text-xs text-slate-400">Page {safePage + 1}/{pages}</span>
+          <span className="text-xs text-[var(--text-muted)]">Page {safePage + 1}/{pages}</span>
           <Btn onClick={() => setPage((p) => Math.min(pages - 1, Math.min(p, pages - 1) + 1))} disabled={safePage >= pages - 1}>Next <ChevronRight size={14} /></Btn>
         </div>
       </Card>
 
       <Card>
         <h3 className="text-sm font-bold">Distribution & composition</h3>
-        <p className="text-[11px] text-slate-500">Bars: minutes per video across the whole playlist (every resolved entry) · Pie: completed vs remaining videos</p>
+        <p className="text-[11px] text-[var(--text-faint)]">Bars: minutes per video across the whole playlist (every resolved entry) · Pie: completed vs remaining videos</p>
         <div className="grid min-w-0 gap-3 md:grid-cols-2">
           <div className="h-52 min-w-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={snap.entries.filter((e) => e.durationSec !== null).map((e) => ({ pos: e.position, min: +((e.durationSec! / 60).toFixed(1)) }))} margin={{ top: 8, right: 8, bottom: 20, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff14" />
-                <XAxis dataKey="pos" tick={TICK} ticks={positionTicks(1, snap.entries.length)} minTickGap={8} label={{ value: 'playlist position', position: 'insideBottom', offset: -14, fontSize: 11, fill: '#64748b' }} />
-                <YAxis tick={TICK} width={44} label={{ value: 'min / video', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
-                <Bar dataKey="min" fill="#8b5cf6" maxBarSize={18} />
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold text-[var(--text-muted)]">Minutes per video</p>
+              <button
+                type="button"
+                onClick={() => setDistMode((m) => (m === 'overview' ? 'detail' : 'overview'))}
+                aria-pressed={distMode === 'detail'}
+                className="text-[11px] font-semibold text-[var(--text-muted)] underline underline-offset-2 hover:text-[var(--text)]"
+              >
+                {distMode === 'overview' ? 'Explore individual videos' : 'Return to full overview'}
+              </button>
+            </div>
+            <div className="h-[calc(100%-1.25rem)]">
+              <PanChart count={distMaxEntry} mode={distMode} yTicks={distYTicks} ariaLabel="Minutes per video distribution">
+                {(distInnerWidth) => (
+                  <ResponsiveContainer width="100%" height="100%">
+                    {distMode === 'overview' ? (
+                      <BarChart data={distData} margin={{ top: 4, right: 8, bottom: 16, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
+                        <XAxis dataKey="pos" tick={TICK} ticks={positionTicks(1, snap.entries.length, distOverviewTicks)} minTickGap={8} axisLine={false} tickLine={false} />
+                        <YAxis tick={TICK} width={36} axisLine={false} tickLine={false} domain={[0, distYMax]} ticks={distYTickValues} />
+                        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
+                        <Bar dataKey="min" fill={SERIES.steel} radius={[2, 2, 0, 0]} maxBarSize={Math.max(2, Math.floor((distInnerWidth / Math.max(distMaxEntry, 1)) * 0.7))} />
+                      </BarChart>
+                    ) : (
+                      <BarChart data={distData} margin={{ top: 4, right: 0, bottom: 16, left: 44 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
+                        <XAxis dataKey="pos" tick={TICK} ticks={positionTicks(1, snap.entries.length, 0)} minTickGap={8} axisLine={false} tickLine={false} />
+                        <YAxis hide domain={[0, distYMax]} />
+                        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [`${v} min`, 'length']} labelFormatter={(l) => `Video #${l}`} />
+                        <Bar dataKey="min" fill={SERIES.steel} radius={[2, 2, 0, 0]} maxBarSize={10} />
+                      </BarChart>
+                    )}
+                  </ResponsiveContainer>
+                )}
+              </PanChart>
+            </div>
           </div>
           <DonePie />
         </div>

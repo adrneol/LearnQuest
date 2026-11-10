@@ -11,9 +11,11 @@ import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import { Card, Empty } from '../../components/ui/ui.js';
+import { useChartTheme } from '../../components/charts/theme.js';
 
 export function Efficiency() {
   const s = useStore();
+  const { TICK, AXIS_LABEL, GRID_STROKE, TOOLTIP_STYLE, SERIES } = useChartTheme();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const [scope, setScope] = useState<string>('all');
   const [src, setSrc] = useState<EvidenceFilter>('all');
@@ -164,7 +166,7 @@ export function Efficiency() {
             title="Aggregate unique content ÷ aggregate timer-active study — never the mean of daily percentages"
           />
         </div>
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mt-2 text-xs text-[var(--text-muted)]">
           <b>Learning throughput</b> = unique content ÷ timer-active study × 100. <b>Playback utilization</b> = active playback
           (playing time only; pauses and buffering excluded) ÷ timer-active study × 100. <b>Period throughput</b> uses the
           aggregate ratio over this exact scope and evidence selection, never the average of daily percentages. Over 100% is
@@ -172,7 +174,7 @@ export function Efficiency() {
           (usually a zero denominator), not a fabricated zero.
         </p>
         {model.focus === 0 && (
-          <div className="mt-2 rounded-xl border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100" role="status">
+          <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-100" role="status">
             {model.unique > 0 ? (
               <>
                 {formatHuman(model.unique)} of unique content is recorded, but there is no matching timer-active study in this
@@ -191,21 +193,21 @@ export function Efficiency() {
           </div>
         )}
         {model.focus > 0 && model.unique === 0 && (
-          <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-slate-300" role="status">
+          <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2 text-xs text-[var(--text)]" role="status">
             Timer-active time exists but no eligible unique content is recorded in this selection. Learning throughput is a
             real <b>0%</b>: there is a denominator, but no coverage numerator. Playback utilization may still be meaningful
             if active playback exists.
           </div>
         )}
-        <p className="mt-2 text-[11px] text-slate-500">
+        <p className="mt-2 text-[11px] text-[var(--text-faint)]">
           Evidence: <b>Verified playback</b> uses Player-observed segments and timer-observed focus; <b>Self-reported</b>
           uses manual timeline entries and estimated focus corrections. The selector applies to both the numerator and the
           denominator, so a verified figure never silently mixes in hand-entered time.
           Daily playback and focus derive from UTC timestamps split at {tz} day boundaries; cross-midnight time counts on
           both days and changing the timezone recomputes from stored instants.
         </p>
-        <details className="mt-2 rounded-xl bg-white/5 p-3 text-xs text-slate-300">
-          <summary className="cursor-pointer font-semibold text-slate-200">What exactly am I looking at?</summary>
+        <details className="mt-2 rounded-lg bg-[var(--surface-soft)] p-3 text-xs text-[var(--text)]">
+          <summary className="cursor-pointer font-semibold text-[var(--text)]">What exactly am I looking at?</summary>
           <ul className="mt-1 list-disc space-y-1 pl-5">
             <li><b>Numerator — unique content:</b> video-timeline seconds covered at least once (interval union). Rewatching the same 5 minutes never adds new content; seeking over unseen minutes never credits them.</li>
             <li><b>Denominator — timer-active study:</b> active seconds from focus sessions (pauses/breaks excluded) plus genuine note-taking, coding, and practice time inside active study. Your real measurements are never clamped — 110%+ is possible and stays exact.</li>
@@ -216,7 +218,7 @@ export function Efficiency() {
           </ul>
         </details>
         {model.unique > 0 && model.focus === 0 && (
-          <p className="mt-1 text-xs text-amber-300">
+          <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
             {formatHuman(model.unique)} of unique content exists without a timer denominator. Content coverage is not invalid;
             throughput simply cannot be calculated until timer-active study is recorded.
           </p>
@@ -225,19 +227,19 @@ export function Efficiency() {
 
       <Card>
         <h3 className="text-sm font-bold">Daily throughput (14 days, {tz})</h3>
-        <p className="text-[11px] text-slate-500">Learning throughput in percent per day; gaps mean no measurable ratio that day (never zero-filled)</p>
+        <p className="text-[11px] text-[var(--text-faint)]">Learning throughput in percent per day; gaps mean no measurable ratio that day (never zero-filled)</p>
         <div className="h-52 min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={model.days} margin={{ top: 8, right: 12, bottom: 20, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff14" />
-              <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} interval={1} label={{ value: 'day (MM-DD)', position: 'insideBottom', offset: -14, fontSize: 11, fill: '#64748b' }} />
-              <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={48} label={{ value: '%', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
-              <Tooltip contentStyle={{ backgroundColor: '#141830', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 12, fontSize: 12, color: '#e8ecf6' }} formatter={(v: any) => [v === null ? 'n/a' : `${v}%`, 'throughput']} />
-              <Line type="monotone" dataKey="eff" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="day" tick={TICK} interval={1} label={{ value: 'day (MM-DD)', position: 'insideBottom', offset: -14, fontSize: 11, fill: AXIS_LABEL.fill }} />
+              <YAxis tick={TICK} width={48} label={{ value: '%', angle: -90, position: 'insideLeft', fontSize: 11, fill: AXIS_LABEL.fill }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [v === null ? 'n/a' : `${v}%`, 'throughput']} />
+              <Line type="monotone" dataKey="eff" stroke={SERIES.primary} strokeWidth={2} dot={false} connectNulls={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
           Last 7 days vs previous 7 days, unique content: {formatHuman(model.trend.recent)} vs {formatHuman(model.trend.previous)}
           ({model.trend.meaningful
             ? '3+ active days in each window — comparable'
@@ -249,7 +251,7 @@ export function Efficiency() {
       <Card>
         <h3 className="text-sm font-bold">By playlist</h3>
         {model.perPl.map((p) => (
-          <p key={p.id} className="mt-1 text-xs text-slate-300">
+          <p key={p.id} className="mt-1 text-xs text-[var(--text)]">
             {p.title} · <span className="font-mono">{p.eff !== null ? `${p.eff.toFixed(1)}%` : 'n/a (no focused study in this evidence scope)'}</span>
           </p>
         ))}
@@ -260,9 +262,9 @@ export function Efficiency() {
 
 function EffStat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="rounded-xl bg-white/5 p-2" title={title}>
+    <div className="rounded-lg bg-[var(--surface-soft)] p-2" title={title}>
       <p className="truncate font-mono text-sm font-bold">{value}</p>
-      <p className="text-[11px] text-slate-400">{label}</p>
+      <p className="text-[11px] text-[var(--text-muted)]">{label}</p>
     </div>
   );
 }

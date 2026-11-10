@@ -9,7 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "test": "vitest run",
+    "test": "node ../scripts/test-isolated.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "migrate:user-data": "tsx src/scripts/migrateUserData.ts",

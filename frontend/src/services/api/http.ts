@@ -76,6 +76,7 @@ const SESSION_EXPIRY_CODES = new Set([
   'SESSION_EXPIRED',
   'SESSION_REVOKED',
   'ACCOUNT_UNAVAILABLE',
+  'ONBOARDING_EXPIRED',
 ]);
 
 function isSessionlessAuthPath(path: string): boolean {

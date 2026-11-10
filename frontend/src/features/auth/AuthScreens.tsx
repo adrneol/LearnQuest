@@ -89,17 +89,17 @@ function initialAuthMode(): Mode {
 
 export function SetupRequiredScreen({ setup: _setup, onRetry }: { setup: AuthConfig | null; onRetry: () => void }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-slate-200">
+    <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-[var(--text)]">
       <Card className="w-full border-amber-500/30">
         <h1 className="text-xl font-bold">LearnQuest accounts are not available yet</h1>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-[var(--text-muted)]">
           Account services are not fully configured yet. An administrator needs to finish setup before sign-in can work.
           Nothing was created or changed.
         </p>
-        <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-100">
+        <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-100">
           <p>No account, session, email, or learning record was created while this page was shown.</p>
         </div>
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-[var(--text-faint)]">
           If this keeps happening, contact the LearnQuest administrator.
         </p>
         <div className="mt-4 flex gap-2">
@@ -112,11 +112,11 @@ export function SetupRequiredScreen({ setup: _setup, onRetry }: { setup: AuthCon
 
 export function AccountErrorScreen({ message, onRetry, onSignOut }: { message: string; onRetry: () => void; onSignOut?: () => void }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-slate-200">
+    <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-[var(--text)]">
       <Card className="w-full border-red-500/30">
         <h1 className="text-xl font-bold">Your account data is unavailable</h1>
-        <p role="alert" className="mt-2 text-sm text-red-200">{message}</p>
-        <p className="mt-2 text-sm text-slate-400">
+        <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-200">{message}</p>
+        <p className="mt-2 text-sm text-[var(--text-muted)]">
           Nothing was overwritten. Cloud saves are paused until the account data can be loaded again.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -223,47 +223,47 @@ export function AuthScreens({
   });
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl items-center justify-center p-4 text-slate-200">
+    <main className="mx-auto flex min-h-screen max-w-5xl items-center justify-center p-4 text-[var(--text)]">
       <div className="grid w-full gap-4 lg:grid-cols-[1.05fr_0.95fr]">
-        <section className="hidden flex-col justify-between rounded-3xl border border-white/10 bg-[radial-gradient(ellipse_at_top,rgba(124,58,237,0.32),transparent_65%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.16),transparent_60%)] p-8 lg:flex">
+        <section className="hidden flex-col justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] p-8 lg:flex">
           <div>
-            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-500 text-sm font-black">LQ</span>
+            <span className="grid h-12 w-12 place-items-center rounded-lg bg-[var(--accent)] text-[var(--accent-text)] text-sm font-black">LQ</span>
             <h1 className="mt-5 text-3xl font-black tracking-tight">Your learning quest, in one place.</h1>
-            <p className="mt-3 max-w-md text-sm leading-6 text-slate-300">
+            <p className="mt-3 max-w-md text-sm leading-6 text-[var(--text)]">
               Keep your playlists, notes, progress, revision history, and focus sessions together in one account.
             </p>
           </div>
-          <ul className="space-y-2 text-sm text-slate-300">
-            <li className="flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-300" /> Private to your account</li>
-            <li className="flex items-center gap-2"><Cloud size={16} className="text-cyan-300" /> Stored with your account</li>
-            <li className="flex items-center gap-2"><ShieldCheck size={16} className="text-violet-300" /> Pick up where you left off on any device</li>
+          <ul className="space-y-2 text-sm text-[var(--text)]">
+            <li className="flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-800 dark:text-emerald-300" /> Private to your account</li>
+            <li className="flex items-center gap-2"><Cloud size={16} className="text-cyan-800 dark:text-cyan-300" /> Stored with your account</li>
+            <li className="flex items-center gap-2"><ShieldCheck size={16} className="text-[var(--text)]" /> Pick up where you left off on any device</li>
           </ul>
         </section>
 
-        <Card className="w-full border-violet-500/25">
+        <Card className="w-full border-[var(--border-strong)]">
           <div className="flex items-center gap-2">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--accent)] text-[var(--accent-text)] text-xs font-black">LQ</span>
             <div>
               <p className="text-sm font-bold">LearnQuest</p>
-              <p className="text-[11px] text-slate-500">Welcome back</p>
+              <p className="text-[11px] text-[var(--text-faint)]">Welcome back</p>
             </div>
           </div>
 
-          {notice && <p role="status" className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-sm text-emerald-200">{notice}</p>}
-          {(visibleAuthError || error) && <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error ?? visibleAuthError}</p>}
+          {notice && <p role="status" className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-sm text-emerald-800 dark:text-emerald-200">{notice}</p>}
+          {(visibleAuthError || error) && <p role="alert" className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-800 dark:text-red-200">{error ?? visibleAuthError}</p>}
 
           {mode === 'signin' && (
             <div className="mt-4">
               <h2 className="text-lg font-bold">Sign in</h2>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
                 Use Google or your LearnQuest password to continue.
               </p>
-              {!googleReady && <p className="mt-2 rounded-xl bg-amber-500/10 p-2 text-xs text-amber-200">Google sign-in is not available right now. Use your LearnQuest password or try again later.</p>}
+              {!googleReady && <p className="mt-2 rounded-lg bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">Google sign-in is not available right now. Use your LearnQuest password or try again later.</p>}
               <Btn variant="primary" className="mt-3 w-full justify-center" onClick={() => google('login')} disabled={busy || !googleReady}>
                 {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Connecting…' : 'Sign in with Google'}
               </Btn>
-              <div className="my-4 flex items-center gap-2 text-[11px] uppercase tracking-widest text-slate-600">
-                <span className="h-px flex-1 bg-white/10" /> or password <span className="h-px flex-1 bg-white/10" />
+              <div className="my-4 flex items-center gap-2 text-[11px] uppercase tracking-widest text-[var(--text-faint)]">
+                <span className="h-px flex-1 bg-[var(--surface-hover)]" /> or password <span className="h-px flex-1 bg-[var(--surface-hover)]" />
               </div>
               <form onSubmit={(e) => { e.preventDefault(); void login(); }} className="space-y-2.5">
                 <Field label="Username or email">
@@ -277,8 +277,8 @@ export function AuthScreens({
                 </Btn>
               </form>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <button type="button" className="text-cyan-300 hover:underline" onClick={() => enterMode('forgot')}>Forgot password?</button>
-                <button type="button" className="text-violet-300 hover:underline" onClick={() => enterMode('register')}>Create an account</button>
+                <button type="button" className="text-cyan-800 dark:text-cyan-300 hover:underline" onClick={() => enterMode('forgot')}>Forgot password?</button>
+                <button type="button" className="text-[var(--text)] hover:underline" onClick={() => enterMode('register')}>Create an account</button>
               </div>
             </div>
           )}
@@ -286,7 +286,7 @@ export function AuthScreens({
           {mode === 'register' && (
             <div className="mt-4">
               <h2 className="text-lg font-bold">Create your account</h2>
-              <p className="mt-1 text-sm text-slate-400">
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
                 Continue with Google to verify your identity. If that Google identity is already linked, LearnQuest
                 signs you in to the existing account instead of creating a duplicate. Otherwise you will choose your
                 username and password next.
@@ -294,7 +294,7 @@ export function AuthScreens({
               <Btn variant="primary" className="mt-4 w-full justify-center" onClick={() => google('register')} disabled={busy || !googleReady}>
                 {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Connecting…' : 'Continue with Google'}
               </Btn>
-              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={() => enterMode('signin')}>
+              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]" onClick={() => enterMode('signin')}>
                 <ArrowLeft size={13} /> Back to sign in
               </button>
             </div>
@@ -303,10 +303,10 @@ export function AuthScreens({
           {mode === 'forgot' && (
             <div className="mt-4">
               <h2 className="text-lg font-bold">Reset your password</h2>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
                 Enter your username or account email. If an account matches, you will receive a single-use reset link.
               </p>
-              {(!emailLinksReady || !emailReady) && <p className="mt-2 text-xs text-amber-200">Password recovery is temporarily unavailable.</p>}
+              {(!emailLinksReady || !emailReady) && <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">Password recovery is temporarily unavailable.</p>}
               <div className="mt-3 space-y-2.5">
                 <Field label="Username or email">
                   <input className={inputCls} value={identifier} onChange={(e) => setIdentifier(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} />
@@ -315,7 +315,7 @@ export function AuthScreens({
                   {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Sending…' : 'Send password reset link'}
                 </Btn>
               </div>
-              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={() => enterMode('signin')}>
+              <button type="button" className="mt-3 flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]" onClick={() => enterMode('signin')}>
                 <ArrowLeft size={13} /> Back to sign in
               </button>
             </div>
@@ -324,7 +324,7 @@ export function AuthScreens({
           {mode === 'sent' && (
             <section className="mt-5" aria-labelledby="recovery-sent-title">
               <h2 id="recovery-sent-title" className="text-lg font-bold">Check your email</h2>
-              <p className="mt-1 text-sm text-slate-400">
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
                 If an eligible account matches, we'll send a password-reset email to its verified address. Open the link in that email to choose a new password.
                 {' '}
                 {resetTtl ? `The link expires in ${resetTtl} minutes and can be used once.` : 'The link expires soon and can be used once.'}
@@ -332,7 +332,7 @@ export function AuthScreens({
               <div className="mt-4 flex flex-col gap-2">
                 <Btn variant="primary" onClick={() => enterMode('signin')}>Back to sign in</Btn>
                 {cooldown > 0 ? (
-                  <p role="status" className="text-center text-xs text-slate-500">
+                  <p role="status" className="text-center text-xs text-[var(--text-faint)]">
                     You can request another link in {cooldown}s.
                   </p>
                 ) : (
@@ -342,7 +342,7 @@ export function AuthScreens({
             </section>
           )}
 
-          <p className="mt-4 text-[11px] leading-5 text-slate-500">
+          <p className="mt-4 text-[11px] leading-5 text-[var(--text-faint)]">
             Your learning data is kept with your account. Keep your password private and unique to LearnQuest.
           </p>
         </Card>
@@ -360,13 +360,13 @@ function PasswordStrengthMeter({ password }: { password: string }) {
       ? 'bg-amber-400'
       : 'bg-red-400';
   return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-2.5" aria-live="polite">
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5" aria-live="polite">
       <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-slate-400">Password strength: <strong className="text-slate-100">{strength.label}</strong></span>
-        <span className="text-slate-500">{strength.percent}%</span>
+        <span className="text-[var(--text-muted)]">Password strength: <strong className="text-[var(--text)]">{strength.label}</strong></span>
+        <span className="text-[var(--text-faint)]">{strength.percent}%</span>
       </div>
       <div
-        className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10"
+        className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--surface-hover)]"
         role="progressbar"
         aria-label="Password strength"
         aria-valuemin={0}
@@ -376,7 +376,7 @@ function PasswordStrengthMeter({ password }: { password: string }) {
       >
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${strength.percent}%` }} />
       </div>
-      <p className="mt-1.5 text-[11px] text-slate-500">{strength.hint}</p>
+      <p className="mt-1.5 text-[11px] text-[var(--text-faint)]">{strength.hint}</p>
     </div>
   );
 }
@@ -486,43 +486,43 @@ export function PasswordResetScreen({
 
   const requestNew = onRequestNew ?? onExit;
   const back = (
-    <button type="button" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={onExit}>
+    <button type="button" className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]" onClick={onExit}>
       <ArrowLeft size={13} /> Back to sign in
     </button>
   );
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl items-center p-4 text-slate-200">
-      <Card className="w-full border-violet-500/25">
+    <main className="mx-auto flex min-h-screen max-w-2xl items-center p-4 text-[var(--text)]">
+      <Card className="w-full border-[var(--border-strong)]">
         <div className="flex items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--accent)] text-[var(--accent-text)] text-xs font-black">LQ</span>
           <div>
             <p className="text-sm font-bold">LearnQuest</p>
-            <p className="text-[11px] text-slate-500">Password recovery</p>
+            <p className="text-[11px] text-[var(--text-faint)]">Password recovery</p>
           </div>
         </div>
         {done ? (
           <div className="mt-5 text-center">
-            <CheckCircle2 className="mx-auto text-emerald-400" size={34} />
+            <CheckCircle2 className="mx-auto text-emerald-700 dark:text-emerald-400" size={34} />
             <h1 className="mt-2 text-xl font-bold">Password reset complete</h1>
-            <p className="mt-1 text-sm text-slate-400">All earlier sessions were signed out. Sign in with your new password.</p>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">All earlier sessions were signed out. Sign in with your new password.</p>
             <Btn variant="primary" className="mt-4 w-full justify-center" onClick={onExit}>Back to sign in</Btn>
           </div>
         ) : linkState === 'checking' ? (
           <div className="mt-5 text-center" role="status" aria-live="polite">
-            <Loader2 className="mx-auto animate-spin text-cyan-300" size={30} />
+            <Loader2 className="mx-auto animate-spin text-cyan-800 dark:text-cyan-300" size={30} />
             <h1 className="mt-2 text-xl font-bold">Checking this reset link</h1>
-            <p className="mt-1 text-sm text-slate-400">The server is verifying the link before showing the password form. Nothing has changed yet.</p>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">The server is verifying the link before showing the password form. Nothing has changed yet.</p>
           </div>
         ) : linkState === 'invalid' || linkState === 'expired' ? (
           <div className="mt-5" role="alert">
             <h1 className="text-xl font-bold">
               {linkState === 'expired' ? 'This reset link has expired' : 'This reset link is invalid'}
             </h1>
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
               {linkError ?? 'Request a new link to choose a new password. No password was changed.'}
             </p>
-            <p className="mt-2 text-xs text-slate-500">For your security, reset links are single-use and cannot be reused or kept indefinitely.</p>
+            <p className="mt-2 text-xs text-[var(--text-faint)]">For your security, reset links are single-use and cannot be reused or kept indefinitely.</p>
             <div className="mt-4 flex flex-col gap-2">
               <Btn variant="primary" onClick={requestNew}>Request a new reset link</Btn>
               {back}
@@ -531,7 +531,7 @@ export function PasswordResetScreen({
         ) : linkState === 'unavailable' ? (
           <div className="mt-5" role="alert">
             <h1 className="text-xl font-bold">We could not check this reset link</h1>
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
               {linkError ?? 'The account service is temporarily unavailable. Nothing was changed.'}
             </p>
             <div className="mt-4 flex flex-col gap-2">
@@ -542,11 +542,11 @@ export function PasswordResetScreen({
         ) : (
           <form onSubmit={(e) => void submit(e)} className="mt-4 space-y-3">
             <h1 className="text-xl font-bold">Choose a new password</h1>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[var(--text-muted)]">
               This link was verified by the server. It expires in {expiresInMin ?? 'a few'} minute{expiresInMin === 1 ? '' : 's'} from when it was sent and can be used once.
               {' '}Choose at least 12 characters; a long passphrase is ideal.
             </p>
-            {formError && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{formError}</p>}
+            {formError && <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-800 dark:text-red-200">{formError}</p>}
             <Field label="New password">
               <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" minLength={12} maxLength={128} disabled={!token || busy} />
             </Field>
@@ -555,15 +555,15 @@ export function PasswordResetScreen({
               <input className={inputCls} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" minLength={12} maxLength={128} disabled={!token || busy} />
             </Field>
             {confirm.length > 0 && (
-              <p role="status" aria-live="polite" className={`text-xs ${password === confirm ? 'text-emerald-300' : 'text-red-300'}`}>
+              <p role="status" aria-live="polite" className={`text-xs ${password === confirm ? 'text-emerald-800 dark:text-emerald-300' : 'text-red-800 dark:text-red-300'}`}>
                 {password === confirm ? 'Passwords match.' : 'Passwords do not match.'}
               </p>
             )}
-            {invalidReason && <p role="status" className="text-xs text-amber-200">{invalidReason}</p>}
+            {invalidReason && <p role="status" className="text-xs text-amber-800 dark:text-amber-200">{invalidReason}</p>}
             <Btn type="submit" variant="primary" className="w-full justify-center" disabled={!canSubmit} title={!token ? 'This link has no token.' : invalidReason ?? undefined}>
               {busy ? <Loader2 size={15} className="animate-spin" /> : null} {busy ? 'Resetting…' : 'Set new password'}
             </Btn>
-            <button type="button" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={requestNew}>
+            <button type="button" className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]" onClick={requestNew}>
               <ArrowLeft size={13} /> Request a new link
             </button>
           </form>
@@ -595,34 +595,34 @@ export function EmailVerificationScreen({ token, onExit }: { token: string | nul
   };
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl items-center p-4 text-slate-200">
-      <Card className="w-full border-violet-500/25">
+    <main className="mx-auto flex min-h-screen max-w-2xl items-center p-4 text-[var(--text)]">
+      <Card className="w-full border-[var(--border-strong)]">
         <div className="flex items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--accent)] text-[var(--accent-text)] text-xs font-black">LQ</span>
           <div>
             <p className="text-sm font-bold">LearnQuest</p>
-            <p className="text-[11px] text-slate-500">Email verification</p>
+            <p className="text-[11px] text-[var(--text-faint)]">Email verification</p>
           </div>
         </div>
         {done ? (
           <div className="mt-5 text-center">
-            <CheckCircle2 className="mx-auto text-emerald-400" size={34} />
+            <CheckCircle2 className="mx-auto text-emerald-700 dark:text-emerald-400" size={34} />
             <h1 className="mt-2 text-xl font-bold">Email verified</h1>
-            <p className="mt-1 text-sm text-slate-400">The new address is now your LearnQuest account email. All sessions were signed out; sign in again with the new address.</p>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">The new address is now your LearnQuest account email. All sessions were signed out; sign in again with the new address.</p>
             <Btn variant="primary" className="mt-4 w-full justify-center" onClick={onExit}>Back to sign in</Btn>
           </div>
         ) : (
           <div className="mt-4 space-y-3">
             <h1 className="text-xl font-bold">Verify your new email address</h1>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-[var(--text-muted)]">
               This confirms the new address for your LearnQuest account. Your current email stays active until verification succeeds.
               The single-use link expires shortly.
             </p>
-            {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
+            {error && <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-800 dark:text-red-200">{error}</p>}
             <Btn variant="primary" className="w-full justify-center" onClick={() => void verify()} disabled={!token || busy}>
               {busy ? <Loader2 size={15} className="animate-spin" /> : <Link2 size={15} />} {busy ? 'Verifying…' : 'Verify email address'}
             </Btn>
-            <button type="button" className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200" onClick={onExit}>
+            <button type="button" className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]" onClick={onExit}>
               <ArrowLeft size={13} /> Back to sign in
             </button>
           </div>
@@ -703,14 +703,14 @@ export function OnboardingScreen({
   };
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-slate-200">
-      <Card className="w-full border-violet-500/30">
-        <p className="text-[11px] font-bold uppercase tracking-widest text-violet-300">Account setup</p>
+    <main className="mx-auto flex min-h-screen max-w-3xl items-center p-4 text-[var(--text)]">
+      <Card className="w-full border-[var(--border-strong)]">
+        <p className="text-[11px] font-bold uppercase tracking-widest text-[var(--text)]">Account setup</p>
         <h1 className="mt-1 text-2xl font-black">Finish your LearnQuest account</h1>
-        <p className="mt-1 text-sm text-slate-400">
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
           Complete your account setup to continue. Choose a username and password for direct sign-in.
         </p>
-        <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-200">
+        <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-800 dark:text-emerald-200">
           <ShieldCheck size={13} /> Google account connected
         </p>
         <form onSubmit={submit} aria-busy={busy} className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -756,7 +756,7 @@ export function OnboardingScreen({
                 disabled={busy}
               />
             </Field>
-            <p className="mt-1 text-[11px] text-slate-500">Use at least 12 characters. A long, unique passphrase is ideal.</p>
+            <p className="mt-1 text-[11px] text-[var(--text-faint)]">Use at least 12 characters. A long, unique passphrase is ideal.</p>
             <PasswordStrengthMeter password={password} />
           </div>
           <div className="sm:col-span-2">
@@ -775,7 +775,7 @@ export function OnboardingScreen({
               />
             </Field>
             {confirm.length > 0 && (
-              <p role="status" aria-live="polite" className={`mt-1 text-xs ${password === confirm ? 'text-emerald-300' : 'text-red-300'}`}>
+              <p role="status" aria-live="polite" className={`mt-1 text-xs ${password === confirm ? 'text-emerald-800 dark:text-emerald-300' : 'text-red-800 dark:text-red-300'}`}>
                 {password === confirm ? 'Passwords match.' : 'Passwords do not match.'}
               </p>
             )}
@@ -787,9 +787,9 @@ export function OnboardingScreen({
           <NumberField label="Break length (min)" value={breakMin} onCommit={setBreakMin} min={0} max={240} allowEmpty={false} />
           <NumberField label="Minimum viable session (min)" value={minViableMin} onCommit={setMinViableMin} min={1} max={600} allowEmpty={false} />
           <div className="sm:col-span-2">
-            {error && <p role="alert" className="mb-2 rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-200">{error}</p>}
+            {error && <p role="alert" className="mb-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-800 dark:text-red-200">{error}</p>}
             {!busy && invalidReason && !(confirm.length > 0 && password !== confirm) && (
-              <p role="status" className="mb-2 text-xs text-amber-200">{invalidReason}</p>
+              <p role="status" className="mb-2 text-xs text-amber-800 dark:text-amber-200">{invalidReason}</p>
             )}
             <Btn
               type="submit"
@@ -802,7 +802,7 @@ export function OnboardingScreen({
             </Btn>
           </div>
         </form>
-        <button type="button" onClick={onSignOut} className="mt-3 text-xs text-slate-400 hover:text-slate-200">Sign out instead</button>
+        <button type="button" onClick={onSignOut} className="mt-3 text-xs text-[var(--text-muted)] hover:text-[var(--text)]">Sign out instead</button>
       </Card>
     </main>
   );

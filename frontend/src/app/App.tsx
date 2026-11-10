@@ -1,11 +1,10 @@
 import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Play, ListVideo, Clapperboard, ChartLine, BookOpen, Target, CheckCircle2,
+  LayoutDashboard, ListVideo, Clapperboard, ChartLine, BookOpen, Target, CheckCircle2,
   Timer as TimerIcon, Gauge, Swords, RefreshCw, History, BarChart3, Settings as SettingsIcon,
-  X, PartyPopper, Menu, ChevronsLeft, ChevronsRight,
+  X, PartyPopper, Menu, ChevronsLeft, ChevronsRight, UserRound,
 } from 'lucide-react';
 import { useStore } from './store';
-import { checkApiHealth } from '../services/api/playlistApi';
 import { PlaylistSwitcher, Onboarding } from '../features/playlists/Playlists';
 import { Player } from '../features/player/Player';
 import { Modules } from '../features/modules/Modules';
@@ -14,6 +13,7 @@ import { Checkpoints } from '../features/checkpoints/Checkpoints';
 import { Settings } from '../features/settings/Settings';
 import { Notifier } from '../components/layout/Notifier';
 import { DialogHost } from '../components/ui/dialog';
+import { Skeleton } from '../components/ui/ui';
 import { Account } from '../features/account/Account';
 import { AccountMenu, type AccountSection } from '../features/account/AccountMenu';
 import { LegacyMigrationCard } from '../features/account/LegacyMigrationCard';
@@ -32,8 +32,14 @@ const Reports = lazy(() => import('../features/reports/Reports').then((m) => ({ 
 
 function SectionLoading() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-sm text-slate-400" role="status">
-      Loading section…
+    <div className="space-y-3" role="status" aria-label="Loading section">
+      <Skeleton className="h-24 w-full" />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Skeleton className="h-36 w-full" />
+        <Skeleton className="h-36 w-full" />
+        <Skeleton className="h-36 w-full" />
+      </div>
+      <span className="sr-only">Loading section…</span>
     </div>
   );
 }
@@ -58,17 +64,17 @@ export class AppErrorBoundary extends React.Component<
     if (!this.state.error) return this.props.children;
     return (
       <div className="mx-auto max-w-2xl p-6">
-        <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/10 p-5 text-slate-100">
+        <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-5 text-[var(--text)]">
           <h1 className="text-lg font-bold">Something went wrong in this view</h1>
-          <p className="mt-1 text-sm text-slate-300">
+          <p className="mt-1 text-sm text-[var(--text)]">
             Your stored learning data was not deleted here. Reload to re-read it; export a backup from
             Reports if the problem repeats.
           </p>
-          <p className="mt-2 break-words font-mono text-[11px] text-red-200">{this.state.error.message}</p>
+          <p className="mt-2 break-words font-mono text-[11px] text-red-800 dark:text-red-200">{this.state.error.message}</p>
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
+            className="mt-3 rounded-lg bg-[var(--surface-hover)] px-3 py-2 text-sm hover:bg-[var(--surface-hover)]"
           >
             Reload LearnQuest
           </button>
@@ -88,7 +94,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Learn',
     items: [
-      { id: 'dash', label: 'Dashboard', icon: <Play size={17} /> },
+      { id: 'dash', label: 'Dashboard', icon: <LayoutDashboard size={17} /> },
       { id: 'learn', label: 'Library', icon: <ListVideo size={17} /> },
       { id: 'player', label: 'Player', icon: <Clapperboard size={17} /> },
     ],
@@ -138,24 +144,27 @@ function accountSectionFromHash(): AccountSection {
 function SyncIndicator() {
   const s = useStore();
   if (s.mode !== 'cloud') return null;
-  if (s.syncStatus === 'saving') return <span className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200" role="status">Saving…</span>;
-  if (s.syncStatus === 'resolving') return <span className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200" role="status">Reconciling changes…</span>;
-  if (s.syncStatus === 'saved') return <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-[11px] text-emerald-200" role="status">Saved</span>;
+  // Persistent "saved" status is permanent noise; show the indicator only
+  // while a real user action needs attention: in-flight save, failed save,
+  // or conflicts awaiting a decision. Caught up = quiet header.
+  if (s.syncStatus === 'saving') return <span className="text-[11px] text-[var(--text-muted)]" role="status">Saving…</span>;
+  if (s.syncStatus === 'resolving') return <span className="text-[11px] text-[var(--text-muted)]" role="status">Reconciling changes…</span>;
+  if (s.syncStatus === 'saved') return null;
   if (s.syncStatus === 'review') {
     return (
-      <a href="#cloud-conflicts" className="rounded-full bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-500/25" title={s.syncError ?? 'Two devices changed the same records'}>
+      <a href="#cloud-conflicts" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-200 hover:bg-amber-500/25" title={s.syncError ?? 'Two devices changed the same records'}>
         Review {s.cloudConflicts.length} change{s.cloudConflicts.length === 1 ? '' : 's'}
       </a>
     );
   }
   if (s.syncStatus === 'error') {
     return (
-      <button type="button" onClick={s.retryCloudSave} className="rounded-full bg-red-500/15 px-2 py-1 text-[11px] text-red-200 hover:bg-red-500/25" title={s.syncError ?? 'Save failed'}>
+      <button type="button" onClick={s.retryCloudSave} className="rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-800 dark:text-red-200 hover:bg-red-500/25" title={s.syncError ?? 'Save failed'}>
         Save failed · retry
       </button>
     );
   }
-  return <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-slate-400" role="status">Cloud account</span>;
+  return null;
 }
 
 const COLLECTION_LABELS: Record<string, string> = {
@@ -181,10 +190,10 @@ function MigrationReadOnlyBanner() {
       role="status"
       aria-live="polite"
       aria-labelledby="migration-readonly-title"
-      className="rounded-2xl border border-cyan-500/40 bg-cyan-500/10 p-3 text-sm"
+      className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3 text-sm"
     >
-      <h2 id="migration-readonly-title" className="font-semibold text-cyan-100">Learning data is temporarily read-only</h2>
-      <p className="mt-1 text-xs text-cyan-100/80">
+      <h2 id="migration-readonly-title" className="font-semibold text-cyan-800 dark:text-cyan-100">Learning data is temporarily read-only</h2>
+      <p className="mt-1 text-xs text-cyan-800 dark:text-cyan-100/80">
         LearnQuest is finishing a storage-maintenance step. Your edits remain in this tab and are not lost.
         Keep this tab open; the next edit after the freeze is released will retry the save. Reading and
         navigation still work.
@@ -203,23 +212,23 @@ function CloudConflictBanner() {
   if (s.mode !== 'cloud' || s.cloudConflicts.length === 0) return null;
   const collections = [...new Set(s.cloudConflicts.map((c) => c.collection))];
   return (
-    <section id="cloud-conflicts" role="alert" aria-labelledby="cloud-conflicts-title" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-      <h2 id="cloud-conflicts-title" className="font-semibold text-amber-100">Two devices changed the same records</h2>
-      <p className="mt-1 text-xs text-amber-100/80">
+    <section id="cloud-conflicts" role="alert" aria-labelledby="cloud-conflicts-title" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+      <h2 id="cloud-conflicts-title" className="font-semibold text-amber-800 dark:text-amber-100">Two devices changed the same records</h2>
+      <p className="mt-1 text-xs text-amber-800 dark:text-amber-100/80">
         Your local changes are still here. Nothing was overwritten. Choose which version to keep for each area;
         unrelated changes from both devices were already merged and saved.
       </p>
       <ul className="mt-2 space-y-2">
         {collections.map((collection) => (
-          <li key={collection} className="flex flex-wrap items-center gap-2 rounded-xl bg-black/20 p-2">
+          <li key={collection} className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-soft)] p-2">
             <span className="min-w-0 flex-1 font-medium">{COLLECTION_LABELS[collection] ?? collection}</span>
-            <span className="text-[11px] text-amber-100/70">
+            <span className="text-[11px] text-amber-800 dark:text-amber-100/70">
               {s.cloudConflicts.filter((c) => c.collection === collection).length} conflicting record(s)
             </span>
             <button type="button" onClick={() => s.resolveCloudConflict(collection, 'keep-local')} className="rounded-lg bg-amber-400/20 px-2.5 py-1 text-xs font-semibold hover:bg-amber-400/30">
               Keep this device
             </button>
-            <button type="button" onClick={() => s.resolveCloudConflict(collection, 'use-server')} className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold hover:bg-white/15">
+            <button type="button" onClick={() => s.resolveCloudConflict(collection, 'use-server')} className="rounded-lg bg-[var(--surface-hover)] px-2.5 py-1 text-xs font-semibold hover:bg-[var(--surface-hover)]">
               Use server version
             </button>
           </li>
@@ -235,7 +244,6 @@ function AppInner() {
   const [drawer, setDrawer] = useState(false);
   const [accountSection, setAccountSection] = useState<AccountSection>(() => accountSectionFromHash());
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lq-nav-collapsed') === '1');
-  const [health, setHealth] = useState<{ ok: boolean; hasKey: boolean }>({ ok: false, hasKey: false });
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -243,30 +251,6 @@ function AppInner() {
   const previousFocus = useRef<HTMLElement | null>(null);
   const lastTabRef = useRef<Tab | null>(null);
   const isAccountPage = tab === 'account';
-
-  useEffect(() => {
-    checkApiHealth().then(setHealth);
-  }, []);
-
-  // While the backend is unreachable, retry the cheap health check whenever
-  // the tab regains focus/visibility (cold-start wake, outage recovery) so
-  // the status pill recovers without a page reload. Silent while healthy:
-  // zero extra traffic once connected.
-  useEffect(() => {
-    if (health.ok) return;
-    const recheck = () => {
-      checkApiHealth().then(setHealth);
-    };
-    const onVis = () => {
-      if (document.visibilityState === 'visible') recheck();
-    };
-    window.addEventListener('focus', recheck);
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      window.removeEventListener('focus', recheck);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, [health.ok]);
 
   // hash routing: back/forward buttons work
   useEffect(() => {
@@ -376,18 +360,18 @@ function AppInner() {
     // A failed read is not an empty database. The store deliberately refuses to
     // start the writer in this state, so retrying cannot lose existing records.
     return (
-      <div className="mx-auto max-w-2xl p-6 text-slate-200">
-        <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5">
+      <div className="mx-auto max-w-2xl p-6 text-[var(--text)]">
+        <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-5">
           <h1 className="text-lg font-bold">Could not open your learning data</h1>
-          <p className="mt-2 text-sm text-slate-300">{s.loadError}</p>
-          <p className="mt-2 text-xs text-slate-400">
+          <p className="mt-2 text-sm text-[var(--text)]">{s.loadError}</p>
+          <p className="mt-2 text-xs text-[var(--text-muted)]">
             Nothing was overwritten and no defaults were saved. If this persists, retry before restoring a JSON backup;
             in local test mode, use the same browser profile because private windows cannot see the original IndexedDB.
           </p>
           <button
             type="button"
             onClick={s.retryLoad}
-            className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
+            className="mt-3 rounded-lg bg-[var(--surface-hover)] px-3 py-2 text-sm hover:bg-[var(--surface-hover)]"
           >
             Retry read
           </button>
@@ -398,9 +382,14 @@ function AppInner() {
 
   if (!s.ready) {
     return (
-      <div className="mx-auto max-w-3xl p-8 text-center text-slate-300">
-        <p className="text-lg font-semibold">Loading LearnQuest…</p>
-        <p className="text-sm text-slate-500">{s.mode === 'cloud' ? 'Loading your account learning data…' : 'Restoring your local learning data from IndexedDB.'}</p>
+      <div className="mx-auto max-w-3xl space-y-4 p-8" role="status" aria-label="Loading LearnQuest">
+        <Skeleton className="h-32 w-full" />
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full" />
+        </div>
+        <p className="text-center text-sm text-[var(--text-muted)]">{s.mode === 'cloud' ? 'Loading your account learning data…' : 'Restoring your local learning data from IndexedDB.'}</p>
       </div>
     );
   }
@@ -408,82 +397,85 @@ function AppInner() {
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const displayTitle = snap && s.meta[snap.playlistId]?.customTitle ? s.meta[snap.playlistId].customTitle! : snap?.title;
 
-  const statusTone = health.ok && health.hasKey
-    ? 'bg-emerald-500/15 text-emerald-300'
-    : health.ok
-      ? 'bg-amber-500/15 text-amber-300'
-      : 'bg-white/5 text-slate-400';
-  const statusText = health.ok ? (health.hasKey ? '● API ready' : '● API key missing') : '○ API offline';
+
+
+  const navItem = (t: NavItem, compact: boolean, onNavigate?: () => void) => {
+    const active = tab === t.id;
+    return (
+      <li key={t.id}>
+        <button
+          onClick={() => {
+            go(t.id);
+            onNavigate?.();
+          }}
+          aria-current={active ? 'page' : undefined}
+          title={compact ? t.label : undefined}
+          aria-label={compact ? t.label : undefined}
+          className={`relative flex w-full items-center gap-2.5 rounded-md px-2 py-[7px] text-sm transition-colors ${
+            active
+              ? 'bg-[var(--surface-hover)] font-semibold text-[var(--text)]'
+              : 'text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
+          } ${compact ? 'justify-center px-0' : ''}`}
+        >
+          {active && (
+            <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--text)]" />
+          )}
+          <span className={`shrink-0 ${active ? 'text-[var(--text)]' : 'text-[var(--text-faint)]'}`} aria-hidden="true">{t.icon}</span>
+          {!compact && <span className="truncate">{t.label}</span>}
+        </button>
+      </li>
+    );
+  };
 
   const navList = (compact: boolean, onNavigate?: () => void) => (
     <nav aria-label="Sections" className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-2">
       {GROUPS.map((g) => (
-        <div key={g.title}>
+        <div key={g.title} role="group" aria-labelledby={`nav-group-${g.title}`}>
           {!compact && (
-            <p className="px-3 pb-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">{g.title}</p>
+            <p id={`nav-group-${g.title}`} className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-faint)]">{g.title}</p>
           )}
           <ul className="space-y-0.5">
-            {g.items.map((t) => {
-              const active = tab === t.id;
-              return (
-                <li key={t.id}>
-                  <button
-                    onClick={() => {
-                      go(t.id);
-                      onNavigate?.();
-                    }}
-                    aria-current={active ? 'page' : undefined}
-                    title={compact ? t.label : undefined}
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-1.5 text-sm transition ${
-                      active ? 'bg-violet-600 font-semibold text-white shadow-lg shadow-violet-900/40' : 'text-slate-300 hover:bg-white/10'
-                    } ${compact ? 'justify-center px-0' : ''}`}
-                  >
-                    <span className="shrink-0">{t.icon}</span>
-                    {!compact && <span className="truncate">{t.label}</span>}
-                  </button>
-                </li>
-              );
-            })}
+            {g.items.map((t) => navItem(t, compact, onNavigate))}
           </ul>
         </div>
       ))}
+      <div role="group" aria-labelledby="nav-group-account" className="border-t border-[var(--border)] pt-2">
+        {!compact && (
+          <p id="nav-group-account" className="px-2 pb-0.5 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-faint)]">Account</p>
+        )}
+        <ul className="space-y-0.5">
+          {navItem({ id: 'account' as Tab, label: 'Account', icon: <UserRound size={17} /> }, compact, onNavigate)}
+        </ul>
+      </div>
     </nav>
-  );
-
-  const statusButton = (compact: boolean) => (
-    <button
-      onClick={() => {
-        go('settings');
-      }}
-      title={health.ok ? (health.hasKey ? 'API online, key configured' : 'API online but key missing — open Settings for setup steps') : 'API offline — import JSON still works'}
-      aria-label={compact ? `Connection status: ${statusText} — open Settings` : undefined}
-      className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-[11px] ${statusTone} ${compact ? 'justify-center px-0' : ''}`}
-    >
-      <span className="shrink-0" aria-hidden="true">{health.ok && health.hasKey ? '●' : health.ok ? '●' : '○'}</span>
-      {!compact && <span className="truncate">{statusText} — setup</span>}
-    </button>
   );
 
   return (
     <div
       data-reduced-motion={s.prefs.reducedMotion ? 'true' : 'false'}
       data-page={isAccountPage ? 'account' : 'workspace'}
-      className="min-h-screen bg-[#0b0e1a] bg-[radial-gradient(ellipse_at_top,rgba(124,58,237,0.18),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.08),transparent_60%)]"
+      className="min-h-screen bg-[var(--page-bg)]"
     >
+      <a
+        href="#main-content"
+        className="sr-only z-[100] rounded-md bg-[var(--surface-strong)] px-4 py-2 text-sm text-[var(--text)] focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+      >
+        Skip to main content
+      </a>
       {/* Desktop sidebar */}
       <aside
         data-app-background
-        className={`fixed bottom-0 left-0 top-0 z-30 hidden flex-col border-r border-white/10 bg-[#0d1122]/95 backdrop-blur transition-[width] lg:flex ${
+        className={`fixed bottom-0 left-0 top-0 z-30 hidden flex-col border-r border-[var(--border)] bg-[var(--surface)] transition-[width] lg:flex ${
           collapsed ? 'w-[68px]' : 'w-60'
         }`}
         aria-label="Primary"
       >
-        <div className={`flex items-center gap-2 px-3 py-3 ${collapsed ? 'justify-center' : ''}`}>
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-sm font-black">LQ</span>
+        <div className={`flex items-center gap-2 border-b border-[var(--border)] px-3 py-3 ${collapsed ? 'justify-center' : ''}`}>
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--accent)] text-[11px] font-black text-[var(--accent-text)]">LQ</span>
           {!collapsed && (
             <div className="min-w-0">
               <p className="truncate text-sm font-bold leading-none">LearnQuest</p>
-              <p className="truncate text-[11px] text-slate-400">exact-duration tracker</p>
+              <p className="mt-0.5 truncate text-[10px] text-[var(--text-faint)]">Exact-duration tracker</p>
             </div>
           )}
         </div>
@@ -493,12 +485,11 @@ function AppInner() {
           </div>
         )}
         {navList(collapsed)}
-        <div className="space-y-2 border-t border-white/10 p-2">
-          {statusButton(collapsed)}
+        <div className="border-t border-[var(--border)] p-2">
           <button
             onClick={() => setCollapsed((c) => !c)}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="flex w-full items-center justify-center gap-1 rounded-xl bg-white/5 px-2 py-1.5 text-xs text-slate-400 hover:bg-white/10"
+            className="flex w-full items-center justify-center gap-1 rounded-lg bg-[var(--surface-soft)] px-2 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
           >
             {collapsed ? <ChevronsRight size={15} /> : <><ChevronsLeft size={15} /> Collapse</>}
           </button>
@@ -506,26 +497,19 @@ function AppInner() {
       </aside>
 
       {/* Mobile header */}
-      <header ref={headerRef} data-app-background className="sticky top-0 z-20 border-b border-white/10 bg-[#0b0e1a]/90 backdrop-blur lg:hidden">
+      <header ref={headerRef} data-app-background className="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--page-bg)] lg:hidden">
         <div className="flex items-center gap-2 px-3 py-2.5">
           <button
             ref={menuBtnRef}
             onClick={() => setDrawer(true)}
             aria-label="Open menu"
             aria-expanded={drawer}
-            className="grid h-9 w-9 place-items-center rounded-xl bg-white/5 text-slate-200 hover:bg-white/10"
+            className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--surface-soft)] text-[var(--text)] hover:bg-[var(--surface-hover)]"
           >
             <Menu size={18} />
           </button>
-          <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
+          <span className="grid h-8 w-8 place-items-center rounded-md bg-[var(--accent)] text-[11px] font-black text-[var(--accent-text)]">LQ</span>
           <p className="mr-auto text-sm font-bold">{isAccountPage ? 'Account' : 'LearnQuest'}</p>
-          <button
-            onClick={() => go('settings')}
-            className={`rounded-full px-2 py-1 text-[11px] ${statusTone}`}
-            title="Connection status — open Settings"
-          >
-            {health.ok && health.hasKey ? '●' : health.ok ? '● key?' : '○'}
-          </button>
           {s.authUser && <AccountMenu onNavigate={goAccount} />}
         </div>
         {!isAccountPage && (
@@ -544,10 +528,10 @@ function AppInner() {
             role="dialog"
             aria-modal="true"
             aria-label="Menu"
-            className="absolute bottom-0 left-0 top-0 flex w-72 max-w-[85vw] flex-col border-r border-white/10 bg-[#0d1122]"
+            className="absolute bottom-0 left-0 top-0 flex w-72 max-w-[85vw] flex-col border-r border-[var(--border)] bg-[var(--surface)]"
           >
-            <div className="flex items-center gap-2 border-b border-white/10 px-3 py-3">
-              <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 text-xs font-black">LQ</span>
+            <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-3">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--accent)] text-[11px] font-black text-[var(--accent-text)]">LQ</span>
               <p className="mr-auto text-sm font-bold">LearnQuest</p>
               <button
                 ref={closeBtnRef}
@@ -556,13 +540,12 @@ function AppInner() {
                   menuBtnRef.current?.focus();
                 }}
                 aria-label="Close menu"
-                className="grid h-9 w-9 place-items-center rounded-xl bg-white/5 hover:bg-white/10"
+                className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--surface-soft)] hover:bg-[var(--surface-hover)]"
               >
                 <X size={17} />
               </button>
             </div>
             {navList(false, () => menuBtnRef.current?.focus())}
-            <div className="border-t border-white/10 p-2">{statusButton(false)}</div>
           </div>
         </div>
       )}
@@ -570,15 +553,15 @@ function AppInner() {
       {/* Content */}
       <div data-app-background className={collapsed ? 'lg:pl-[68px]' : 'lg:pl-60'}>
         {s.authUser && (
-          <div className="sticky top-0 z-20 hidden border-b border-white/10 bg-[#0b0e1a]/90 backdrop-blur lg:block">
+          <div className="sticky top-0 z-20 hidden border-b border-[var(--border)] bg-[var(--page-bg)] lg:block">
             <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-2">
               <div className="min-w-0 flex-1">
                 {isAccountPage ? (
-                  <p className="truncate text-xs font-semibold text-slate-200">Account</p>
+                  <p className="truncate text-xs font-semibold text-[var(--text)]">Account</p>
                 ) : (
                   <>
-                    <p className="truncate text-xs font-semibold text-slate-200">{displayTitle ?? 'LearnQuest'}</p>
-                    <p className="truncate text-[10px] text-slate-500">
+                    <p className="truncate text-xs font-semibold text-[var(--text)]">{displayTitle ?? 'LearnQuest'}</p>
+                    <p className="truncate text-[10px] text-[var(--text-faint)]">
                       {snap ? `N=${snap.entries.length} · ${snap.source} · fetched ${new Date(snap.fetchedAt).toLocaleString()}` : 'No active playlist'}
                     </p>
                   </>
@@ -589,28 +572,23 @@ function AppInner() {
             </div>
           </div>
         )}
-        <main className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
+        <main id="main-content" className="mx-auto w-full max-w-6xl space-y-4 overflow-x-clip px-3 py-4 sm:px-4">
           <MigrationReadOnlyBanner />
           <CloudConflictBanner />
           {!isAccountPage && !snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
           {!isAccountPage && <LegacyMigrationCard />}
           {!isAccountPage && s.lastDiff && (
-            <div className="flex items-start gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm">
+            <div className="flex items-start gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm">
               <p className="min-w-0 flex-1">{s.lastDiff}</p>
               <button onClick={() => s.setLastDiff(null)} aria-label="Dismiss" className="shrink-0"><X size={16} /></button>
             </div>
           )}
           {!isAccountPage && s.celebration && (
-            <div className="flex items-start gap-3 rounded-2xl border border-violet-500/40 bg-gradient-to-r from-violet-600/25 to-cyan-500/15 p-4">
-              <PartyPopper className="mt-0.5 shrink-0 text-violet-300" />
+            <div className="flex items-start gap-3 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-soft)] p-4">
+              <PartyPopper className="mt-0.5 shrink-0 text-[var(--text)]" />
               <p className="min-w-0 flex-1 text-sm">{s.celebration}</p>
-              <button onClick={s.clearCelebration} className="shrink-0 rounded-xl bg-white/10 px-3 py-1.5 text-sm">Continue</button>
+              <button onClick={s.clearCelebration} className="shrink-0 rounded-lg bg-[var(--surface-hover)] px-3 py-1.5 text-sm">Continue</button>
             </div>
-          )}
-          {!isAccountPage && snap && (
-            <p className="truncate text-xs text-slate-500">
-              Active playlist: <span className="text-slate-300">{displayTitle}</span> · N={snap.entries.length} · {snap.source} · fetched {new Date(snap.fetchedAt).toLocaleString()}
-            </p>
           )}
           <Suspense fallback={<SectionLoading />}>
             {tab === 'dash' && <Dashboard />}
@@ -631,7 +609,7 @@ function AppInner() {
           </Suspense>
         </main>
 
-        <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] text-slate-600">
+        <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] text-[var(--text-faint)]">
           {s.mode === 'cloud'
             ? 'Your learning data is stored with your account. Exports and backups are available in Reports and Account.'
             : 'Local test mode: progress lives in this browser (IndexedDB). Production builds use authenticated cloud persistence.'}

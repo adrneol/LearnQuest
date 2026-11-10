@@ -1,10 +1,11 @@
 import {
   useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode,
 } from 'react';
-import { AlertTriangle, Download, KeyRound, LogOut, Mail, RefreshCw, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import { Download, LogOut, Mail, RefreshCw, Trash2 } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { confirmDialog, Modal } from '../../components/ui/dialog.js';
 import { Card, Btn, Field, inputCls } from '../../components/ui/ui.js';
+import { downloadZip } from '../../services/exports/zip.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 import type { AccountSession } from '../../services/api/authApi.js';
@@ -22,7 +23,22 @@ function rateLimitedMessage(action: string, error: any): string | null {
 export function Account({ section, onSection }: { section: AccountSection; onSection: (s: AccountSection) => void }) {
   const s = useStore();
   const user = s.authUser;
-  if (!user) return null;
+  if (!user) {
+    return (
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-6">
+        <h1 id="account-page-title" tabIndex={-1} className="text-lg font-bold text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">This browser has no account</h1>
+        <p className="mt-2 text-sm text-[var(--text-muted)]">
+          Local mode keeps all learning data in this browser's IndexedDB. Profile,
+          password, email verification, sessions and devices only exist for
+          LearnQuest cloud accounts (production).
+        </p>
+        <p className="mt-2 text-sm text-[var(--text-muted)]">
+          To export, back up, restore, or clear your local data, use Reports.
+          Deployed LearnQuest accounts are managed from Settings and from this page once signed in.
+        </p>
+      </div>
+    );
+  }
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -42,30 +58,26 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
 
   return (
     <div className="space-y-4">
-      <Card className="border-violet-500/25">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Account</p>
-        <div className="mt-1 flex flex-wrap items-center gap-3">
-          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-500 text-sm font-black">
+      <Card className="border-[var(--border-strong)]">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-lg bg-[var(--surface-hover)] text-sm font-bold text-[var(--text)]">
             {(user.displayName || user.username || user.email).slice(0, 2).toUpperCase()}
           </span>
           <div className="min-w-0 flex-1">
             <h1
               id="account-page-title"
               tabIndex={-1}
-              className="truncate text-lg font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a]"
+              className="truncate text-lg font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ring-offset)]"
             >
               {user.displayName || user.username}
             </h1>
-            <p className="truncate text-xs text-slate-400">{user.email} · @{user.username}</p>
+            <p className="truncate text-xs text-[var(--text-muted)]">{user.email} · @{user.username}</p>
           </div>
-          <span className={`rounded-full px-2.5 py-1 text-[11px] ${s.syncStatus === 'error' || s.syncStatus === 'review' ? 'bg-red-500/15 text-red-200' : s.syncStatus === 'saving' ? 'bg-amber-500/15 text-amber-200' : 'bg-emerald-500/15 text-emerald-200'}`}>
-            {s.syncStatus === 'saving' ? 'Saving changes…' : s.syncStatus === 'resolving' ? 'Merging device changes…' : s.syncStatus === 'error' ? 'Save failed' : s.syncStatus === 'review' ? 'Changes need review' : s.syncStatus === 'saved' ? 'All changes saved' : 'Cloud account'}
-          </span>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Account sections" aria-orientation="horizontal" onKeyDown={onTabKeyDown}>
-          <SectionBtn id="account-tab-profile" active={section === 'profile'} onClick={() => onSection('profile')} icon={<UserRound size={14} />}>Profile</SectionBtn>
-          <SectionBtn id="account-tab-settings" active={section === 'settings'} onClick={() => onSection('settings')} icon={<ShieldCheck size={14} />}>Account settings</SectionBtn>
-          <SectionBtn id="account-tab-security" active={section === 'security'} onClick={() => onSection('security')} icon={<KeyRound size={14} />}>Security & sessions</SectionBtn>
+        <div className="mt-4 flex flex-wrap gap-4 border-b border-[var(--border)]" role="tablist" aria-label="Account sections" aria-orientation="horizontal" onKeyDown={onTabKeyDown}>
+          <SectionBtn id="account-tab-profile" active={section === 'profile'} onClick={() => onSection('profile')}>Profile</SectionBtn>
+          <SectionBtn id="account-tab-settings" active={section === 'settings'} onClick={() => onSection('settings')}>Account settings</SectionBtn>
+          <SectionBtn id="account-tab-security" active={section === 'security'} onClick={() => onSection('security')}>Security &amp; sessions</SectionBtn>
         </div>
       </Card>
 
@@ -74,7 +86,7 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
         id={`account-panel-${section}`}
         aria-labelledby={`account-tab-${section}`}
         tabIndex={0}
-        className="space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e1a]"
+        className="space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ring-offset)]"
       >
         {section === 'profile' && <ProfileSection />}
         {section === 'settings' && <SettingsSection />}
@@ -84,7 +96,7 @@ export function Account({ section, onSection }: { section: AccountSection; onSec
   );
 }
 
-function SectionBtn({ id, active, onClick, children, icon }: { id: string; active: boolean; onClick: () => void; children: ReactNode; icon: ReactNode }) {
+function SectionBtn({ id, active, onClick, children }: { id: string; active: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
@@ -94,9 +106,9 @@ function SectionBtn({ id, active, onClick, children, icon }: { id: string; activ
       aria-controls={active ? `account-panel-${id.replace('account-tab-', '')}` : undefined}
       tabIndex={active ? 0 : -1}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium ${active ? 'bg-violet-600 text-white' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}
+      className={`inline-flex items-center gap-1.5 px-1 py-2 text-sm border-b-2 -mb-px transition-colors ${active ? 'border-[var(--text)] text-[var(--text)] font-semibold' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]'}`}
     >
-      {icon}{children}
+      {children}
     </button>
   );
 }
@@ -131,7 +143,7 @@ function ProfileSection() {
   return (
     <Card>
       <h2 className="text-base font-bold">Profile</h2>
-      <p className="mt-1 text-xs text-slate-400">Your email is managed through verified account security, never typed at signup.</p>
+      <p className="mt-1 text-xs text-[var(--text-muted)]">Email changes go through verified account security.</p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Email (verified)">
           <input className={inputCls} value={user.email} readOnly aria-readonly="true" />
@@ -142,14 +154,14 @@ function ProfileSection() {
         <Field label="Display name">
           <input className={inputCls} value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80} autoComplete="name" />
         </Field>
-        <div className="rounded-xl bg-white/5 p-2.5 text-xs text-slate-400">
-          <p>Google identity: <b className="text-slate-200">{user.googleLinked ? 'linked by stable provider subject' : 'not linked'}</b></p>
-          <p className="mt-1">Password sign-in: <b className="text-slate-200">{user.hasPassword ? 'enabled' : 'not set'}</b></p>
+        <div className="rounded-lg bg-[var(--surface-soft)] p-2.5 text-xs text-[var(--text-muted)]">
+          <p>Google identity: <b className="text-[var(--text)]">{user.googleLinked ? 'linked by stable provider subject' : 'not linked'}</b></p>
+          <p className="mt-1">Password sign-in: <b className="text-[var(--text)]">{user.hasPassword ? 'enabled' : 'not set'}</b></p>
           <p className="mt-1">Member since {new Date(user.createdAt).toLocaleDateString()}</p>
         </div>
       </div>
-      {error && <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>}
-      {message && <p role="status" className="mt-2 text-sm text-emerald-300">{message}</p>}
+      {error && <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-300">{error}</p>}
+      {message && <p role="status" className="mt-2 text-sm text-emerald-800 dark:text-emerald-300">{message}</p>}
       <Btn variant="primary" className="mt-3" onClick={save} disabled={busy || !username.trim() || !displayName.trim()}>
         {busy ? 'Saving…' : 'Save profile'}
       </Btn>
@@ -188,11 +200,29 @@ function SettingsSection() {
     }
   };
 
-  const exportData = async () => {
+  const exportZip = async () => {
     setError(null);
     try {
-      await s.exportAccountData();
+      const { zip } = await s.exportAccountBundle();
+      downloadZip(`learnquest-account-export-${new Date().toISOString().slice(0, 10)}.zip`, zip);
       setMessage('Account export downloaded.');
+    } catch (e: any) {
+      setError(e?.message ?? 'Export failed.');
+    }
+  };
+
+  const exportFullBackup = async () => {
+    setError(null);
+    try {
+      const json = await s.exportBackup();
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `learnquest-account-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage('Full backup downloaded (restore-compatible Backup JSON v3).');
     } catch (e: any) {
       setError(e?.message ?? 'Export failed.');
     }
@@ -224,7 +254,6 @@ function SettingsSection() {
     <div className="space-y-4">
       <Card>
         <h2 className="text-base font-bold">Learning preferences</h2>
-        <p className="mt-1 text-xs text-slate-400">These are saved to your LearnQuest account.</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <TimezonePicker value={timezone} onChange={setTimezone} />
           <div className="space-y-3">
@@ -233,30 +262,40 @@ function SettingsSection() {
             <NumberField label="Minimum viable session (min)" value={minViable} onCommit={setMinViable} min={1} max={600} allowEmpty={false} />
           </div>
         </div>
-        {error && <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>}
-        {message && <p role="status" className="mt-2 text-sm text-emerald-300">{message}</p>}
+        {error && <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-300">{error}</p>}
+        {message && <p role="status" className="mt-2 text-sm text-emerald-800 dark:text-emerald-300">{message}</p>}
         <Btn variant="primary" className="mt-3" onClick={save} disabled={busy}>Save preferences</Btn>
       </Card>
 
       <Card>
         <h2 className="text-base font-bold">Account data</h2>
-        <p className="mt-1 text-sm text-slate-400">Download a JSON export with your account profile and learning data. It never includes passwords or sign-in tokens.</p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Btn onClick={exportData}><Download size={14} /> Export account data</Btn>
-          <Btn disabled={busy} onClick={() => { void refreshAccount(); }}><RefreshCw size={14} /> Refresh account state</Btn>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">Two portable formats — pick the one you need.</p>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
+            <p className="text-xs font-semibold text-[var(--text)]">Account export (.zip)</p>
+            <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Organized, readable folder of JSON/CSV with a manifest. Good for archiving or inspection.</p>
+            <Btn className="mt-2" onClick={() => { void exportZip(); }}><Download size={14} /> Download .zip</Btn>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
+            <p className="text-xs font-semibold text-[var(--text)]">Full backup (JSON)</p>
+            <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">Restore-compatible Backup JSON (schema v3) — use with Restore backup.</p>
+            <Btn className="mt-2" onClick={() => { void exportFullBackup(); }}><Download size={14} /> Download Backup JSON</Btn>
+          </div>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <Btn disabled={busy} className="text-xs" onClick={() => { void refreshAccount(); }}><RefreshCw size={14} /> Refresh account state</Btn>
         </div>
       </Card>
 
-      <Card className="border-red-500/40 bg-red-950/10">
-        <h2 className="flex items-center gap-1.5 text-base font-bold text-red-200"><Trash2 size={16} /> Danger zone</h2>
-        <p className="mt-1 text-sm text-slate-300">
-          Permanently delete this LearnQuest account and every learning record owned by it. Other accounts are never affected.
-          LearnQuest cannot undo this after it completes.
+      <div className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-4 sm:p-5">
+        <h2 className="text-base font-bold">Danger zone</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
+          Delete your account and all associated learning data. This cannot be undone.
         </p>
         <Btn variant="danger" className="mt-3" onClick={() => setDeleteDialogOpen(true)} disabled={busy}>
           <Trash2 size={14} /> Delete my account
         </Btn>
-      </Card>
+      </div>
 
       {deleteDialogOpen && (
         <DeleteAccountDialog
@@ -328,17 +367,12 @@ function DeleteAccountDialog({
   return (
     <Modal
       role="alertdialog"
-      title={(
-        <span className="flex items-center gap-2">
-          <span className="rounded-xl bg-red-500/15 p-2 text-red-300"><AlertTriangle size={20} /></span>
-          Permanently delete this account?
-        </span>
-      )}
+            title="Permanently delete this account?"
       description={(
         <>
           This is permanent and cannot be undone through LearnQuest. All playlists, progress, notes, review history,
           focus sessions, checkpoints, goals, XP, achievements, settings, sessions, and sign-in links owned by
-          <b className="text-slate-100"> {user.email}</b> will be removed.
+          <b className="text-[var(--text)]"> {user.email}</b> will be removed.
         </>
       )}
       onClose={onCancel}
@@ -346,9 +380,9 @@ function DeleteAccountDialog({
       initialFocusRef={user.hasPassword ? passwordRef : phraseRef}
       closeLabel="Close delete-account dialog"
       testId="delete-account-dialog"
-      panelClassName="max-w-lg border-red-500/40 bg-[#161327]"
+      panelClassName="max-w-lg border-red-500/30"
     >
-      <ul className="list-disc space-y-1 pl-5 text-xs text-slate-400">
+      <ul className="list-disc space-y-1 pl-5 text-xs text-[var(--text-muted)]">
         <li>Export a backup first if you might want a personal copy of your learning data.</li>
         <li>Other LearnQuest accounts are not affected.</li>
         <li>The server verifies recent authentication before deleting anything.</li>
@@ -368,7 +402,7 @@ function DeleteAccountDialog({
             />
           </Field>
         ) : (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-100">
             <p>This account uses Google sign-in. For your safety, account deletion asks you to confirm with Google again.</p>
             <Btn type="button" className="mt-2" onClick={onGoogleReauth} disabled={busy}>Reauthenticate with Google</Btn>
           </div>
@@ -385,12 +419,12 @@ function DeleteAccountDialog({
             aria-describedby="delete-phrase-help"
           />
         </Field>
-        <p id="delete-phrase-help" className={`text-xs ${confirmation.length > 0 && !phraseMatches ? 'text-red-300' : 'text-slate-500'}`}>
+        <p id="delete-phrase-help" className={`text-xs ${confirmation.length > 0 && !phraseMatches ? 'text-red-800 dark:text-red-300' : 'text-[var(--text-faint)]'}`}>
           {confirmation.length > 0 && !phraseMatches
             ? `The phrase is not exact. Type ${phrase} exactly (leading/trailing spaces are ignored).`
             : `Exact phrase, including spaces: ${phrase}`}
         </p>
-        {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-200">{error}</p>}
+        {error && <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm text-red-800 dark:text-red-200">{error}</p>}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Btn type="button" onClick={onCancel} disabled={busy}>Cancel</Btn>
           <Btn type="submit" variant="danger" disabled={!canDelete}>
@@ -560,8 +594,8 @@ function SecuritySection() {
   return (
     <div className="space-y-4">
       <Card>
-        <h2 className="flex items-center gap-1.5 text-base font-bold"><KeyRound size={16} /> Password</h2>
-        <p className="mt-1 text-xs text-slate-400">Choose a strong password of at least 12 characters. Your current password is required when one is set; otherwise sign in with Google again.</p>
+        <h2 className="text-base font-bold">Password</h2>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">At least 12 characters. Current password required if one is set; otherwise Google re-verification.</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           {user.hasPassword && (
             <Field label="Current password">
@@ -575,64 +609,71 @@ function SecuritySection() {
             <input className={inputCls} type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" />
           </Field>
         </div>
-        {passwordError && <p role="alert" className="mt-2 text-sm text-red-300">{passwordError}</p>}
-        {passwordMessage && <p role="status" className="mt-2 text-sm text-emerald-300">{passwordMessage}</p>}
+        {passwordError && <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-300">{passwordError}</p>}
+        {passwordMessage && <p role="status" className="mt-2 text-sm text-emerald-800 dark:text-emerald-300">{passwordMessage}</p>}
         <Btn variant="primary" className="mt-3" onClick={changePassword} disabled={passwordBusy || newPassword.length < 12 || (user.hasPassword && !currentPassword)}>
           {user.hasPassword ? 'Change password' : 'Set password'}
         </Btn>
       </Card>
 
       <Card>
-        <h2 className="flex items-center gap-1.5 text-base font-bold"><Mail size={16} /> Email address</h2>
-        <p className="mt-1 text-xs text-slate-400">
-          The current verified email is <b className="text-slate-200">{user.email}</b>. LearnQuest changes it only through
-          a fresh Google verification, and never through a typed address or emailed link.
+        <h2 className="text-base font-bold">Email address</h2>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          <b className="text-[var(--text)]">{user.email}</b> is your verified email. LearnQuest changes it only through
+          Google verification; every session is signed out afterwards.
         </p>
-        <p className="mt-1 text-xs text-slate-400">
-          Continue with the same Google account linked to LearnQuest. If that Google account uses a different address,
-          that address becomes your LearnQuest email. Every session is signed out afterwards.
-        </p>
-        {emailError && <p role="alert" className="mt-2 text-sm text-red-300">{emailError}</p>}
-        {emailMessage && <p role="status" className="mt-2 text-sm text-cyan-200">{emailMessage}</p>}
+        {emailError && <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-300">{emailError}</p>}
+        {emailMessage && <p role="status" className="mt-2 text-sm text-[var(--text)]">{emailMessage}</p>}
         <Btn className="mt-3" onClick={changeEmailWithGoogle} disabled={emailBusy}>
           <Mail size={14} /> {emailBusy ? 'Opening Google…' : 'Verify a new email with Google'}
         </Btn>
         {!user.googleLinked && (
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-[var(--text-faint)]">
             Linking Google for the first time requires a recent sign-in. If this session is older, sign in again first.
           </p>
         )}
       </Card>
 
       <Card>
-        <h2 className="flex items-center gap-1.5 text-base font-bold"><ShieldCheck size={16} /> Active sessions</h2>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Btn
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <h2 className="text-base font-bold">Active sessions</h2>
+          <button
+            type="button"
             onClick={() => { void loadSessions(); }}
             disabled={sessionsBusy || sessionsCooldownUntil > Date.now()}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50"
           >
-            <RefreshCw size={14} /> Refresh
-          </Btn>
-          <Btn variant="danger" onClick={signOutAll}><LogOut size={14} /> Sign out all devices</Btn>
+            {sessionsBusy ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
-        {sessionsError && <p role="alert" className="mt-2 text-sm text-red-300">{sessionsError}</p>}
-        {sessionsNotice && <p role="status" className="mt-2 text-sm text-amber-200">{sessionsNotice}</p>}
-        <ul className="mt-2 divide-y divide-white/5 text-sm">
+        {sessionsError && <p role="alert" className="mt-2 text-sm text-red-800 dark:text-red-300">{sessionsError}</p>}
+        {sessionsNotice && <p role="status" className="mt-2 text-xs text-[var(--text-muted)]">{sessionsNotice}</p>}
+        <ul className="mt-2 divide-y divide-[var(--border)] text-sm">
           {sessions.map((session) => (
             <li key={session.sessionId} className="flex flex-wrap items-center gap-2 py-2">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-slate-200">{session.current ? 'This device' : (session.userAgent || 'Unknown device')}</p>
-                <p className="text-[11px] text-slate-500">Last active {new Date(session.lastSeenAt).toLocaleString()} · expires {new Date(session.expiresAt).toLocaleDateString()}</p>
+                <p className="truncate text-[var(--text)]">{session.current ? 'This device' : (session.userAgent || 'Unknown device')}{session.current && <span className="ml-2 align-middle text-[10px] uppercase tracking-wide text-[var(--text-faint)]">current</span>}</p>
+                <p className="text-[11px] text-[var(--text-faint)]">Last active {new Date(session.lastSeenAt).toLocaleString()} · expires {new Date(session.expiresAt).toLocaleDateString()}</p>
               </div>
               {!session.current && (
-                <Btn onClick={() => { void revokeSession(session.sessionId); }}>Sign out</Btn>
+                <button
+                  type="button"
+                  onClick={() => { void revokeSession(session.sessionId); }}
+                  className="text-xs text-[var(--text-muted)] underline underline-offset-2 hover:text-[var(--text)]"
+                >
+                  Sign out
+                </button>
               )}
             </li>
           ))}
           {sessions.length === 0 && sessionsLoaded && !sessionsBusy && !sessionsError && !sessionsNotice && (
-            <li className="py-2 text-slate-500">No active sessions were returned.</li>
+            <li className="py-2 text-[var(--text-faint)]">No active sessions.</li>
           )}
         </ul>
+        <div className="mt-2 border-t border-[var(--border)] pt-2">
+          <Btn variant="danger" onClick={signOutAll}><LogOut size={14} /> Sign out all devices</Btn>
+          <p className="mt-1.5 text-[11px] text-[var(--text-faint)]">Every session, including this one, will be revoked. You will need to sign in again.</p>
+        </div>
       </Card>
     </div>
   );

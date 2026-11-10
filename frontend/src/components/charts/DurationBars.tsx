@@ -1,65 +1,108 @@
+import { useState } from 'react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { TICK, GRID_STROKE, TOOLTIP_STYLE, SERIES, positionTicks, fmtHMSLabel, type RangePoint } from './theme.js';
+import { PanChart, niceTicks } from './PanChart.js';
+import { useChartTheme, positionTicks, fmtHMSLabel, type RangePoint } from './theme.js';
 
-export interface Props {
-  data: RangePoint[];
-  heightClass?: string;
-}
+const SLOT = 16;
 
 /**
- * View A — individual video durations ONLY (bar chart, one bar per video).
- * X = playlist position, Y = minutes per video. No cumulative series.
+ * Durations are one-based playlist positions. X values come from entry.pos,
+ * never array indices. XAxis renders 1..N correctly in both modes.
+ * Overview fits the full selection at container width; detail pans.
  */
-export function DurationBars({ data, heightClass = 'h-64' }: Props) {
+export function DurationBars({ data, heightClass = 'h-64' }: { data: RangePoint[]; heightClass?: string }) {
+  const { TICK, GRID_STROKE, SERIES, AXIS_LINE } = useChartTheme();
+  const [mode, setMode] = useState<'overview' | 'detail'>('overview');
   if (data.length === 0) {
     return (
-      <div className={`${heightClass} grid place-items-center rounded-xl border border-dashed border-white/15 text-sm text-slate-500`}>
+      <div className={`${heightClass} grid place-items-center rounded-lg border border-dashed border-[var(--border-strong)] text-sm text-[var(--text-faint)]`}>
         Pick a valid range to see every entry plotted.
       </div>
     );
   }
+  const maxMin = Math.max(...data.map((d) => d.min), 1);
+  const yMax = niceTicks(maxMin, 4).slice(-1)[0];
+  const yTicks = niceTicks(maxMin);
+  const count = data.length;
+  const first = data[0].pos;
+  const last = data[data.length - 1].pos;
+  const overviewTicks = count <= 25 ? 0 : clamp(Math.floor(count / 14), 5, 9);
+
   return (
     <div className={`${heightClass} w-full min-w-0 overflow-hidden`}>
-      <p className="mb-1 text-[11px] text-slate-500">
-        Individual video durations — minutes per video · X: playlist position (every entry plotted, labels thinned as needed)
-      </p>
-      <div className="h-[calc(100%-1.25rem)] min-w-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 8, right: 8, bottom: 20, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-            <XAxis
-              dataKey="pos"
-              tick={TICK}
-              ticks={positionTicks(data[0].pos, data[data.length - 1].pos)}
-              minTickGap={8}
-              label={{ value: 'playlist position', position: 'insideBottom', offset: -14, fontSize: 11, fill: '#64748b' }}
-            />
-            <YAxis
-              tick={TICK}
-              width={52}
-              label={{ value: 'minutes / video', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }}
-            />
-            <Tooltip content={<BarTip />} />
-            <Bar dataKey="min" name="min" fill={SERIES.cyan} radius={[3, 3, 0, 0]} maxBarSize={26} />
-          </BarChart>
-        </ResponsiveContainer>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <p className="text-[11px] text-[var(--text-faint)]">Video durations — minutes per video</p>
+        <button
+          type="button"
+          onClick={() => setMode((m) => (m === 'overview' ? 'detail' : 'overview'))}
+          aria-pressed={mode === 'detail'}
+          className="text-[11px] font-semibold text-[var(--text-muted)] underline underline-offset-2 hover:text-[var(--text)]"
+        >
+          {mode === 'overview' ? 'Explore individual videos' : 'Return to full overview'}
+        </button>
+      </div>
+      <div className="h-[calc(100%-1.5rem)] min-h-0 min-w-0">
+        <PanChart count={count} slotWidth={SLOT} yTicks={[...yTicks].reverse().map(String)} ariaLabel="Video duration chart." mode={mode} positionLabel="Positions">
+          {(_innerWidth) => (
+            <ResponsiveContainer width="100%" height="100%">
+              {mode === 'overview' ? (
+                <BarChart data={data} margin={{ top: 6, right: 8, bottom: 18, left: 0 }} barCategoryGap="22%">
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical />
+                  <XAxis
+                    dataKey="pos"
+                    type="category"
+                    tick={TICK}
+                    ticks={positionTicks(first, last, overviewTicks)}
+                    minTickGap={8}
+                    axisLine={{ stroke: AXIS_LINE }}
+                    tickLine={{ stroke: AXIS_LINE }}
+                  />
+                  <YAxis tick={TICK} width={38} axisLine={{ stroke: AXIS_LINE }} tickLine={{ stroke: AXIS_LINE }} domain={[0, yMax]} ticks={yTicks} />
+                  <Tooltip cursor={{ fill: 'var(--surface-hover)' }} content={<BarTip />} />
+                  <Bar dataKey="min" name="min" fill={SERIES.steel} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              ) : (
+                <BarChart data={data} margin={{ top: 6, right: 0, bottom: 18, left: 2 }} barCategoryGap="18%">
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical />
+                  <XAxis
+                    dataKey="pos"
+                    type="category"
+                    tick={TICK}
+                    ticks={positionTicks(first, last, 0)}
+                    minTickGap={8}
+                    axisLine={{ stroke: AXIS_LINE }}
+                    tickLine={{ stroke: AXIS_LINE }}
+                  />
+                  <YAxis hide domain={[0, yMax]} ticks={yTicks} />
+                  <Tooltip cursor={{ fill: 'var(--surface-hover)' }} content={<BarTip />} />
+                  <Bar dataKey="min" name="min" fill={SERIES.steel} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              )}
+            </ResponsiveContainer>
+          )}
+        </PanChart>
       </div>
     </div>
   );
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 function BarTip({ active, payload }: any) {
+  const { TOOLTIP_STYLE } = useChartTheme();
   if (!active || !payload?.length) return null;
   const p = payload[0]?.payload as RangePoint | undefined;
   if (!p) return null;
   return (
-    <div style={TOOLTIP_STYLE} className="max-w-[240px] p-2.5">
-      <p className="font-semibold text-violet-300">Video #{p.pos}</p>
-      <p className="truncate text-xs text-slate-300" title={p.title}>{p.title}</p>
+    <div style={TOOLTIP_STYLE} className="max-w-[240px] rounded-md border p-2.5">
+      <p className="font-semibold text-[var(--text)]">Video #{p.pos}</p>
+      <p className="truncate text-xs text-[var(--text-muted)]" title={p.title}>{p.title}</p>
       <p className="mt-1 font-mono text-xs">
-        Duration: {p.unresolved ? <span className="text-amber-300">unresolved</span> : fmtHMSLabel(p.durationSec ?? 0)}
+        Duration: {p.unresolved ? <span className="text-amber-800 dark:text-amber-300">unresolved</span> : fmtHMSLabel(p.durationSec ?? 0)}
       </p>
-      <p className="text-[11px] text-slate-500">{p.unresolved ? 'unresolved metadata' : p.done ? 'completed' : 'not completed'}</p>
+      <p className="text-[11px] text-[var(--text-faint)]">{p.unresolved ? 'unresolved metadata' : p.done ? 'completed' : 'not completed'}</p>
     </div>
   );
 }

@@ -169,7 +169,7 @@ function installFetch(server: FakeServer) {
       if (!server.authenticated) return json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' }, 401);
       server.dataReads += 1;
       if (server.failData) return json({ error: 'Cloud storage is unavailable. Nothing was overwritten.' }, 503);
-      return json({ ok: true, state: server.state, version: server.version });
+      return json({ ok: true, schemaVersion: 1, state: server.state, version: server.version });
     }
     if (u.endsWith('/append') && method === 'POST') {
       if (!server.authenticated) return json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' }, 401);

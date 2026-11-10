@@ -191,13 +191,13 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-bold">Learning record · #{entry.position}</h3>
-          <p className="text-[11px] text-slate-500">
+          <p className="text-[11px] text-[var(--text-faint)]">
             Persistent notes for this exact playlist entry. Saved separately from the pause-note above
             (which is written only when the video ends).
           </p>
         </div>
         <span
-          className={`rounded-full px-2 py-1 text-[11px] ${record?.needsRevision ? 'bg-amber-500/15 text-amber-200' : lastIso ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/5 text-slate-400'}`}
+          className={`rounded-full px-2 py-1 text-[11px] ${record?.needsRevision ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200' : lastIso ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300' : 'bg-[var(--surface-soft)] text-[var(--text-muted)]'}`}
           role="status"
         >
           {record?.needsRevision
@@ -211,7 +211,7 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
       </div>
 
       {record?.needsRevision && lastIso && (
-        <p className="mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 p-2 text-[11px] text-amber-100">
+        <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-2 text-[11px] text-amber-800 dark:text-amber-100">
           This lesson keeps a completed review from {reviewDate(lastIso, s.prefs.timezone)} and now has a new
           revision requirement. Both are true: the earlier review is history, the flag is the current work.
         </p>
@@ -232,7 +232,7 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
         >
           <BookmarkCheck size={14} /> Mark reviewed
         </Btn>
-        <span className={`text-xs ${status === 'error' ? 'text-red-300' : status === 'dirty' ? 'text-amber-300' : 'text-slate-400'}`} role="status" aria-live="polite">
+        <span className={`text-xs ${status === 'error' ? 'text-red-800 dark:text-red-300' : status === 'dirty' ? 'text-amber-800 dark:text-amber-300' : 'text-[var(--text-muted)]'}`} role="status" aria-live="polite">
           {status === 'dirty' && 'Unsaved changes — saving automatically…'}
           {status === 'saved' && (
             s.mode === 'cloud'
@@ -244,14 +244,14 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
         </span>
       </div>
 
-      <p className="mt-2 text-[11px] text-slate-500">
+      <p className="mt-2 text-[11px] text-[var(--text-faint)]">
         Review status and history are separate from annotations. Marking reviewed clears the current flag and
         revision date, records a dated review, and keeps notes, confidence, concepts, questions, and exercise
         evidence. Repeated clicks on the same day do not duplicate history or XP.
       </p>
 
       {history.length > 0 && (
-        <details className="mt-2 text-[11px] text-slate-400">
+        <details className="mt-2 text-[11px] text-[var(--text-muted)]">
           <summary className="cursor-pointer">Review history ({history.length})</summary>
           <ul className="mt-1 space-y-0.5">
             {[...history].reverse().slice(0, 8).map((h) => (
