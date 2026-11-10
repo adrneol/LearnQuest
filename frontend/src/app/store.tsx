@@ -42,13 +42,15 @@ import {
   isRecordableFocusSession,
 } from '../domain/index.js';
 import type { PlaybackSegment, Goal, AppPreferences, Module, RankSnapshot } from '../domain/index.js';
+import { EMPTY_ARENA, transitionArena, type ArenaAction } from '../domain/competition/arenaRuns.js';
+import { isArenaLedger } from '../domain/competition/arenaValidation.js';
 import type { ChallengeConfig } from '../domain/competition/competition.js';
-import { DEFAULT_CHALLENGE, normalizeChallenge, validateChallenge } from '../domain/competition/competition.js';
+import { DEFAULT_CHALLENGE, normalizeChallenge } from '../domain/competition/competition.js';
 import type {
   PlaylistSnapshot, ProgressRecord, SavedRange, Checkpoint, StudySession, XpEvent, DayGoal,
   PlaySession, AppSettings,
 } from '../domain/index.js';
-import { kvGet, kvSet, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
+import { kvGet, kvSet, kvUpdate, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
 import { mergeAccountState, deepEqual, type MergeConflict } from '../services/persistence/cloudMerge.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
 import { buildAccountExport } from '../services/exports/accountExport.js';
@@ -142,6 +144,7 @@ interface Store {
   updateFlexGoal: (id: string, patch: Partial<Goal>) => void;
   deleteFlexGoal: (id: string) => void;
   setChallenge: (patch: Partial<ChallengeConfig>) => void;
+  updateArena: (action: ArenaAction) => Promise<boolean>;
   /** Explicitly end a frozen fixed run and return to editable practice. */
   endFixedChallenge: () => void;
   setChallengeEnabled: (on: boolean) => void;
@@ -412,8 +415,10 @@ function normalizeLoadedState(raw: Partial<LoadedState>, fallbackPrefs = default
     if (queue[snap.playlistId]) queue[snap.playlistId] = reconcileQueuePositions(undefined, snap, queue[snap.playlistId]);
   }
   const flexGoals = asArray<Goal>(raw.flexGoals).filter((g) => g && g.id && g.metric && Number.isFinite(g.target));
+  const arena = raw.challenge?.arena;
+  if (arena !== undefined && !isArenaLedger(arena)) throw new Error('The saved Arena record could not be read safely.');
   const challengeCandidate = normalizeChallenge(asRecord(raw.challenge));
-  const challenge = validateChallenge(challengeCandidate).length ? normalizeChallenge(DEFAULT_CHALLENGE) : challengeCandidate;
+  const challenge = { ...challengeCandidate, ...(arena === undefined ? {} : { arena }) };
   const settings = sanitizeSettings(raw.settings);
   const activeId = typeof raw.activeId === 'string' && playlists[raw.activeId] ? raw.activeId : null;
   return {
@@ -1392,10 +1397,16 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
         ['rankHistory', rankHistory],
         ['settings', settings],
       ];
-      const run = (async () => {
+      const run = writeChain.current.then(async () => {
         for (const [k, v] of writes) {
           try {
-            await kvSet(k, v);
+            if (k === 'challenge') {
+              // Arena actions persist first in their own transaction. A queued
+              // general save must never overwrite that committed ledger.
+              await kvUpdate<ChallengeConfig>(k, (saved) => ({
+                ...v as ChallengeConfig, ...(saved?.arena ? { arena: saved.arena } : {}),
+              }));
+            } else await kvSet(k, v);
           } catch {
             if (!persistWarned.current) {
               persistWarned.current = true;
@@ -1408,7 +1419,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
             break;
           }
         }
-      })();
+      });
       // Destructive operations await this barrier so an in-flight debounced
       // write can never land after Clear All / restore and resurrect old data.
       writeChain.current = run.catch(() => undefined);
@@ -2379,6 +2390,36 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     saveFlexGoal: (g) => setFlexGoals((prev) => [...prev, { ...g, id: uid(), createdAt: new Date().toISOString(), achievedAt: null, achievedValue: null }]),
     updateFlexGoal: (id, patch) => setFlexGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g))),
     deleteFlexGoal: (id) => setFlexGoals((prev) => prev.filter((g) => g.id !== id)),
+    updateArena: async (action) => {
+      if (migrationReadOnly) return false;
+      const apply = (previous: ChallengeConfig) => {
+        const ledger = previous.arena ?? EMPTY_ARENA;
+        const next = transitionArena(ledger, action);
+        return next === ledger || !isArenaLedger(next) ? previous : { ...previous, arena: next };
+      };
+      if (mode !== 'local') {
+        if (apply(challenge) === challenge) return false;
+        setChallengeState(apply);
+        return true;
+      }
+      let changed = false;
+      const operation = writeChain.current.then(() => kvUpdate<ChallengeConfig>('challenge', (saved) => {
+        const previous = saved ?? challenge;
+        const next = apply(previous);
+        changed = next !== previous;
+        return next;
+      }));
+      writeChain.current = operation.then(() => undefined, () => undefined);
+      try {
+        const committed = await operation;
+        setChallengeState(committed);
+        if (!changed) notify('The selected Arena run changed in another tab. Review the current simulation before retrying.');
+        return changed;
+      } catch {
+        notify('The Arena change could not be saved. The existing simulation was kept.');
+        return false;
+      }
+    },
     setChallenge: (patch) => setChallengeState((prev) => {
       // A fixed challenge freezes its scoring settings after the run starts.
       if (prev.mode === 'fixed' && prev.fixed) return prev;
@@ -2393,7 +2434,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     // NEVER clears real learning data - sim snapshots/history only.
     resetChallenge: () => {
       setRankHistory([]);
-      setChallengeState(normalizeChallenge(DEFAULT_CHALLENGE));
+      setChallengeState((previous) => ({ ...normalizeChallenge(DEFAULT_CHALLENGE), ...(previous.arena ? { arena: previous.arena } : {}) }));
     },
     pushRank: (r) => setRankHistory((prev) => [...prev.slice(-99), r]),
     setSettings: (patch) => setSettingsState((prev) => sanitizeSettings({ ...prev, ...patch })),

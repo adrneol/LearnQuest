@@ -189,13 +189,14 @@ export async function checkShell(t, fixture, review) {
   for (const width of [1440, 390]) {
     await t.test(`Arena active practice layout at ${width}px`, async (subtest) => {
       const page = await fixture.open(subtest, { width, route: 'competition', resolvedDurations: true, theme: width === 390 ? 'light' : 'dark' });
-      await page.getByRole('button', { name: 'Enable competition' }).click();
-      await page.getByRole('heading', { name: 'Practice simulation' }).waitFor();
+      await page.getByRole('textbox', { name: 'Simulation name' }).fill('Browser practice');
+      await page.getByRole('button', { name: 'Create simulation' }).click();
+      await page.getByRole('heading', { name: 'Browser practice' }).waitFor();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
       if (width < 640) {
-        const description = await page.getByText(/^Change these settings to explore/).boundingBox();
-        const action = await page.getByRole('button', { name: 'Start private fixed run' }).boundingBox();
-        assert.ok(description && action && action.y > description.y + description.height);
+        const leaderboard = await page.getByRole('region', { name: 'Leaderboard' }).boundingBox();
+        const score = await page.getByRole('region', { name: 'How you score' }).boundingBox();
+        assert.ok(score && leaderboard && score.y >= leaderboard.y + leaderboard.height);
       }
       if (review) await capture(page, 'arena-enabled', width);
     });

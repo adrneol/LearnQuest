@@ -10,6 +10,8 @@
 // hours, streaks, and tier are never inputs. A user or rival is provisional
 // until at least 3 qualifying days and 7 observed calendar days exist.
 
+import { arenaCalendar, clipArenaPlayback, forwardArenaWindow, type ArenaInterval } from './arenaTime.js';
+import type { ArenaLedger } from './arenaRuns.js';
 import { generateAlias, initialsOf } from './aliases.js';
 import { calendarWindowDates, zonedNoonMs, attributeFocusByDay, attributePlaybackByDay, splitPlaybackSegmentByDay } from '../time/time.js';
 import { supportedZone } from '../time/timezones.js';
@@ -119,6 +121,8 @@ export interface ChallengeConfig {
   mode?: 'practice' | 'fixed';
   modelVersion?: string;
   fixed?: FixedChallengeSnapshot | null;
+  /** Optional versioned Arena record in the existing challenge collection. */
+  arena?: ArenaLedger;
 }
 
 export const DEFAULT_CHALLENGE: ChallengeConfig = {
@@ -140,7 +144,7 @@ export function normalizeChallenge(raw: unknown): ChallengeConfig {
     ...r,
     tierDist: { ...DEFAULT_TIER_DIST, ...(r.tierDist && typeof r.tierDist === 'object' ? r.tierDist as Record<Tier, number> : {}) },
     mode: r.mode === 'fixed' ? 'fixed' : 'practice',
-    modelVersion: ARENA_MODEL_VERSION,
+    modelVersion: typeof r.modelVersion === 'string' ? r.modelVersion : ARENA_MODEL_VERSION,
     fixed: r.fixed && typeof r.fixed === 'object' ? r.fixed as FixedChallengeSnapshot : null,
   } as ChallengeConfig;
   if (validateChallenge(candidate).length) {
@@ -393,9 +397,7 @@ export function createFixedChallenge(
   },
 ): ChallengeConfig {
   const now = input.now ?? new Date();
-  const dates = input.windowDates.length === cfg.windowDays
-    ? [...input.windowDates]
-    : challengeWindowDates(cfg.windowDays, 'UTC', now.getTime());
+  const { dates, end } = forwardArenaWindow(cfg.windowDays, 'UTC', now.getTime());
   return normalizeChallenge({
     ...cfg,
     mode: 'fixed',
@@ -409,7 +411,7 @@ export function createFixedChallenge(
       windowDays: cfg.windowDays,
       dailyCapHours: cfg.dailyCapHours,
       startedAt: now.toISOString(),
-      endsAt: new Date(now.getTime() + cfg.windowDays * 86400_000).toISOString(),
+      endsAt: new Date(end).toISOString(),
       playlistId: input.playlistId,
       playlistSnapshotVersion: input.playlistSnapshotVersion,
       playlistDurationSec: input.playlistDurationSec,
@@ -690,8 +692,10 @@ export function rankBoard(
   const ordered = [...scored, ...provisional];
   rows.length = 0;
   rows.push(...ordered);
-  for (const r of scored) {
-    r.rank = 1 + scored.filter((o) => (o.value as number) > (r.value as number)).length;
+  let rank = 0;
+  for (let index = 0; index < scored.length; index++) {
+    if (index === 0 || scored[index].value !== scored[index - 1].value) rank = index + 1;
+    scored[index].rank = rank;
   }
   const me = rows.find((r) => r.isUser)!;
   const userRank = me.rank;
@@ -748,22 +752,52 @@ export function computeArenaUserEvidence(input: {
   sessions: StudySession[];
   timeZone: string;
   windowDates: string[];
+  bounds?: ArenaInterval;
+  modelVersion?: 'arena-v2' | 'arena-v3';
+  frozen?: boolean;
 }): ArenaUserEvidence {
   const { snapshot, progress, segments, sessions, timeZone, windowDates } = input;
   const pid = snapshot.playlistId;
+  const legacy = input.modelVersion === 'arena-v2';
+  const calendar = arenaCalendar(timeZone);
+  const frozenEntries = input.frozen ? new Map(snapshot.entries.map((entry) => [entry.entryId, entry.videoId])) : null;
+  const playback = segments.filter((x) => x.playlistId === pid && x.source === 'verified'
+    && (!frozenEntries || frozenEntries.get(x.entryId) === x.videoId));
+  const split = legacy ? (segment: PlaybackSegment) => splitPlaybackSegmentByDay(segment, timeZone) : calendar.playback;
+  const activeByDay = new Map<string, [number, number][]>();
   const entryKeyOf = (entry: PlaylistSnapshot['entries'][number]) =>
     `${pid}::${entry.entryId ?? `${entry.position}:${entry.videoId}`}`;
   const byEntry = new Map<string, PlaybackSegment[]>();
-  for (const seg of segments) {
-    if (seg.playlistId !== pid || seg.source !== 'verified') continue;
+  for (const original of playback) {
+    const seg = legacy ? original : clipArenaPlayback(original, input.bounds);
+    if (!seg) continue;
+    if (!legacy) {
+      for (const { dateKey, segment } of split(seg)) {
+        const intervals = activeByDay.get(dateKey) ?? [];
+        intervals.push([segment.wallStartMs, segment.wallEndMs]);
+        activeByDay.set(dateKey, intervals);
+      }
+    }
     const key = `${seg.playlistId}::${seg.entryId ?? `${seg.position}:${seg.videoId}`}`;
     const arr = byEntry.get(key) ?? [];
     arr.push(seg);
     byEntry.set(key, arr);
   }
-  const byDaySegments = attributePlaybackByDay(segments.filter((x) => x.playlistId === pid && x.source === 'verified'), timeZone);
-  const focusByDay = attributeFocusByDay(sessions.filter((x) => x.playlistId === pid), timeZone);
-  const progressIndex = buildEntryProgressIndex(snapshot, progress);
+  const byDaySegments = legacy ? attributePlaybackByDay(playback, timeZone) : new Map<string, PlaybackSegment[]>();
+  const scopedSessions = sessions.filter((x) => x.playlistId === pid);
+  const focusByDay = legacy ? attributeFocusByDay(scopedSessions, timeZone) : calendar.focus(scopedSessions, input.bounds);
+  const progressIndex = input.frozen ? new Map<number, ProgressRecord>() : buildEntryProgressIndex(snapshot, progress);
+  if (frozenEntries) {
+    const byIdentity = new Map(Object.values(progress)
+      .filter((record) => record.playlistId === pid && record.entryId && frozenEntries.get(record.entryId) === record.videoId
+        && (!record.orphaned || record.reviewReason === 'removed'))
+      .sort((a, b) => (a.completedAt ?? '').localeCompare(b.completedAt ?? ''))
+      .map((record) => [record.entryId, record]));
+    for (const entry of snapshot.entries) {
+      const record = byIdentity.get(entry.entryId);
+      if (record) progressIndex.set(entry.position, { ...record, orphaned: false });
+    }
+  }
   const completedByDay = new Map<string, number>();
   const dailyGain = new Map<string, number>();
   let playlistDurationSec = 0;
@@ -779,12 +813,14 @@ export function computeArenaUserEvidence(input: {
     }
     if (playlistDurationSec === playlistDurationSec) playlistDurationSec += duration;
     const rec = progressIndex.get(entry.position);
-    const complete = Boolean(rec && !rec.orphaned && rec.completedAt && rec.status === 'done');
+    const completedMs = Date.parse(rec?.completedAt ?? '');
+    const complete = isProgressComplete(rec) && (!input.bounds
+      || (completedMs >= input.bounds.start && completedMs < input.bounds.end));
     if (complete) {
       const day = calendarWindowDates(1, timeZone, Date.parse(rec!.completedAt!))[0];
       if (day) completedByDay.set(day, (completedByDay.get(day) ?? 0) + 1);
     }
-    if (isProgressComplete(rec)) {
+    if (complete) {
       unique += duration;
       if (rec?.source === 'verified') verifiedCompleted += 1;
       else manualCompleted += 1;
@@ -792,15 +828,18 @@ export function computeArenaUserEvidence(input: {
     const entrySegments = byEntry.get(entryKeyOf(entry)) ?? [];
     if (entrySegments.length === 0) continue;
     // Cumulative-new verified coverage by calendar day.
-    const slices = entrySegments.flatMap((seg) => splitPlaybackSegmentByDay(seg, timeZone).map((slice) => ({
+    const slices = entrySegments.flatMap((seg) => split(seg).map((slice) => ({
       dateKey: slice.dateKey,
       start: slice.segment.timelineStartSec,
       end: slice.segment.timelineEndSec,
     })));
     const byDate = new Map<string, [number, number][]>();
     for (const slice of slices) {
+      const start = legacy ? slice.start : Math.max(0, slice.start);
+      const end = legacy ? slice.end : Math.min(duration, slice.end);
+      if (end <= start) continue;
       const arr = byDate.get(slice.dateKey) ?? [];
-      arr.push([slice.start, slice.end]);
+      arr.push([start, end]);
       byDate.set(slice.dateKey, arr);
     }
     let seen: [number, number][] = [];
@@ -810,7 +849,10 @@ export function computeArenaUserEvidence(input: {
       const union = seen.reduce((sum, [a, b]) => sum + Math.max(0, b - a), 0);
       const gain = Math.max(0, union - seenMs);
       seenMs = union;
-      if (!complete && gain > 0) dailyGain.set(key, (dailyGain.get(key) ?? 0) + gain);
+      const cappedGain = Math.min(duration, union) - Math.min(duration, union - gain);
+      if ((legacy ? !complete : true) && cappedGain > 0) {
+        dailyGain.set(key, (dailyGain.get(key) ?? 0) + (legacy ? gain : cappedGain));
+      }
     }
     if (!complete) unique += Math.min(duration, seenMs);
   }
@@ -821,18 +863,21 @@ export function computeArenaUserEvidence(input: {
   const playlistL = Number.isFinite(playlistDurationSec) ? playlistDurationSec : null;
   const daily = windowDates.map((dateKey) => {
     const daySegments = byDaySegments.get(dateKey) ?? [];
-    const activePlaybackSec = daySegments.reduce((sum, s) => sum + Math.max(0, Math.round((s.wallEndMs - s.wallStartMs) / 1000)), 0);
+    const activePlaybackSec = legacy
+      ? daySegments.reduce((sum, s) => sum + Math.max(0, Math.round((s.wallEndMs - s.wallStartMs) / 1000)), 0)
+      : mergeIntervals(activeByDay.get(dateKey) ?? []).reduce((sum, [a, b]) => sum + (b - a) / 1000, 0);
     return {
       dateKey,
-      contentGainSec: Math.round(dailyGain.get(dateKey) ?? 0),
+      contentGainSec: legacy ? Math.round(dailyGain.get(dateKey) ?? 0) : dailyGain.get(dateKey) ?? 0,
       completedVideo: (completedByDay.get(dateKey) ?? 0) > 0,
       focusSec: focusByDay.get(dateKey) ?? 0,
       activePlaybackSec,
     };
   });
+  const boundedUnique = playlistL !== null ? Math.min(unique, playlistL) : unique;
   return {
     playlistDurationSec: playlistL,
-    uniqueContentSec: Math.round(playlistL !== null ? Math.min(unique, playlistL) : unique),
+    uniqueContentSec: legacy ? Math.round(boundedUnique) : boundedUnique,
     focusSec,
     verifiedCompleted,
     manualCompleted,

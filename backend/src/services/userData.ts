@@ -1,3 +1,4 @@
+import { isArenaLedger } from './arenaValidation.js';
 import { USER_COLLECTIONS, type DataStore, type UserCollectionName } from '../store.js';
 import { env } from '../config/env.js';
 import { assertLearningDataWritable } from './migrationControl.js';
@@ -438,7 +439,7 @@ function validateSingleton(name: UserCollectionName, value: any): void {
     return;
   }
   if (name === 'challenge') {
-    if (!isObj(value)) throw httpError('challenge is invalid.', 400);
+    if (!isObj(value) || (value.arena !== undefined && !isArenaLedger(value.arena))) throw httpError('challenge is invalid.', 400);
   }
 }
 

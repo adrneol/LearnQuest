@@ -4,6 +4,7 @@
 // state or a list of human-safe errors; the store commits that state in one
 // transaction before touching React state.
 
+import { isArenaLedger } from '../../domain/competition/arenaValidation.js';
 import type {
   AppPreferences, AppSettings, DayGoal, Module, PlaySession,
   PlaylistEntry, PlaylistSnapshot, ProgressRecord, RankSnapshot, SavedRange, Checkpoint,
@@ -718,6 +719,17 @@ function validateBackupChallenge(raw: unknown, p: Problems): ChallengeConfig {
   const problems = validateChallenge(candidate);
   if (problems.length) p.add(`challenge: ${problems.join(' ')}`);
   if (!int(candidate.windowDays, 1, 90)) p.add('challenge.windowDays must be 1–90.');
+  if (raw.arena !== undefined) {
+    if (isArenaLedger(raw.arena)) candidate.arena = raw.arena;
+    else p.add('challenge.arena is invalid or unsupported.');
+  }
+  if (raw.fixed != null) {
+    if (isObj(raw.fixed) && typeof raw.fixed.seasonId === 'string' && Array.isArray(raw.fixed.windowDates)) {
+      candidate.fixed = raw.fixed as unknown as ChallengeConfig['fixed'];
+      candidate.mode = raw.mode === 'fixed' ? 'fixed' : 'practice';
+      if (typeof raw.modelVersion === 'string') candidate.modelVersion = raw.modelVersion;
+    } else p.add('challenge.fixed is invalid.');
+  }
   return candidate;
 }
 

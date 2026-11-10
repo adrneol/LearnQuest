@@ -34,6 +34,23 @@ export async function kvSet(key: string, value: unknown): Promise<void> {
   await d.put(STORE, value, key);
 }
 
+/** Read and update one record within a single transaction, including across local tabs. */
+export async function kvUpdate<T>(key: string, update: (previous: T | undefined) => T): Promise<T> {
+  const d = await db();
+  const tx = d.transaction(STORE, 'readwrite');
+  try {
+    const previous = await tx.store.get(key) as T | undefined;
+    const next = update(previous);
+    if (next !== previous) await tx.store.put(next, key);
+    await tx.done;
+    return next;
+  } catch (error) {
+    try { tx.abort(); } catch { /* already closed */ }
+    await tx.done.catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function kvDel(key: string): Promise<void> {
   const d = await db();
   await d.delete(STORE, key);

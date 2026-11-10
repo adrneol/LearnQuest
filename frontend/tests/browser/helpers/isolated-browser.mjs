@@ -147,7 +147,7 @@ export async function startBrowserFixture(t) {
   return {
     browserVersion: browser.version(),
     async open(test, { width = 1440, height = 900, theme = 'dark', route = 'learn', touch = false,
-      cloud = false, motion = false, resolvedDurations = false, entryCount, entries, alternateEntries } = {}) {
+      cloud = false, motion = false, resolvedDurations = false, entryCount, entries, alternateEntries, learning } = {}) {
       const context = await browser.newContext({
         viewport: { width, height }, deviceScaleFactor: 1, locale: 'en-US',
         timezoneId: 'UTC', colorScheme: theme, reducedMotion: motion ? 'no-preference' : 'reduce', serviceWorkers: 'block', hasTouch: touch,
@@ -175,7 +175,8 @@ export async function startBrowserFixture(t) {
       test.after(() => assert.deepEqual(errors, [], 'Unexpected browser or application console errors'));
       await page.clock.install({ time: new Date(fixedTime) });
       await page.goto(`${origin}/__fixture__`, { waitUntil: 'domcontentloaded' });
-      const localState = resolvedDurations || entryCount !== undefined || entries || alternateEntries ? structuredClone(state) : state;
+      const localState = resolvedDurations || entryCount !== undefined || entries || alternateEntries || learning ? structuredClone(state) : state;
+      if (learning) Object.assign(localState, learning);
       if (entryCount !== undefined) {
         const playlist = localState.playlists[playlistId];
         playlist.entries = Array.from({ length: entryCount }, (_, index) => ({

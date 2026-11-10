@@ -89,11 +89,24 @@ infrastructure failures, not evidence of a defect.
 
 | Cases | Expected behavior |
 | --- | --- |
-| ARENA-1, ARENA-2 | Completing a lesson preserves earlier qualifying evidence; a fixed run's dates agree with its displayed period. |
 | EXPORT-1 | Manifest file names agree with the archive contents. |
 
 Phase B moved NAV-1, NAV-2, and A11Y-2 to the browser baseline and A11Y-1 to
 the frontend Vitest baseline. The deferred cases above remain opt-in.
+
+Phase D moved ARENA-1 and ARENA-2 into `frontend/tests/arena-regressions.test.ts`.
+The fixed-run, replay, lifecycle, storage, and cohort checks are in
+`frontend/tests/arena-runs.test.ts`.
+
+```powershell
+cd frontend
+$env:LQ_BROWSER_EXECUTABLE = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+node --test tests/browser/arena.browser.mjs
+```
+
+The isolated Arena browser suite writes captures to
+`frontend/test-results/visual/phase-d`. It exercises synthetic accounts and
+local storage only.
 
 ## Playlist chart profiling
 
