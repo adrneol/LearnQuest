@@ -1,50 +1,66 @@
-import { useCallback, useRef, useState } from 'react';
-import { Plus, RefreshCw, Download, Upload, Trash2, Settings2, EllipsisVertical, Search, AlertTriangle } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Plus, RefreshCw, Download, Upload, Trash2, EllipsisVertical, Search, AlertTriangle } from 'lucide-react';
 import {
-  computePlaylistProgress, rangeDuration, computeRangeProgress, toCsv, XP_RULES, snapshotCompleteness,
-  completedEntryKeys,
+  computePlaylistProgress, rangeDuration, computeRangeProgress, toCsv,
+  completedEntryKeys, snapshotCompleteness,
 } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { confirmDialog, promptDialog } from '../../components/ui/dialog.js';
 import { PopupShell } from '../../components/ui/popup.js';
 import { moveMenuFocus } from '../../components/ui/menuKeys.js';
-import { fetchPlaylistFromServer, snapshotToCsv, parseImportFile } from '../../services/api/playlistApi.js';
+import { fetchPlaylistFromServer, snapshotToCsv } from '../../services/api/playlistApi.js';
 import { Card, Btn, inputCls } from '../../components/ui/ui.js';
-import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
-import { NumberField } from '../../components/ui/NumberField.js';
 import { validateBackup } from '../../services/persistence/backup.js';
+import { consumePendingIntent } from '../../app/pendingIntent.js';
 import { notify } from '../../services/notifications/notify.js';
 
 export function Reports() {
   const s = useStore();
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
-  const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const orphanRef = useRef<HTMLDivElement>(null);
+  const orphanPending = useRef(false);
 
-  const add = async (refresh = false) => {
-    // Add reads only the dedicated Add field; Refresh always targets the
-    // active playlist and never an unrelated URL typed into that field.
-    const target = refresh ? snap?.playlistId ?? '' : url.trim();
+  // Consume a one-shot "bring me to the review section" intent set by the
+  // Library/Dashboard affordances. Focus, never navigate — we are already here.
+  useEffect(() => {
+    if (consumePendingIntent('focus-orphan-review')) orphanPending.current = true;
+  }, []);
+
+  // The orphan heading only exists after the store applies orphaned records.
+  useEffect(() => {
+    if (!orphanPending.current) return undefined;
+    const target = orphanRef.current?.querySelector<HTMLElement>('[data-orphan-heading]');
+    if (!target) return undefined;
+    orphanPending.current = false;
+    requestAnimationFrame(() => {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView?.({ block: 'start' });
+    });
+    return undefined;
+  }, [s.progress]);
+
+  const refresh = async () => {
+    const target = snap?.playlistId ?? '';
     if (!target) {
-      setMsg(refresh ? 'Select an active playlist before refreshing.' : 'Enter a playlist URL or ID to add.');
+      setMsg('Select an active playlist before refreshing.');
       return;
     }
     setBusy(true);
     setMsg(null);
     try {
       // Refresh bypasses a fresh backend cache entry (`refresh=1`) so the
-      // button always revalidates upstream; plain Add reuses valid cache.
-      const { snapshot, cached } = await fetchPlaylistFromServer(target, { refresh });
+      // button always revalidates upstream; plain Add (in Library) reuses cache.
+      const { snapshot, cached } = await fetchPlaylistFromServer(target, { refresh: true });
       if (!snapshot.entries.length) {
-        setMsg('That playlist has no accessible entries; nothing was added or marked complete.');
+        setMsg('That playlist has no accessible entries; nothing was changed.');
         return;
       }
       s.addSnapshot(snapshot);
-      setMsg(refresh ? `Refreshed ${snapshot.title} (N=${snapshot.entries.length}${cached ? ', served from cache' : ', fresh from YouTube'}). Progress follows video identity; check flagged ranges.` : `Added ${snapshot.title} (N=${snapshot.entries.length}${cached ? ' — served from cache' : ''}).`);
-      if (!refresh) setUrl('');
+      setMsg(`Refreshed ${snapshot.title} (N=${snapshot.entries.length}${cached ? ', served from cache' : ', fresh from YouTube'}). Progress follows video identity; check flagged ranges.`);
     } catch (e: any) {
-      setMsg(e?.message ?? 'Fetch failed.');
+      setMsg(e?.message ?? 'Refresh failed.');
     } finally {
       setBusy(false);
     }
@@ -129,69 +145,22 @@ export function Reports() {
               }
             }} />
           </label>
-          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm">
-            <Upload size={14} /> Import snapshot JSON
-            <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (!f) return;
-              try {
-                s.addSnapshot(parseImportFile(await f.text()));
-                setMsg('Snapshot imported (labelled imported, not freshly fetched).');
-              } catch (err: any) {
-                setMsg('Import failed: ' + (err?.message ?? 'invalid file'));
-              }
-            }} />
-          </label>
         </div>
       </Card>
 
       <Card>
         <h2 className="lq-section-title">Playlists ({allIds.length}) · combined {combined.done}/{combined.total} videos</h2>
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-          <input className={inputCls} placeholder="New playlist URL or ID" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="New playlist URL" />
-          <Btn variant="primary" onClick={() => add(false)} disabled={busy || !url.trim()}><Plus size={14} /> Add</Btn>
-          <Btn onClick={() => add(true)} disabled={busy || !snap}><RefreshCw size={14} /> Refresh active{snap ? ` (#${snap.entries.length})` : ''}</Btn>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <a className="lq-button lq-button--ghost inline-flex items-center gap-1.5" href="#/learn"><Plus size={14} aria-hidden="true" /> Add a playlist in Library</a>
+          <Btn onClick={() => void refresh()} disabled={busy || !snap}><RefreshCw size={14} aria-hidden="true" /> Refresh active{snap ? ` (#${snap.entries.length})` : ''}</Btn>
         </div>
+        <p className="mt-1.5 text-xs text-[var(--text-faint)]">Adding playlists (URL or JSON snapshot) happens in Library, the canonical place. Refresh reconciles by stable entry identity; ranges and checkpoints are flagged for review rather than rewritten.</p>
         <PlaylistTable ids={allIds} />
       </Card>
 
-      <OrphanReview />
-
-      <Card className="lq-workflow-section">
-        <h3 className="flex items-center gap-1.5 text-sm font-bold"><Settings2 size={15} /> Preferences</h3>
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <TimezonePicker value={s.prefs.timezone} onChange={(tz) => s.setPrefs({ timezone: tz })} />
-          <NumberField
-            label="Default session (min)"
-            value={s.prefs.sessionLenMin}
-            onCommit={(v) => { if (v !== null) s.setPrefs({ sessionLenMin: v }); }}
-            min={1}
-            max={600}
-          />
-          <label className="flex items-end gap-2 text-sm">
-            <input type="checkbox" checked={s.prefs.reducedMotion} onChange={(e) => s.setPrefs({ reducedMotion: e.target.checked })} /> Reduce motion
-          </label>
-        </div>
-        <div className="mt-3 rounded-lg bg-[var(--surface-soft)] p-3 text-xs text-[var(--text-muted)]">
-          <p className="font-semibold text-[var(--text)]">XP rules (deterministic, deduped)</p>
-          <p>video {XP_RULES.videoDone} · exercise {XP_RULES.exerciseDone} · code {XP_RULES.codeReproduced} · built {XP_RULES.builtExample} · revision {XP_RULES.revisionDone} · checkpoint {XP_RULES.checkpointDone} · 30min focus {XP_RULES.focusSession30min} · study day {XP_RULES.studyDay} · achievement 25. Re-clicks never double-award (ledger dedup keys).</p>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Btn onClick={() => s.clearCacheOnly()}>Clear cached metadata (keep progress)</Btn>
-          <Btn variant="quiet" className="lq-delete-trigger" onClick={async () => {
-            const confirmed = await confirmDialog({
-              title: 'Clear all learning data?',
-              body: 'This deletes all learning data and resets learning preferences. Export a backup first if you want to retain a copy.',
-              confirmLabel: 'Clear learning data',
-              danger: true,
-            });
-            if (confirmed) {
-              try { await s.clearAllData(); }
-              catch (error) { notify(error instanceof Error ? error.message : 'Could not clear learning data.'); }
-            }
-          }}><Trash2 size={16} aria-hidden="true" /> Clear all data…</Btn>
-        </div>
-      </Card>
+      <div ref={orphanRef}>
+        <OrphanReview />
+      </div>
     </div>
   );
 }
@@ -206,8 +175,8 @@ function OrphanReview() {
   const entries = Object.entries(s.progress).filter(([, rec]) => rec.orphaned);
   if (entries.length === 0) return null;
   return (
-    <Card className="border-amber-500/30">
-      <h3 className="flex items-center gap-1.5 text-sm font-bold text-amber-800 dark:text-amber-200"><AlertTriangle size={15} /> Playlist changes need review ({entries.length})</h3>
+    <Card className="border-amber-500/30" id="orphan-review">
+      <h3 data-orphan-heading tabIndex={-1} className="flex items-center gap-1.5 rounded text-sm font-bold text-amber-800 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] dark:text-amber-200"><AlertTriangle size={15} aria-hidden="true" /> Playlist changes need review ({entries.length})</h3>
       <p className="mt-1 text-xs text-[var(--text-muted)]">
         These records were preserved because their video occurrence was removed or replaced. They are not counted as
         completion for any current video. Review the notes, then delete the orphan if it is no longer useful.

@@ -130,6 +130,10 @@ export async function checkCharts(t, fixture, review) {
     const panned = await readout.innerText();
     await page.setViewportSize({ width: 320, height: 720 });
     assert.equal(await readout.innerText(), panned);
+    // The chart reflows asynchronously after the viewport change; wait for
+    // the steady state instead of probing mid-reflow (event-driven, and the
+    // final assertion remains strict).
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
     if (review) {
       await mkdir('test-results/visual/phase-c', { recursive: true });

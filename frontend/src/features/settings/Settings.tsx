@@ -1,9 +1,12 @@
 import { useEffect, useId, useState } from 'react';
-import { KeyRound, Sun, Moon, Monitor } from 'lucide-react';
+import { KeyRound, Sun, Moon, Monitor, Trash2 } from 'lucide-react';
 import { useStore } from '../../app/store.js';
 import { useTheme, type Theme } from '../../app/theme.js';
 import { checkApiHealth } from '../../services/api/playlistApi.js';
-import { Card, Field } from '../../components/ui/ui.js';
+import { confirmDialog } from '../../components/ui/dialog.js';
+import { notify } from '../../services/notifications/notify.js';
+import { XP_RULES } from '../../domain/index.js';
+import { Card, Field, Btn } from '../../components/ui/ui.js';
 import { TimezonePicker } from '../../components/ui/TimezonePicker.js';
 import { NumberField } from '../../components/ui/NumberField.js';
 
@@ -42,6 +45,19 @@ export function Settings() {
   useEffect(() => {
     checkApiHealth().then(setHealth);
   }, []);
+
+  const clearAllData = async () => {
+    const confirmed = await confirmDialog({
+      title: 'Clear all learning data?',
+      body: 'This deletes all learning data and resets learning preferences. Export a backup first if you want to retain a copy.',
+      confirmLabel: 'Clear learning data',
+      danger: true,
+    });
+    if (confirmed) {
+      try { await s.clearAllData(); }
+      catch (error) { notify(error instanceof Error ? error.message : 'Could not clear learning data.'); }
+    }
+  };
 
   const configured = health.ok && health.hasKey;
 
@@ -99,7 +115,11 @@ export function Settings() {
             />
           </div>
         </div>
-        </section>
+        <details className="mt-4 border-t border-[var(--border)] pt-3 text-xs text-[var(--text-muted)]">
+          <summary className="cursor-pointer font-semibold text-[var(--text)]">XP rules (deterministic, deduped)</summary>
+          <p className="mt-2 max-w-[72ch]">video {XP_RULES.videoDone} · exercise {XP_RULES.exerciseDone} · code {XP_RULES.codeReproduced} · built {XP_RULES.builtExample} · revision {XP_RULES.revisionDone} · checkpoint {XP_RULES.checkpointDone} · 30min focus {XP_RULES.focusSession30min} · study day {XP_RULES.studyDay} · achievement 25. Re-clicks never double-award (ledger dedup keys).</p>
+        </details>
+      </section>
       </Card>
 
       <div className="lq-workflow-columns" data-layout="balanced">
@@ -143,6 +163,16 @@ export function Settings() {
             ? 'Your data is saved to your account. CSV/JSON exports stay on your device.'
             : 'Your data stays in this browser (IndexedDB). Export a backup before clearing browser data.'}
         </p>
+        <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3 text-[11px] text-[var(--text-muted)]">
+          <p className="font-semibold text-[var(--text)]">Scope of these actions</p>
+          <p className="mt-1">Clear cached metadata keeps every progress, note, revision, focus-session and Arena record — only stored YouTube playlist metadata is dropped and refetched on demand. Clear all learning data permanently deletes every records domain in this account or browser; your sign-in identity is untouched. Export a backup first.</p>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Btn onClick={() => s.clearCacheOnly()}>Clear cached metadata (keep progress)</Btn>
+          <Btn variant="quiet" className="lq-delete-trigger" onClick={() => void clearAllData()}>
+            <Trash2 size={16} aria-hidden="true" /> Clear all learning data…
+          </Btn>
+        </div>
       </Card>
       </div>
     </div>

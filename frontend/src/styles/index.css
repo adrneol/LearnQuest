@@ -354,7 +354,15 @@ body {
   transition-duration: 0.01ms !important;
 }
 
-:where(button, a[href], input, select, textarea, summary, [tabindex]):focus-visible {
+/* Focus-visible ring: element-scoped (not :where) so the designed 2px/2px
+   indicator deterministically beats the UA focus ring on form controls. */
+button:focus-visible,
+a[href]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }

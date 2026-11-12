@@ -141,14 +141,19 @@ registration is not shown as a completed dashboard.
 
 ### Import a playlist
 1. Copy a YouTube playlist URL (contains `?list=PL…`) or just the `PL…` ID.
-2. **Reports → Playlists** → paste into **"New playlist URL or ID"** → **Add**.
-   First run: the onboarding card does the same.
+2. **Library → Add playlist** (the button at the top of the page) → paste → **Add playlist**.
+   First run: the onboarding card does the same thing. You can also import a
+   JSON snapshot from the same add panel; adding is the canonical workflow —
+   every other screen links to it.
 3. The header then shows e.g. `Active playlist: … · N=139 · api`.
-4. **Refresh active** re-checks YouTube for changes (it always revalidates;
+4. **Reports → Refresh active** re-checks YouTube for changes (it always revalidates;
    plain Add reuses a valid cache entry). If videos were added, removed, or
    moved, a banner summarizes the change and affected ranges/checkpoints are
    flagged **needsReview** — original boundaries are preserved for you to
    confirm, never silently rewritten.
+5. Records left unmatched by a refresh stay in **Reports → Playlist changes
+   need review**, discoverable from Library and Dashboard via the
+   "Review playlist changes" count. Nothing is reassigned for you.
 
 ### If import fails or videos are unavailable
 - **Key missing/invalid/restricted/quota** — the error message names it;
@@ -180,6 +185,11 @@ adjustable position slider, and a reset. The browser remembers your placement.
 ## B. Studying and tracking
 
 ### Recording progress
+- **Dashboard → Resume lesson** — the primary action now opens the in-app
+  Player at the next unfinished lesson (tracked playback, verified evidence).
+  An explicitly labeled **Open on YouTube (untracked)** link remains as a
+  secondary action; external watching never produces verified evidence. When
+  the playlist is complete, the CTA offers review from lesson #1 instead.
 - **Library table** — the circle button toggles **manual** completion
   (for videos you genuinely watched outside the app; always labeled manual).
 - **Player tab** — pick a position (number input, Prev/Next, or your Queue),
@@ -190,12 +200,14 @@ adjustable position slider, and a reset. The browser remembers your placement.
   coverage (default 90%, adjustable 50–100% in Settings) the video flips to
   **✓ verified**. Refreshing mid-playback ends verification honestly — no
   background time is ever credited.
-- **Player learning record** — the card below the player edits that exact
-  playlist occurrence: confidence (1–5), revision date, notes, key concepts,
-  open questions, and code/exercise/example evidence. It autosaves after a
-  short pause and flushes before you switch videos; saving never marks the
-  video complete or verified. This persistent record is separate from the
-  pause-note above, which belongs to the current playback session.
+- **Player learning record** — toggle **Open record** in the Player aside for
+  a compact live summary (confidence, notes, review flag) and expand the
+  editor for that exact playlist occurrence: confidence (1–5), revision date,
+  notes, key concepts, open questions, and code/exercise/example evidence. It
+  autosaves after a short pause and flushes before you switch videos or leave
+  the tab; saving never marks the video complete or verified. This persistent
+  record is separate from the pause-note above, which belongs to the current
+  playback session.
 - **History tab** lists every session with verified vs self-reported labels,
   per-video segment details, and a self-reported entry form for older history.
   Every statistic, the session list, and per-video detail obey the selected
@@ -255,6 +267,12 @@ to the new range; a custom name is preserved. After a refresh that shrinks
 for renaming/deletion, but they are not checkpoints, do not track completion,
 and do not award milestone XP.
 
+**Create a checkpoint from a saved range** — Library's range explorer has a
+**Create checkpoint** button next to *Save range*; the Checkpoints page also
+offers a *Checkpoint* action per saved range. Both open the New checkpoint
+form prefilled (range, suggested label) — nothing is created until you confirm
+with **Add checkpoint**.
+
 ### Playlist changes, review flags, archive, and permanent delete
 Refreshing metadata never erases progress. If the playlist shrinks or moves,
 saved ranges/checkpoints keep their original boundaries and are flagged
@@ -312,12 +330,18 @@ confidence 1–2, given a revision date, or left with open questions.
 ## E. Goals, achievements, and Arena
 
 ### Goals
-**Goals tab → Create goal:** metric (videos, unique content, focus time,
-playback time, checkpoint), target, scope (playlist or all), optional
-checkpoint, **Due today** (checked) or open-ended (unchecked). A goal becomes
-achieved only when its condition holds — never because time elapsed.
-Past-due unmet goals read **missed** without deleting anything; goals can be
-paused, resumed, or deleted. **Focus tab** holds the simpler daily target.
+**Goals tab** now presents two cooperating views of one discipline without
+merging their data:
+- **Today's focus goal** — the calendar-day commitment set on the **Focus
+  tab** (minutes per day, minimum viable minutes). Goals shows your progress
+  against it; Focus keeps its editor and both read the same record — it can
+  never drift between pages.
+- **Flexible goals** — metric (videos, unique content, focus time, playback
+  time, checkpoint), target, scope (playlist or all), optional checkpoint,
+  **Due today** (checked) or open-ended (unchecked). A goal becomes achieved
+  only when its condition holds — never because time elapsed.
+  Past-due unmet goals read **missed** without deleting anything; goals can be
+  paused, resumed, or deleted.
 
 ### Streaks, XP, achievements
 - **Streak** = consecutive local study days (cross-midnight sessions count
@@ -330,34 +354,38 @@ paused, resumed, or deleted. **Focus tab** holds the simpler daily target.
 ### Arena (optional, off by default)
 Everything here is a **fictional local simulation** — no real users, no
 network, no real leaderboard.
-- **What ranks (and nothing else): average daily content efficiency.**
-  Each eligible day's efficiency (unique ÷ focused × 100) counts once; the
-  score is the mean over eligible days. Hours, videos, XP, and tier appear as
-  context only and never affect rank.
-- **Setup:** enable competition, then cohort size 10–2000 (including you),
-  **max rival study per day** 1–12 h (default 6 h — fictional ceiling only;
-  your real sessions are never capped), seed, window days, and tier
-  distribution (must sum to 100).
-- **Rivals** own coherent daily histories (active days, focused minutes
-  within habits and the cap, date-varying efficiency inside tier bands,
-  content derived from those two and capped by remaining playlist content).
-  Tier bands (Ultra 100–110% … Below Average 20–39.9%) are design
-  assumptions, separate from distribution. Daily results vary within
-  ceiling−deviation … ceiling (Ultra 15 pts … Below Average 4 pts).
-- **Eligible days:** windows ≥ 3 days need ≥ 3 eligible days; shorter windows
-  need one per day. Below that you see
-  **"Provisional — complete N more eligible study days"** with your recorded
-  dailies and a next action — never a bottom rank, never a fabricated score.
-- **Rank X of N** (1 is best; ties share: 1, 2, 2, 4). "Ranked above Y%" =
-  share ranked strictly below you. Gap lines read in percentage points to
-  the rival directly above you.
-- **Leaderboard** shows average daily efficiency front and center with exact
-  window dates, eligible-day counts, 25/50/100 rows per page, Top/Near-me
-  views, alias search, and a My-rank jump. Same seed + settings + window
-  dates reproduces the same cohort; the rolling window slides as days pass.
-- **Reset sim** clears only simulated snapshots. Real history, goals, and
-  achievements are untouched. The Efficiency page's aggregate ratio and the
-  Arena's daily mean intentionally differ — same records, different question.
+- **What ranks (and nothing else):** Arena v3 score = 75% playlist coverage +
+  25% consistency (qualifying days ÷ window days). A day qualifies with 5
+  minutes of new verified coverage or a completed lesson, plus 10 minutes of
+  focus or observed playback. Scores describe a private fictional comparison —
+  no real users, no network, no real leaderboard.
+- **Setup:** create a simulation from the Arena tab: a name, mode (Practice
+  or Fixed challenge), difficulty (Relaxed / Balanced / Challenging — changes
+  rival traits only), opponents (1–2000), days (1–90), and seed (the same seed
+  reproduces the same cohort). Playlist basis and timezone are frozen when the
+  simulation is created; every duration must be resolved first.
+- **Qualifying days:** a day qualifies with ≥5 minutes of new verified
+  coverage or a completed lesson, plus ≥10 minutes of focus or observed
+  playback (the greater of the two). Estimated focus and unsaved focus drafts
+  never qualify; rewatches never re-add coverage.
+- **Rivals:** a seed-generated fictional cohort with cadence, pace, and
+  endurance tied to difficulty. No statistical claim about real learners.
+- **Scoring:** 75% playlist coverage + 25% consistency (qualifying days ÷
+  window days), full precision. Identical scores share a rank (1, 2, 2, 4) and
+  the next place stays open. A learner is provisional until at least 3
+  qualifying days and 7 observed calendar days.
+- **Practice** compares the same rolling window of closed local days for you
+  and the cohort; pause freezes the displayed result and resume catches up.
+  **Fixed challenge** starts at local midnight with frozen dates; only closed
+  days count, even when finalized early.
+- **Completion** saves a replay artifact — same seed, same rivals, saved
+  evidence; replay never reads current learning state. If replay ever differs,
+  the recorded result is kept and the conflicting leaderboard is suppressed.
+- **Archive** moves a completed result to simulation history (bounded to 20
+  runs, 90 saved rank checkpoints per run). **Delete simulation** removes only
+  that simulation's records and never touches playlists, progress, sessions or
+  XP. Reset practice seals and archives the current result and starts a fresh
+  run with the same seed and configuration.
 
 ## F. Dashboard, analytics, history, and reports
 
@@ -416,16 +444,17 @@ network, no real leaderboard.
 - **Restore:** Reports → **Restore backup** validates the complete file first;
   v3 restores v2/v1 backups too. You are offered a fresh pre-restore JSON
   download before anything is replaced. The restore is all-or-nothing, and
-  **Import snapshot JSON** handles single-playlist metadata separately.
-  Malformed files are rejected with row-level messages; restores never
-  half-apply.
+  **Import snapshot JSON** (in Library's add panel) handles single-playlist
+  metadata separately. Malformed files are rejected with row-level messages;
+  restores never half-apply.
 - **CSV exports** carry stable playlist/entry identity and current values;
   text beginning with formula characters is escaped for spreadsheets.
-- **Clear cached metadata (keep progress)** drops playlist snapshots only
-  (re-add to refetch). **Clear ALL data** (two-step confirm) deletes all
-  learning data **and resets preferences** in your account (or locally in test
-  mode) while keeping the account, profile, and security settings — export a
-  backup first. Pending debounced writes are drained before the clear, so old
+- **Clear cached metadata (keep progress)** — in **Settings → Data &
+  privacy** — drops playlist snapshots only (re-add to refetch). **Clear ALL
+  data** — same place, two-step confirm — deletes all learning data **and
+  resets preferences** in your account (or locally in test mode) while
+  keeping the account, profile, and security settings — export a backup
+  first. Pending debounced writes are drained before the clear, so old
   state cannot reappear.
 - **Archive** keeps every playlist record and only hides it from active lists
   and totals. **Permanent delete** removes that playlist's progress, sessions,

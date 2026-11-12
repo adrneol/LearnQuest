@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookmarkCheck, Check, Save } from 'lucide-react';
+import { BookmarkCheck, Check, Save, X } from 'lucide-react';
 import {
   annotationPatch,
   annotationValuesFrom,
@@ -49,7 +49,7 @@ interface PendingSave {
  * exact selected playlist occurrence. Completion, verified coverage, player
  * telemetry, the pause-note, sessions, and review history are untouched.
  */
-export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
+export function PlayerLearningRecord({ entry, onClose }: { entry: PlaylistEntry; onClose?: () => void }) {
   const s = useStore();
   const key = useMemo(() => identityKey(s.activeId!, entry.entryId!), [s.activeId, entry.entryId]);
   const record = findProgressForEntry(s.progress, s.activeId!, entry);
@@ -202,6 +202,11 @@ export function PlayerLearningRecord({ entry }: { entry: PlaylistEntry }) {
               ? `Reviewed ${reviewDate(lastIso, s.prefs.timezone)}`
               : 'Not reviewed yet'}
         </span>
+        {onClose && (
+          <Btn variant="quiet" className="!min-h-8 px-2.5 text-xs" onClick={onClose} aria-label="Hide learning record">
+            <X size={13} aria-hidden="true" /> Hide
+          </Btn>
+        )}
       </div>
       <p className="mt-1 max-w-[65ch] text-xs text-[var(--text-muted)]">
         Persistent notes for this exact playlist entry. Saved separately from the pause-note above

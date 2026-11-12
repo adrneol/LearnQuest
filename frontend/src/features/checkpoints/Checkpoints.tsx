@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Library, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import {
   validateRange, computeRangeProgress, rangeDuration, formatSecondsHHMMSS,
@@ -7,6 +7,7 @@ import {
 import { useStore } from '../../app/store.js';
 import { promptDialog } from '../../components/ui/dialog.js';
 import { notify } from '../../services/notifications/notify.js';
+import { consumePendingIntent } from '../../app/pendingIntent.js';
 import { Card, Btn, Field, inputCls, ProgressBar, Empty } from '../../components/ui/ui.js';
 
 export function Checkpoints() {
@@ -15,7 +16,34 @@ export function Checkpoints() {
   const [rangeText, setRangeText] = useState('');
   const [customName, setCustomName] = useState('');
   const [touched, setTouched] = useState(false);
-  if (!snap) return <Empty title="No active playlist" hint="Add one to create checkpoints." />;
+
+  const focusRange = React.useCallback(() => {
+    requestAnimationFrame(() => document.getElementById('checkpoint-range-input')?.focus({ preventScroll: true }));
+  }, []);
+
+  const prefillFromRange = React.useCallback((start: number, end: number, label: string) => {
+    setRangeText(`${start}-${end}`);
+    setTouched(true);
+    // Only adopt the saved range's custom name when it is not what the
+    // checkpoint label generator would produce by itself.
+    if (label && label !== autoCheckpointLabel(start, end) && label !== `Videos ${start}–${end}`) {
+      setCustomName(label);
+    }
+    focusRange();
+  }, [focusRange]);
+
+  // One-shot prefill requested by Library ("Create checkpoint from range").
+  // The intent is consumed as soon as the snapshot is known — consuming it at
+  // mount (before the store applies the snapshot) would silently drop it.
+  useEffect(() => {
+    if (!snap) return undefined;
+    const intent = consumePendingIntent('checkpoint-from-range');
+    if (!intent || intent.playlistId !== snap.playlistId) return undefined;
+    prefillFromRange(intent.start, intent.end, intent.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap?.playlistId]);
+
+  if (!snap) return <Empty title="No active playlist" hint="Add one to create checkpoints." action={<a className="lq-button lq-button--primary" href="#/learn"><Plus size={14} aria-hidden="true" /> Add a playlist</a>} />;
   const N = snap.entries.length;
   const list = s.checkpoints.filter((c) => c.playlistId === snap.playlistId);
   const ranges = s.ranges.filter((r) => r.playlistId === snap.playlistId);
@@ -61,6 +89,7 @@ export function Checkpoints() {
           <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:items-end">
             <Field label="Video range">
               <input
+                id="checkpoint-range-input"
                 className={inputCls}
                 value={rangeText}
                 onChange={(e) => { setRangeText(e.target.value); setTouched(true); }}
@@ -123,6 +152,7 @@ export function Checkpoints() {
             Enter one video range above, for example <span className="font-mono text-[var(--text)]">1-8</span>. The name <b>Videos 1–8</b> appears automatically; use the optional custom name only when you want a descriptive milestone.
           </p>
           <p className="mt-1 text-xs text-[var(--text-faint)]">Only completing the range's videos completes a checkpoint. Nothing is pre-created.</p>
+          <Btn variant="ghost" className="mt-2" onClick={focusRange}><Plus size={13} aria-hidden="true" /> Enter a range</Btn>
         </Card>
       )}
 
@@ -164,8 +194,9 @@ export function Checkpoints() {
           These are duration calculations saved from Library. They are not checkpoints, do not track completion here, and do not award milestone XP.
         </p>
         {ranges.map((r) => (
-          <div key={r.id} className="flex items-center gap-2 border-t border-[var(--border)] py-1.5 text-sm">
-            <span className="mr-auto truncate">{r.label} <span className="text-[var(--text-faint)]">({r.start}–{r.end})</span></span>
+          <div key={r.id} className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] py-1.5 text-sm">
+            <span className="mr-auto min-w-0 truncate">{r.label} <span className="text-[var(--text-faint)]">({r.start}–{r.end})</span></span>
+            <Btn variant="ghost" title="Use this saved range to create a checkpoint" onClick={() => prefillFromRange(r.start, r.end, r.label)}>Checkpoint</Btn>
             <Btn onClick={async () => { const l = await promptDialog({ title: 'Rename saved range', initial: r.label }); if (l) s.renameRange(r.id, l); }}><Pencil size={13} /></Btn>
             <Btn variant="quiet" className="lq-icon-button lq-delete-trigger" aria-label="Delete saved range" onClick={() => s.deleteRange(r.id)}><Trash2 size={16} aria-hidden="true" /></Btn>
           </div>

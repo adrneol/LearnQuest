@@ -116,22 +116,29 @@ export function buildEntryProgressIndex(
     arr.push([key, rec]);
     byVideo.set(rec.videoId, arr);
   }
+  // Direct identity matches win globally before any pairing happens. A record
+  // stored under `<playlistId>::<entryId>` must keep that occurrence — even
+  // when an earlier duplicate occurrence would otherwise steal it by pairing.
   for (const entry of normalized.entries) {
     const directKey = entryKey(snapshot.playlistId, entry);
     const direct = progress[directKey];
     if (direct && direct.videoId === entry.videoId && !direct.orphaned && !used.has(directKey)) {
       out.set(entry.position, direct);
       used.add(directKey);
-      continue;
     }
-    // Legacy position key only when its stored videoId agrees.
+  }
+  // Legacy position key only when its stored videoId agrees.
+  for (const entry of normalized.entries) {
+    if (out.has(entry.position)) continue;
     const legacyKey = legacyPositionKey(snapshot.playlistId, entry.position);
     const legacy = progress[legacyKey];
     if (legacy && legacy.videoId === entry.videoId && !legacy.orphaned && !used.has(legacyKey)) {
       out.set(entry.position, legacy);
       used.add(legacyKey);
-      continue;
     }
+  }
+  for (const entry of normalized.entries) {
+    if (out.has(entry.position)) continue;
     // Occurrence-order pairing: first unused matching occurrence in playlist order.
     const pair = (byVideo.get(entry.videoId) ?? []).find(([key]) => !used.has(key));
     if (pair) {

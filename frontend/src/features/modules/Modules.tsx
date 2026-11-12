@@ -56,7 +56,7 @@ export function Modules() {
   const [name, setName] = useState('');
   const [positions, setPositions] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  if (!snap) return <Empty title="No active playlist" hint="Add one to organize modules." />;
+  if (!snap) return <Empty title="No active playlist" hint="Add a playlist to organize modules." action={<a className="lq-button lq-button--primary" href="#/learn"><Plus size={14} aria-hidden="true" /> Add a playlist</a>} />;
   const mods = s.modules.filter((m) => m.playlistId === snap.playlistId);
 
   const create = () => {

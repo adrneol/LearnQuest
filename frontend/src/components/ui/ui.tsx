@@ -57,11 +57,12 @@ export function ProgressBar({ pct, label, tone = 'neutral', className = '' }: { 
   );
 }
 
-export function Empty({ title, hint }: { title: string; hint: string }) {
+export function Empty({ title, hint, action }: { title: string; hint: string; action?: React.ReactNode }) {
   return (
     <div className="lq-empty">
       <p className="font-semibold text-[var(--text)]">{title}</p>
       <p className="mt-1 text-sm text-[var(--text-muted)]">{hint}</p>
+      {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
 }

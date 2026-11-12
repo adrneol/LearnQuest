@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Plus, Pause, Play, Trash2, Trophy } from 'lucide-react';
-import { goalProgress, validateGoal, formatGoalTarget } from '../../domain/index.js';
+import { goalProgress, validateGoal, formatGoalTarget, attributeFocusByDay, formatHuman } from '../../domain/index.js';
 import type { GoalMetric } from '../../domain/index.js';
 import { useStore, goalCurrentValue } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
@@ -26,6 +26,15 @@ export function Goals() {
   const [dated, setDated] = useState(true);
   const [errs, setErrs] = useState<string[]>([]);
   const ids = Object.keys(s.playlists);
+  const dailyGoal = s.goals[today];
+  const focusByDay = attributeFocusByDay(s.sessions, s.prefs.timezone);
+  const todaySec = focusByDay.get(today) ?? 0;
+
+  const focusCreate = () => {
+    const form = document.getElementById('flex-goal-create');
+    form?.scrollIntoView?.({ block: 'start', behavior: 'auto' });
+    form?.querySelector<HTMLElement>('button, input, select')?.focus({ preventScroll: true });
+  };
 
   const toSeconds = (m: GoalMetric, v: number) =>
     m === 'video-count' ? v : Math.round(v * 60);
@@ -58,8 +67,30 @@ export function Goals() {
   return (
     <div className="lq-workflow">
       <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="lq-section-title">Today's focus goal</h2>
+          <a href="#/focus" className="text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]">Manage in Focus →</a>
+        </div>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">A calendar-day commitment to focused minutes, separate from the flexible goals below. Both are stored independently; neither rewrites the other.</p>
+        {dailyGoal ? (
+          <>
+            <p className="mt-2 font-mono text-2xl tabular-nums text-[var(--text)]">
+              {formatHuman(todaySec)}<span className="text-sm font-sans text-[var(--text-muted)]"> / {formatHuman(dailyGoal.targetFocusSec)}</span>
+            </p>
+            <ProgressBar label="Today's focus goal" pct={dailyGoal.targetFocusSec ? (todaySec / dailyGoal.targetFocusSec) * 100 : 0} tone="emerald" className="mt-1.5" />
+            <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+              {todaySec >= dailyGoal.targetFocusSec ? 'Goal met.' : `${formatHuman(Math.max(0, dailyGoal.targetFocusSec - todaySec))} to go.`}
+              {' '}Min viable: {formatHuman(dailyGoal.minViableSec)}.
+            </p>
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-[var(--text-muted)]">No focus goal set for today. <a className="underline hover:text-[var(--text)]" href="#/focus">Set one in Focus</a> — it drives your streak.</p>
+        )}
+      </Card>
+
+      <Card id="flex-goal-create" tabIndex={-1} className="outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]">
         <h2 className="lq-section-title">Flexible goals</h2>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">Progress comes from recorded learning activity. Choose a metric, target, and playlist scope.</p>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">Standalone targets with their own metric, scope and deadline. Progress comes from recorded learning activity.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <Dropdown
             label="Metric"
@@ -106,7 +137,7 @@ export function Goals() {
         {errs.map((e) => <p key={e} className="mt-1 text-xs text-red-800 dark:text-red-300">{e}</p>)}
       </Card>
 
-      {s.flexGoals.length === 0 && <Empty title="No flexible goals" hint="Video count, unique content, focus time, playback time, or a checkpoint — scoped per playlist or day." />}
+      {s.flexGoals.length === 0 && <Empty title="No flexible goals" hint="Video count, unique content, focus time, playback time, or a checkpoint — scoped per playlist or day." action={<Btn variant="primary" onClick={focusCreate}><Plus size={14} /> Create your first goal</Btn>} />}
       {[...s.flexGoals].reverse().map((g) => {
         const current = goalCurrentValue(g, {
           progress: s.progress, segments: s.segments, sessions: s.sessions,

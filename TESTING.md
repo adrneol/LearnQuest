@@ -81,22 +81,27 @@ npm --prefix frontend run test:regressions
 npm --prefix frontend run test:browser:regressions
 ```
 
-The Vitest command remains intentionally red for the cases below. The browser
-command is a focused runner for the now-passing CHART-2 case, also exercised by
-the ordinary browser baseline. CHART-1 moved into the ordinary frontend suite.
-Assertion failures show unresolved defects; setup errors and timeouts are test
-infrastructure failures, not evidence of a defect.
-
-| Cases | Expected behavior |
-| --- | --- |
-| EXPORT-1 | Manifest file names agree with the archive contents. |
+The Vitest regression command is green. EXPORT-1 (account-export manifest named
+`learning-data/challenge-enabled.json`, which the archive never contained; fixed to
+`learning-data/challenge-settings.json` in Phase E preparation on 2026-11-13) is
+resolved; the browser regression command is a focused runner for the now-passing
+CHART-2 case, also exercised by the ordinary browser baseline.
 
 Phase B moved NAV-1, NAV-2, and A11Y-2 to the browser baseline and A11Y-1 to
-the frontend Vitest baseline. The deferred cases above remain opt-in.
+the frontend Vitest baseline. No known-defect cases remain deferred.
 
 Phase D moved ARENA-1 and ARENA-2 into `frontend/tests/arena-regressions.test.ts`.
 The fixed-run, replay, lifecycle, storage, and cohort checks are in
 `frontend/tests/arena-runs.test.ts`.
+
+Phase E added focused capture fixtures under `frontend/tests/browser/phase-e.browser.mjs`:
+
+```powershell
+cd frontend
+$env:LQ_BROWSER_EXECUTABLE = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+node --test tests/browser/phase-e.browser.mjs
+```
+
 
 ```powershell
 cd frontend

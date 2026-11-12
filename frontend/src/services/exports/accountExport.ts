@@ -88,7 +88,7 @@ export function buildAccountExport(state: BackupState, profile: AccountProfileLi
     entries.push({ path: `LearnQuest-Account-Export/learning-data/${file}`, data: pretty(value) });
   }
 
-  included['learning-data/challenge-enabled.json'] = typeof state.challengeEnabled === 'boolean' ? 1 : 0;
+  included['learning-data/challenge-settings.json'] = 1;
   entries.push({
     path: 'LearnQuest-Account-Export/learning-data/challenge-settings.json',
     data: pretty({

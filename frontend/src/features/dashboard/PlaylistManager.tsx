@@ -119,7 +119,7 @@ export function PlaylistManager() {
             </li>
           );
         })}
-        {activeIds.length === 0 && <li className="py-3 text-sm text-[var(--text-faint)]">No active playlists. Add one from Library or Reports.</li>}
+        {activeIds.length === 0 && <li className="py-3 text-sm text-[var(--text-faint)]">No active playlists. Add one in Library.</li>}
       </ul>
       {archiveIds.length > 0 && (
         <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2.5">

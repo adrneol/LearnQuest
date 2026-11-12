@@ -73,6 +73,19 @@ export function computePlaylistProgress(
   };
 }
 
+/**
+ * Count of progress records that became orphaned because their playlist
+ * entry disappeared or was replaced. Single source used by Reports (review
+ * surface), Dashboard and Library (discoverability affordances) so the
+ * numbers never diverge.
+ */
+export function countOrphanedRecords(progress: Record<string, { orphaned?: boolean }> | Map<string, { orphaned?: boolean }>): number {
+  const values = progress instanceof Map ? progress.values() : Object.values(progress);
+  let n = 0;
+  for (const rec of values) if (rec.orphaned) n += 1;
+  return n;
+}
+
 export interface RangeProgress {
   count: number;
   done: number;

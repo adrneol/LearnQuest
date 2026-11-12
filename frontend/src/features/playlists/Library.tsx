@@ -14,6 +14,9 @@ import { NumberField } from '../../components/ui/NumberField.js';
 import { DurationBars } from '../../components/charts/DurationBars.js';
 import { CumulativeLine } from '../../components/charts/CumulativeLine.js';
 import { playlistPoints, rangePoints } from '../../components/charts/playlistSeries.js';
+import { OrphanNotice } from '../../components/learning/OrphanNotice.js';
+import { AddPlaylist } from './AddPlaylist.js';
+import { setPendingIntent } from '../../app/pendingIntent.js';
 
 export function Library() {
   const s = useStore();
@@ -27,6 +30,7 @@ export function Library() {
   const [end, setEnd] = useState(8);
   const [chartView, setChartView] = useState<'bars' | 'cumulative'>('bars');
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [addOpen, setAddOpen] = useState(() => !snap);
   const PER = 25;
 
   useEffect(() => {
@@ -55,7 +59,18 @@ export function Library() {
   const points = useMemo(() => snap ? playlistPoints(snap.playlistId, snap.entries, progressIndex) : [], [snap, progressIndex]);
   const chartData = useMemo(() => rangePoints(points, start, end), [points, start, end]);
 
-  if (!snap) return <Empty title="No active playlist" hint="Add one to explore videos and ranges." />;
+  if (!snap) {
+    return (
+      <div className="lq-workflow">
+        <OrphanNotice />
+        <Card>
+          <h2 className="lq-section-title">Add a playlist</h2>
+          <div className="mt-3"><AddPlaylist inputId="library-add-playlist" autoFocus /></div>
+        </Card>
+        <Empty title="No active playlist" hint="Any public YouTube playlist works. Durations are fetched per video (never averaged), and every total is computed from real data." />
+      </div>
+    );
+  }
 
   const pages = Math.max(1, Math.ceil(rows.length / PER));
   // Clamp (never a blank page after filtering/playlist switch shrinks the list)
@@ -104,8 +119,19 @@ export function Library() {
 
   return (
     <div className="lq-workflow">
+      <OrphanNotice />
       <Card className="lq-card--compact">
-        <h2 className="lq-section-title">Range explorer</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="lq-section-title">Range explorer</h2>
+          <Btn aria-expanded={addOpen} className="!min-h-8 px-2.5 text-xs" onClick={() => setAddOpen((open) => !open)}>
+            <Plus size={13} aria-hidden="true" /> {addOpen ? 'Hide add' : 'Add playlist'}
+          </Btn>
+        </div>
+        {addOpen && (
+          <div className="mt-3 border-t border-[var(--border)] pt-3">
+            <AddPlaylist inputId="library-add-playlist" />
+          </div>
+        )}
         <div className="lq-workflow-tools mt-3">
           <div className="grid w-full grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto]">
           <NumberField
@@ -128,9 +154,15 @@ export function Library() {
               onChange={(v) => s.setPrefs({ sessionLenMin: Number(v) })}
             />
           </div>
-          <div className="flex items-end">
+          <div className="flex flex-wrap items-end gap-2">
             <Btn variant="primary" onClick={() => s.saveRange({ playlistId: snap.playlistId, label: `Videos ${start}–${end}`, start, end })} disabled={!range}>
               <Plus size={14} aria-hidden="true" /> Save range
+            </Btn>
+            <Btn onClick={() => {
+              setPendingIntent({ kind: 'checkpoint-from-range', playlistId: snap.playlistId, start, end, label: `Videos ${start}–${end}` });
+              window.location.hash = '#/checks';
+            }} disabled={!range}>
+              Create checkpoint
             </Btn>
           </div>
         </div>

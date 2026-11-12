@@ -61,14 +61,14 @@ YouTube Data API ──► backend/src (Express) ──► MongoDB (legacy lq_da
 | Focus | `domain/focus/focus.ts` | Active-time integrity, monotonic+wall checks, gap exclusion/cap, XP idempotency |
 | Time | `domain/time/time.ts` | DST-safe calendar keys, window attribution, `attributeFocusByDay`, `attributePlaybackByDay` |
 | Revision | `domain/revision/revision.ts` | Review flags, history, `lastReviewIso`, annotation vs review separation |
-| Goals | `domain/goals.ts`, `domain/preferences.ts` | Goal progress; minViable; calendar-day streak attribution |
+| Goals | `domain/goals/goals.ts`, `domain/settings/preferences.ts` | Goal progress; minViable; calendar-day streak attribution |
 | Arena | `domain/competition/arenaRuns.ts` (v3 ledger), `arenaTime.ts`, `competition.ts` (v2 compat + scoring), `arenaValidation.ts` | Versioned Arena; deterministic rivals (mulberry32); qualifying-day rule; ties share competition rank (1,2,2,4) |
-| Gamification | `domain/gamification.ts` | XP ledger w/ dedup keys; `XP_RULES`; achievements |
+| Gamification | `domain/progress/gamification.ts` | XP ledger w/ dedup keys; `XP_RULES`; achievements |
 
 ## Critical invariants (workspace-wide)
 
 1. **Missing stays missing** — never zero-fill/average/interpolate durations; totals stay labeled incomplete.
-2. **Occurrence identity, not position** — progress/annotations key on `entryId`; duplicates are distinct; refreshes never rewrite records silently (`needsReview` flag preserved).
+2. **Occurrence identity, not position** — progress/annotations key on `entryId`; duplicates are distinct; `buildEntryProgressIndex` matches direct identity keys globally, then legacy position keys, then occurrence-order pairing as a last resort; refreshes never rewrite records silently (`needsReview` flag preserved).
 3. **Verified ≠ manual ≠ self-reported** — never infer verified completion from anything else.
 4. **Interval unions** — unique coverage = union of timeline intervals; rewatches don't add coverage; sought/skipped spans never credited.
 5. **Focus integrity** — active time excludes pauses/sleep; only ≥10 s sessions recorded; finish/recovery/XP idempotent.
@@ -100,10 +100,11 @@ not extend it without considering evaluation order.
 ## Test entry points
 
 - Vitest: `npm --prefix frontend test` / `npm --prefix backend test`; baselines and intentional
-  red cases in `TESTING.md` (EXPORT-1 is the only deferred case, verified reproducing 2026-11-13).
+  red cases in `TESTING.md` (EXPORT-1 fixed in Phase E preparation on 2026-11-13).
 - Browser (real Chromium, synthetic fixtures): `frontend/tests/browser/*.browser.mjs` via
-  `npm run test:browser:baseline`, `test:browser:regressions`, `node --test tests/browser/arena.browser.mjs`.
-- Focused regression: `npm --prefix frontend run test:regressions` (intentionally red while EXPORT-1 open).
+  `npm run test:browser:baseline`, `test:browser:regressions`, `node --test tests/browser/arena.browser.mjs`,
+  `node --test tests/browser/phase-e.browser.mjs` (Phase E flows).
+- Focused regression: `npm --prefix frontend run test:regressions` (green).
 - Backend Mongo integration suites: skipped by default; opt-in only against authorized
   disposable MongoDB (`LQ_TEST_MONGO_URI`); never production.
 

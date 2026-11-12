@@ -1,12 +1,13 @@
 import { useMemo } from 'react';
 import { EvidenceChart } from '../../components/charts/EvidenceChart.js';
-import { Play, Flame, CheckCircle2 } from 'lucide-react';
+import { Play, Flame, CheckCircle2, Plus } from 'lucide-react';
 import {
   formatSecondsHHMMSS, formatHuman, computePlaylistProgress, computeRangeProgress,
   snapshotCompleteness, sumEntries, rangeDuration, computeStreak,
   activeFocusDayKeys, attributeFocusByDay, calendarWindowDates, ACHIEVEMENTS,
   dateKeyInTimezone, findProgressForEntry, isProgressComplete,
 } from '../../domain/index.js';
+import { OrphanNotice } from '../../components/learning/OrphanNotice.js';
 import { useStore } from '../../app/store.js';
 import { useDayTick } from '../../app/dayTick.js';
 import { ProgressBar, Empty } from '../../components/ui/ui.js';
@@ -19,7 +20,7 @@ export function Dashboard() {
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const todayKey = useDayTick(s.prefs.timezone);
   const cum = useMemo(() => snap ? playlistPoints(snap.playlistId, snap.entries) : [], [snap]);
-  if (!snap) return <Empty title="No active playlist" hint="Add a playlist to see your learning journey." />;
+  if (!snap) return <Empty title="No active playlist" hint="Add a public YouTube playlist or import a snapshot to see your learning journey." action={<a className="lq-button lq-button--primary" href="#/learn"><Plus size={15} aria-hidden="true" /> Add your first playlist</a>} />;
   const prog = computePlaylistProgress(snap, s.progress);
   const comp = snapshotCompleteness(snap);
   const goal = s.goals[todayKey];
@@ -49,11 +50,12 @@ export function Dashboard() {
   const days = weekKeys.map((key) => ({ label: key.slice(5), value: (focusByDay.get(key) ?? 0) / 60 }));
   const weekMin = days.reduce((sum, item) => sum + Math.round(item.value), 0);
 
-  const resumeUrl = prog.nextPosition
-    ? (() => {
-      const e = snap.entries.find((x) => x.position === prog.nextPosition);
-      return e?.videoId ? `https://www.youtube.com/watch?v=${e.videoId}&list=${snap.playlistId}` : undefined;
-    })()
+  const nextEntry = prog.nextPosition
+    ? snap.entries.find((x) => x.position === prog.nextPosition)
+    : undefined;
+  // External YouTube link kept as an explicitly untracked secondary action.
+  const youtubeUrl = nextEntry?.videoId
+    ? `https://www.youtube.com/watch?v=${nextEntry.videoId}&list=${snap.playlistId}`
     : undefined;
 
   return (
@@ -69,12 +71,26 @@ export function Dashboard() {
                 {snap.entries.length} videos · {comp.resolved} resolved · {snap.source} · {comp.isComplete ? 'complete total' : 'incomplete total'}
               </p>
             </div>
-            {resumeUrl ? (
-              <a href={resumeUrl} target="_blank" rel="noreferrer" className="lq-button lq-button--primary">
-                <Play size={15} aria-hidden="true" /> Resume #{prog.nextPosition}
-              </a>
+            {!wholePlaylistDone && prog.nextPosition ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <a href="#/player" className="lq-button lq-button--primary">
+                  <Play size={15} aria-hidden="true" /> Resume lesson #{prog.nextPosition}
+                </a>
+                {youtubeUrl && (
+                  <a href={youtubeUrl} target="_blank" rel="noreferrer"
+                    className="text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]"
+                    title="External playback is not tracked — no verified evidence is recorded">
+                    Open on YouTube (untracked)
+                  </a>
+                )}
+              </div>
             ) : wholePlaylistDone ? (
-              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">Course complete</span>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">Course complete</span>
+                <a href="#/player" className="lq-button lq-button--ghost">
+                  <Play size={15} aria-hidden="true" /> Review from lesson #1
+                </a>
+              </div>
             ) : (
               <span className="rounded-md border border-[var(--border)] bg-[var(--surface-soft)] px-3.5 py-2 text-sm font-semibold text-[var(--text-muted)]">In progress</span>
             )}
@@ -124,8 +140,9 @@ export function Dashboard() {
                 </p>
               </>
             ) : (
-              <p className="mt-2 text-sm text-[var(--text-muted)]">No goal yet. Set one in Focus (10 minutes minimum counts).</p>
+              <p className="mt-2 text-sm text-[var(--text-muted)]">No goal yet. <a className="underline hover:text-[var(--text)]" href="#/focus">Set one in Focus</a> — it counts toward your streak.</p>
             )}
+            <p className="mt-2"><a href="#/goals" className="text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]">All goals →</a></p>
             <p className="mt-3 flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
               <Flame size={13} className="shrink-0 text-amber-700 dark:text-amber-400" aria-hidden />
               <span><b className="text-[var(--text)]">{streak}</b>-day streak · <b className="text-[var(--text)]">{weekMin}</b> min this week</span>
@@ -162,6 +179,8 @@ export function Dashboard() {
           </section>
         </aside>
       </div>
+
+      <OrphanNotice />
 
       <div className="lq-dashboard-secondary">
       <section className="lq-workflow-section">

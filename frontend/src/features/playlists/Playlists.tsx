@@ -1,10 +1,8 @@
-import { useState } from 'react';
-import { Plus } from 'lucide-react';
 import { useStore } from '../../app/store.js';
-import { fetchPlaylistFromServer } from '../../services/api/playlistApi.js';
-import { Card, Btn, inputCls } from '../../components/ui/ui.js';
+import { Card } from '../../components/ui/ui.js';
 import { Dropdown } from '../../components/ui/Dropdown.js';
 import type { Tab } from '../../app/tabs.js';
+import { AddPlaylist } from './AddPlaylist.js';
 
 export function PlaylistSwitcher() {
   const s = useStore();
@@ -31,28 +29,6 @@ export function PlaylistSwitcher() {
 
 export function Onboarding({ onGo }: { onGo: (t: Tab) => void }) {
   const s = useStore();
-  const [url, setUrl] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const add = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const { snapshot } = await fetchPlaylistFromServer(url);
-      if (snapshot.entries.length === 0) {
-        setErr('Playlist is empty or entirely inaccessible. Nothing to track yet.');
-      } else {
-        s.addSnapshot(snapshot);
-        onGo('dash');
-      }
-    } catch (e: any) {
-      setErr(e?.message ?? 'Failed to add playlist.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const greeting = s.authUser?.displayName || s.authUser?.username;
   return (
     <Card className="border-[var(--border-strong)]">
@@ -64,19 +40,9 @@ export function Onboarding({ onGo }: { onGo: (t: Tab) => void }) {
         Add your first public YouTube playlist to begin. Durations are fetched per video (never averaged), and every
         total is computed from real data. Nothing is saved until the server confirms the write.
       </p>
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-        <input
-          className={inputCls}
-          placeholder="https://www.youtube.com/playlist?list=PL…  or playlist ID"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          aria-label="Playlist URL or ID"
-        />
-        <Btn variant="primary" className="shrink-0 whitespace-nowrap" onClick={add} disabled={busy || !url.trim()}>
-          <Plus size={15} /> {busy ? 'Fetching…' : 'Add your first playlist'}
-        </Btn>
+      <div className="mt-3">
+        <AddPlaylist inputId="onboarding-add-playlist" autoFocus onAdded={() => onGo('dash')} />
       </div>
-      {err && <p className="mt-2 text-sm text-red-800 dark:text-red-300">{err} You can also import a JSON snapshot in Reports.</p>}
       <p className="mt-2 text-xs text-[var(--text-faint)]">
         Example test target: <code className="text-[var(--text-muted)]">https://www.youtube.com/playlist?list=PLu0W_9lII9agq5TrH9XLIKQvv0iaF2X3w</code> (used only as a test case — never hardcoded).
       </p>

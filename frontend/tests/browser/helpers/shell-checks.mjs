@@ -144,12 +144,25 @@ export async function checkShell(t, fixture, review) {
         if (name === 'Player') {
           const stage = page.getByRole('region', { name: /Lesson 1: Synthetic/ });
           const actions = page.getByRole('complementary', { name: 'This lesson' });
-          const record = page.getByRole('heading', { name: /Learning record/ });
-          const [stageBox, actionsBox, recordBox] = await Promise.all([stage.boundingBox(), actions.boundingBox(), record.boundingBox()]);
-          assert.ok(stageBox && actionsBox && recordBox);
+          const stageBox = await stage.boundingBox();
+          const actionsBox = await actions.boundingBox();
+          assert.ok(stageBox && actionsBox);
           assert.ok(await stage.getByRole('group', { name: 'Playback controls' }).isVisible());
           assert.ok(await actions.getByRole('heading', { name: /Queue/ }).isVisible());
-          assert.ok(recordBox.y > Math.max(stageBox.y + stageBox.height, actionsBox.y + actionsBox.height));
+          // The learning-record editor is collapsed by default since Phase E;
+          // expand it before measuring its geometry. All boxes are read in the
+          // same evaluation, at the same scroll offset, so the comparison is
+          // never taken across a layout or scroll transition.
+          await page.getByRole('button', { name: 'Open record' }).press('Enter');
+          const record = page.locator('#player-learning-record-title');
+          await record.waitFor();
+          const boxes = await page.evaluate(() => {
+            const cols = document.querySelector('.lq-workflow-columns')?.getBoundingClientRect();
+            const rec = document.getElementById('player-learning-record-title')?.getBoundingClientRect();
+            if (!cols || !rec) return null;
+            return { columnsBottom: cols.bottom, recordTop: rec.y };
+          });
+          assert.ok(boxes && boxes.recordTop >= boxes.columnsBottom, JSON.stringify(boxes));
           if (width >= 1024) assert.ok(stageBox.x + stageBox.width < actionsBox.x && actionsBox.width >= 300);
           else assert.ok(actionsBox.y > stageBox.y + stageBox.height);
           if (width < 640) {
@@ -168,8 +181,10 @@ export async function checkShell(t, fixture, review) {
         if (review) {
           await capture(page, name.toLowerCase(), width);
           if (width === 320 && name === 'Player') {
-            await page.getByRole('button', { name: 'Open learning record' }).press('Enter');
-            assert.ok(await page.getByRole('heading', { name: /Learning record/ }).evaluate((element) => document.activeElement === element));
+            // The record editor is already open from the geometry step above;
+            // assert focus landed on its heading.
+            const recordHeading = page.locator('#player-learning-record-title');
+            assert.ok(await recordHeading.evaluate((element) => document.activeElement === element));
             await capture(page, 'player-record', width);
           }
         }

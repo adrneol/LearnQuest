@@ -50,8 +50,14 @@ synthetic environments.
 
 ## Repository status notes (2026-11-13)
 
+- Phase E (Learning Workflow & Product Experience Modernization) is implemented
+  but uncommitted: Dashboard Resume is in-app, playlist add is canonicalized in
+  Library, Settings/Reports boundaries consolidated, orphans/empty states are
+  actionable, Goals integrate the daily focus goal, the learning-record editor
+  is accessible from the Player aside, and saved ranges promote to checkpoints.
+  EXPORT-1 is fixed. See `PHASE_E_WORKFLOW.md` for scope and evidence.
 - `docs/user-doc/` was deleted in `7391d9c`; README/manual links are broken until restored from Git history (owner decision).
-- Generated graph: `graphify-out/` (git-ignored). Query it; verify against source.
+- Generated graph: `graphify-out/` (git-ignored). Query it; verify against source. Run `graphify update .` after approved source changes.
 
 ## graphify
 

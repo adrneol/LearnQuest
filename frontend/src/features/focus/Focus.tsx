@@ -90,8 +90,14 @@ export function Focus() {
   storageKeyRef.current = storageKey;
   const snap = s.activeId ? s.playlists[s.activeId] : undefined;
   const todayKey = useDayTick(s.prefs.timezone);
-  const [targetMin, setTargetMin] = useState<number | null>(s.prefs.sessionLenMin);
-  const [minViable, setMinViable] = useState<number | null>(s.prefs.minViableMin);
+  // The editor follows today's stored goal until the user edits a field, so
+  // the Focus page and the Goals page always agree on the same commitment;
+  // the preferences default is only the starting point before any goal is set.
+  const storedGoal = s.goals[todayKey];
+  const [targetMinDraft, setTargetMin] = useState<number | null>(null);
+  const [minViableDraft, setMinViable] = useState<number | null>(null);
+  const targetMin = targetMinDraft ?? (storedGoal ? Math.round(storedGoal.targetFocusSec / 60) : s.prefs.sessionLenMin);
+  const minViable = minViableDraft ?? (storedGoal ? Math.round(storedGoal.minViableSec / 60) : s.prefs.minViableMin);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [manualMin, setManualMin] = useState<number | null>(null);
@@ -629,6 +635,7 @@ export function Focus() {
           }
           return null;
         })()}
+        <p className="mt-2 text-right text-xs"><a href="#/goals" className="text-[var(--text-muted)] underline hover:text-[var(--text)]">Flexible goals →</a></p>
       </section>
       </div>
 

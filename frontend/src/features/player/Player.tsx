@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Play, Pause, SkipForward, SkipBack, CheckCircle2, ExternalLink, ListPlus, TriangleAlert, BookmarkPlus, RotateCcw } from 'lucide-react';
 import {
   summarizeVerifiedSegments, completionFromCoverage, formatSecondsHHMMSS,
-  findProgressForEntry, entryKey, syntheticEntryId,
+  findProgressForEntry, entryKey, syntheticEntryId, computePlaylistProgress, lastReviewIso,
 } from '../../domain/index.js';
+import { annotationValuesFrom } from '../../components/ui/AnnotationFields.js';
 import type { PlaybackSegment, PlaylistEntry } from '../../domain/index.js';
 import { useStore } from '../../app/store.js';
 import { notify } from '../../services/notifications/notify.js';
@@ -83,8 +84,14 @@ function PlayerInner() {
   const snap = s.activeId ? s.playlists[s.activeId]! : undefined!;
   const N = snap.entries.length;
   const queue = s.queue[snap.playlistId] ?? [];
-  const nextTodo = snap.entries.find((e) => !findProgressForEntry(s.progress, snap.playlistId, e)?.completedAt)?.position;
-  const [pos, setPos] = useState(queue[0] ?? nextTodo ?? 1);
+  // In-app entry selection shares the dashboard's selector: first unfinished
+  // entry by occurrence identity (not array order), so the Resume link and the
+  // player always land on the same lesson.
+  const nextTodo = useMemo(
+    () => computePlaylistProgress(snap, s.progress).nextPosition ?? 1,
+    [snap, s.progress],
+  );
+  const [pos, setPos] = useState(queue[0] ?? nextTodo);
   const entry = snap.entries.find((e) => e.position === pos);
   const [state, setState] = useState<'idle' | 'ready' | 'playing' | 'paused' | 'buffering' | 'ended' | 'error'>('idle');
   const [cur, setCur] = useState(0);
@@ -92,6 +99,9 @@ function PlayerInner() {
   const [note, setNote] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [recordOpen, setRecordOpen] = useState(false);
+  const recordToggle = useRef<HTMLButtonElement>(null);
+  const recordFocused = useRef(false);
 
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -465,6 +475,22 @@ function PlayerInner() {
 
   const dur = entry?.durationSec ?? null;
   const currentKey = entry ? entryKey(snap.playlistId, entry) : `${snap.playlistId}::${pos}`;
+  const recordValues = useMemo(() => annotationValuesFrom(rec), [rec]);
+  const recordLastReview = lastReviewIso(rec);
+  const exerciseEvidence = [recordValues.codeReproduced, recordValues.exerciseDone, recordValues.builtExample].filter(Boolean).length;
+
+  useEffect(() => {
+    if (recordOpen) {
+      const heading = document.getElementById('player-learning-record-title');
+      // block:'nearest' avoids yanking the page; focus is explicit and predictable.
+      heading?.scrollIntoView?.({ block: 'nearest' });
+      heading?.focus({ preventScroll: true });
+      recordFocused.current = true;
+    } else if (recordFocused.current) {
+      recordFocused.current = false;
+      recordToggle.current?.focus({ preventScroll: true });
+    }
+  }, [recordOpen]);
 
   return (
     <div className="lq-workflow">
@@ -564,11 +590,26 @@ function PlayerInner() {
           <p className="mt-2 text-[11px] text-[var(--text-faint)]">
             Completion verified at {Math.round(s.settings.verifiedThreshold * 100)}% unique coverage (Settings). Seeks never credit skipped spans; buffering never counts.
           </p>
-          {entry && (
-            <Btn variant="quiet" className="mt-2" onClick={() => document.getElementById('player-learning-record-title')?.focus()}>
-              Open learning record
+        </section>
+
+        <section className="lq-workflow-section" aria-label="Learning record summary">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="lq-section-title">Learning record</h3>
+            <Btn ref={recordToggle} variant="quiet" className="!min-h-8 px-2.5 text-xs" aria-expanded={recordOpen} aria-controls="player-learning-record"
+              onClick={() => setRecordOpen((v) => !v)}>
+              {recordOpen ? 'Hide record' : 'Open record'}
             </Btn>
-          )}
+          </div>
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-[var(--text-muted)]">
+            <div><dt className="text-[11px] text-[var(--text-faint)]">Confidence</dt><dd>{recordValues.confidence ? `${recordValues.confidence} of 5` : '—'}</dd></div>
+            <div><dt className="text-[11px] text-[var(--text-faint)]">Notes &amp; concepts</dt><dd>{recordValues.notes.trim() || recordValues.keyConcepts.trim() ? 'Saved' : '—'}</dd></div>
+            <div><dt className="text-[11px] text-[var(--text-faint)]">Questions / evidence</dt><dd>{recordValues.questions.trim() ? 'Questions saved' : '—'}{exerciseEvidence > 0 ? ` · ${exerciseEvidence} exercise` : ''}</dd></div>
+            <div><dt className="text-[11px] text-[var(--text-faint)]">Review</dt><dd>{rec?.needsRevision
+              ? (rec.revisionDate ? `Flagged · ${rec.revisionDate}` : 'Flagged for revision')
+              : recordLastReview
+                ? `Reviewed ${recordLastReview.slice(0, 10)}`
+                : 'Not flagged'}</dd></div>
+          </dl>
         </section>
 
         <section className="lq-workflow-section">
@@ -593,7 +634,11 @@ function PlayerInner() {
       </aside>
     </div>
 
-    {entry && <PlayerLearningRecord entry={entry} />}
+    {entry && (
+      <div id="player-learning-record" hidden={!recordOpen}>
+        <PlayerLearningRecord entry={entry} onClose={() => setRecordOpen(false)} />
+      </div>
+    )}
     </div>
   );
 }

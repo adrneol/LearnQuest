@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeSnapshotIdentity, identityKey, legacyPositionKey, findProgressForEntry,
   reconcileProgress, reconcileQueuePositions, countCompletedEntries, isProgressComplete,
-  reconcileSegments, reconcilePlaySessions,
+  reconcileSegments, reconcilePlaySessions, buildEntryProgressIndex,
 } from '../src/domain/index.js';
 import type { PlaylistSnapshot, PlaylistEntry, ProgressRecord, PlaybackSegment, PlaySession } from '../src/domain/index.js';
 
@@ -76,6 +76,20 @@ describe('stable occurrence identity and progress migration', () => {
     expect(second?.position).toBe(3);
     expect(r.orphaned).toBe(0);
     expect(countCompletedEntries(inserted, r.progress)).toBe(2);
+  });
+
+  it('a direct entryId record wins its own occurrence over occurrence-order pairing', () => {
+    const snapshot = snap('PLidentity000000000003', [
+      entry(1, 'A', 'A one', 'dup-one'),
+      entry(2, 'A', 'A two', 'dup-two'),
+    ]);
+    // Only the SECOND occurrence is complete; the stored record is keyed by its
+    // own entryId, which occurrence-order pairing must not reassign.
+    const progress = { [identityKey(snapshot.playlistId, 'dup-two')]: rec(snapshot.playlistId, snapshot.entries[1]) };
+    const index = buildEntryProgressIndex(snapshot, progress);
+    expect(index.get(1)).toBeUndefined();
+    expect(isProgressComplete(index.get(2))).toBe(true);
+    expect(countCompletedEntries(snapshot, progress)).toBe(1);
   });
 
   it('orphans a removed video instead of transferring its completion to a neighbour', () => {
