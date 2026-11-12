@@ -1,0 +1,37 @@
+# LearnQuest index exclusions. .gitignore is honored first and can never be
+# re-included here; this file can only exclude MORE (gitignore semantics,
+# last-match-wins). Goal: index source and docs, never secrets or captures.
+
+# Secrets: real environment files are never indexed. .env.example templates
+# contain placeholders only and stay indexed.
+.env
+.env.*
+!.env.example
+
+# Dependency and build output
+node_modules/
+dist/
+dist-ssr/
+coverage/
+.vite/
+
+# Test captures and visual references (synthetic fixtures; no source value)
+frontend/test-results/
+frontend/tests/browser/visual-baselines/
+test-results/
+
+# Vendored third-party scripts inside agent skills (scanner noise, not app code)
+.opencode/skills/impeccable/scripts/
+.agents/skills/*/scripts/
+
+# Generated knowledge-graph output (self-reference)
+graphify-out/
+raw/
+
+# VCS and machine-local artifacts
+.git/
+.git/**
+.DS_Store
+Thumbs.db
+*.log
+*.tmp

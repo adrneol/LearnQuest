@@ -37,3 +37,7 @@ Thumbs.db
 # IDE-local state (shared editor config, if any, lives outside these dirs)
 .vscode/
 .idea/
+
+# LearnQuest: generated Graphify knowledge graph (local tooling output)
+graphify-out/
+
