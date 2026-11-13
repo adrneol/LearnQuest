@@ -146,3 +146,18 @@ inside the chart SVG.
 The existing authentication browser scripts remain separate. These fixtures
 exercise the local learning workspace; they do not establish production
 cookie, OAuth, playback, or database behavior.
+
+## Phase F reliability coverage
+
+```powershell
+npm --prefix frontend test -- --maxWorkers=2 --reporter=default --silent=true tests/cloud-recovery.test.ts tests/cloud-persistence.test.tsx tests/readiness.test.ts tests/auth-events.test.tsx tests/cross-tab-auth.test.tsx tests/goals-integration.test.tsx
+npm --prefix backend test -- --maxWorkers=2 --reporter=default --silent=true tests/session-reliability.test.ts tests/origin-config.test.ts tests/auth-events.test.ts
+```
+
+These use synthetic accounts and memory/IndexedDB fixtures only. Backend
+HTTP tests need permission to open loopback ports; no production credentials,
+database, or deployed service is contacted.
+
+The Goals/Focus integration file is pinned to a fixed UTC-noon reference; do
+not rely on host wall-clock date logic anywhere in this file. The recovery
+freeze-unfreeze lifecycle is exercised end-to-end in cloud-persistence.

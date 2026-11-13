@@ -6,7 +6,7 @@ import { createMemoryDb } from '../src/db/memoryAdapter.js';
 import { createDataStore, type DataStore } from '../src/store.js';
 import { createAccountFromGoogle, completeOnboarding } from '../src/auth/accounts.js';
 import { hashCode } from '../src/auth/crypto.js';
-import { createSession } from '../src/auth/sessions.js';
+import { createSession, revokeSession, touchSession } from '../src/auth/sessions.js';
 import type { GoogleIdentity, GoogleOAuthService } from '../src/auth/google.js';
 import type { EmailService } from '../src/email/brevo.js';
 
@@ -70,6 +70,17 @@ async function seedUser(username: string, emailAddress: string, password: string
 }
 
 describe('session reliability', () => {
+  it('does not renew a session that was revoked after it was read', async () => {
+    const account = await seedUser('touchrace', 'touchrace@example.test', 'correct horse battery staple', 'google-sub-touchrace');
+    const created = await createSession(store, account.userId);
+    // This models the precise boundary between requireAuth's token lookup and
+    // session touch: a revocation must make the conditional touch fail.
+    expect(await revokeSession(store, created.token)).toBe(true);
+    await expect(touchSession(store, created.session)).resolves.toBeNull();
+    const stored = await store.sessions.findOne({ sessionId: created.session.sessionId });
+    expect(stored?.revokedAt).toBeTruthy();
+  });
+
   it('renews the session cookie on authenticated GET requests (sliding idle window, capped by absolute expiry)', async () => {
     await seedUser('sliding', 'sliding@example.test', 'correct horse battery staple', 'google-sub-sliding');
     const login = await request(app).post('/api/auth/login').send({ identifier: 'sliding', password: 'correct horse battery staple' });

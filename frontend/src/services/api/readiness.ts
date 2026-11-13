@@ -50,6 +50,17 @@ const listeners = new Set<(s: ReadinessSnapshot) => void>();
 let snapshot: ReadinessSnapshot = { state: 'unknown', attempt: 0, maxAttempts: 8, detail: null };
 let inflight: Promise<boolean> | null = null;
 
+interface WakeCycle {
+  startedAt: number;
+  /** The largest caller budget currently attached to this shared cycle. */
+  maxAttempts: number;
+  /** The furthest caller deadline currently attached to this shared cycle. */
+  deadline: number;
+  waiters: number;
+}
+
+let cycle: WakeCycle | null = null;
+
 function emit(next: ReadinessSnapshot) {
   snapshot = next;
   for (const listener of listeners) {
@@ -146,22 +157,42 @@ async function probeReady(): Promise<ProbeResult> {
  */
 export async function waitForBackendReady(opts: WaitOptions = {}): Promise<boolean> {
   if (snapshot.state === 'ready') return true; // backend already warm
-  if (inflight) return inflight;
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? 8);
+  const maxWaitMs = Math.max(0, opts.maxWaitMs ?? 90_000);
+  const callerDeadline = Date.now() + maxWaitMs;
 
-  const maxAttempts = opts.maxAttempts ?? 8;
-  const maxWaitMs = opts.maxWaitMs ?? 90_000;
-  const startedAt = Date.now();
+  if (opts.signal?.aborted) return false;
+  if (cycle) {
+    // A concurrent caller may need a longer budget than the first caller.
+    // Its own deadline is still enforced below; extending the shared work only
+    // prevents the first caller from prematurely failing everybody else.
+    cycle.maxAttempts = Math.max(cycle.maxAttempts, maxAttempts);
+    cycle.deadline = Math.max(cycle.deadline, callerDeadline);
+    if (snapshot.state === 'waking') emit({ ...snapshot, maxAttempts: cycle.maxAttempts });
+  } else {
+    cycle = { startedAt: Date.now(), maxAttempts, deadline: callerDeadline, waiters: 0 };
+  }
 
-  inflight = (async () => {
-    try {
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        if (opts.signal?.aborted) {
+  if (!inflight) {
+    inflight = (async () => {
+      // Let the initiating caller subscribe before checking for subscribers.
+      // An async function otherwise executes through that check synchronously.
+      await Promise.resolve();
+      try {
+        for (let attempt = 1; ; attempt += 1) {
+        const active = cycle;
+        if (!active || active.waiters === 0) {
           emit({ state: 'unknown', attempt: 0, maxAttempts, detail: null });
           return false;
         }
         const probe = await probeReady();
+        const current = cycle;
+        if (!current || current.waiters === 0) {
+          emit({ state: 'unknown', attempt: 0, maxAttempts: active.maxAttempts, detail: null });
+          return false;
+        }
         if (probe.ok) {
-          emit({ state: 'ready', attempt: 0, maxAttempts, detail: null });
+          emit({ state: 'ready', attempt: 0, maxAttempts: current.maxAttempts, detail: null });
           return true;
         }
         // Only surface the "server starting" state once a probe has actually
@@ -169,49 +200,78 @@ export async function waitForBackendReady(opts: WaitOptions = {}): Promise<boole
         emit({
           state: 'waking',
           attempt,
-          maxAttempts,
+          maxAttempts: current.maxAttempts,
           detail: 'The LearnQuest server is starting. Your data will load automatically when it is ready.',
         });
         if (!probe.retryable) {
           emit({
             state: 'failed',
             attempt,
-            maxAttempts,
+            maxAttempts: current.maxAttempts,
             detail: 'The LearnQuest server responded with an error it cannot retry. Check the deployment, then retry.',
           });
           return false;
         }
-        const elapsed = Date.now() - startedAt;
-        const remaining = maxWaitMs - elapsed;
-        if (attempt >= maxAttempts || remaining <= 1_000) {
+        const remaining = current.deadline - Date.now();
+        if (attempt >= current.maxAttempts || remaining <= 1_000) {
           emit({
             state: 'failed',
             attempt,
-            maxAttempts,
+            maxAttempts: current.maxAttempts,
             detail: 'The LearnQuest server is still starting. Retry now, or wait a minute and try again.',
           });
           return false;
         }
         const delay = jitter(Math.min(backoffDelay(attempt - 1, probe.retryAfterSec), remaining));
-        try {
-          await sleep(delay, opts.signal);
-        } catch {
-          emit({ state: 'unknown', attempt: 0, maxAttempts, detail: null });
-          return false;
+        await sleep(delay);
         }
+      } finally {
+        inflight = null;
+        cycle = null;
       }
-      return false;
-    } finally {
-      inflight = null;
-    }
-  })();
+    })();
+  }
 
-  return inflight;
+  return waitForSharedCycle(inflight, opts, maxWaitMs, maxAttempts);
+}
+
+/** A caller can leave a shared wake cycle without cancelling other callers. */
+function waitForSharedCycle(
+  shared: Promise<boolean>,
+  opts: WaitOptions,
+  maxWaitMs: number,
+  maxAttempts: number,
+): Promise<boolean> {
+  const active = cycle;
+  if (!active || opts.signal?.aborted) return Promise.resolve(false);
+  active.waiters += 1;
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: () => void = () => undefined;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      opts.signal?.removeEventListener('abort', onAbort);
+      unsubscribe();
+      active.waiters = Math.max(0, active.waiters - 1);
+      resolve(value);
+    };
+    const onAbort = () => finish(false);
+    const timeout = setTimeout(() => finish(false), maxWaitMs);
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    unsubscribe = subscribeReadiness((next) => {
+      if (next.state === 'waking' && next.attempt >= maxAttempts) finish(false);
+    });
+    if (settled) unsubscribe();
+    shared.then(finish, () => finish(false));
+  });
 }
 
 /** Test hook: reset module state so each test starts from scratch. */
 export function __resetReadinessForTests(): void {
   inflight = null;
+  cycle = null;
   listeners.clear();
   snapshot = { state: 'unknown', attempt: 0, maxAttempts: 8, detail: null };
 }

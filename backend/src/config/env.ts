@@ -229,10 +229,22 @@ export const env = {
     } catch {
       throw new Error('GOOGLE_REDIRECT_URI must be an absolute callback URL.');
     }
-    if (!/\/api\/auth\/google\/callback$/.test(url.pathname)) {
-      throw new Error('GOOGLE_REDIRECT_URI must end with /api/auth/google/callback.');
+    if (url.username || url.password) {
+      throw new Error('GOOGLE_REDIRECT_URI must not contain credentials.');
+    }
+    if (url.pathname !== '/api/auth/google/callback') {
+      throw new Error('GOOGLE_REDIRECT_URI must be exactly /api/auth/google/callback.');
     }
     if (url.search || url.hash) throw new Error('GOOGLE_REDIRECT_URI must not contain a query or fragment.');
+    if (productionRuntime()) {
+      if (url.protocol !== 'https:' || isLocalOrPrivateHost(url.hostname)) {
+        throw new Error('GOOGLE_REDIRECT_URI must use a public HTTPS origin in production.');
+      }
+      const permitted = new Set([this.appOrigin, this.apiOrigin]);
+      if (!permitted.has(url.origin)) {
+        throw new Error('GOOGLE_REDIRECT_URI must use the configured public frontend or API origin.');
+      }
+    }
     return url.toString();
   },
   get googleConfigured(): boolean {

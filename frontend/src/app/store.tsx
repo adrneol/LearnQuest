@@ -52,6 +52,14 @@ import type {
 } from '../domain/index.js';
 import { kvGet, kvSet, kvUpdate, kvClearAll, kvReplaceAll, kvDump } from '../services/persistence/db.js';
 import { mergeAccountState, deepEqual, type MergeConflict } from '../services/persistence/cloudMerge.js';
+import {
+  discardCloudRecoveryDraft,
+  CLOUD_RECOVERY_COLLECTIONS,
+  mergeCloudRecoveryDraft,
+  readCloudRecoveryDraft,
+  writeCloudRecoveryDraft,
+  type CloudRecoveryDraft,
+} from '../services/persistence/cloudRecovery.js';
 import { buildBackup, validateBackup, type BackupState, type BackupMeta } from '../services/persistence/backup.js';
 import { buildAccountExport } from '../services/exports/accountExport.js';
 import { notify } from '../services/notifications/notify.js';
@@ -174,6 +182,9 @@ interface Store {
   migrationReadOnly: boolean;
   /** Records changed differently on this device and another device. */
   cloudConflicts: MergeConflict[];
+  cloudRecoveryDraft: CloudRecoveryDraft | null;
+  restoreCloudRecoveryDraft: () => void;
+  discardCloudRecoveryDraft: () => void;
   /** Resolve every remaining conflict in one collection. */
   resolveCloudConflict: (collection: string, strategy: 'keep-local' | 'use-server') => void;
   serverVersion: number;
@@ -705,6 +716,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   const [syncError, setSyncError] = useState<string | null>(null);
   const [migrationReadOnly, setMigrationReadOnly] = useState(false);
   const [cloudConflicts, setCloudConflicts] = useState<MergeConflict[]>([]);
+  const [cloudRecoveryDraft, setCloudRecoveryDraft] = useState<CloudRecoveryDraft | null>(null);
   const [serverVersion, setServerVersion] = useState(0);
   const [migrationAvailable, setMigrationAvailable] = useState(false);
   const [migrationSummary, setMigrationSummary] = useState<string | null>(null);
@@ -728,6 +740,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
   // All cloud writes run one after another through this chain. Overlapping
   // effects previously reused the same stale version and produced conflicts.
   const cloudSyncChain = useRef<Promise<void>>(Promise.resolve());
+  const cloudDraftChain = useRef<Promise<void>>(Promise.resolve());
   const migrationIdRef = useRef<string | null>(null);
   const cloudUserRef = useRef<string | null>(null);
   // The latest authenticated account, available synchronously to the
@@ -900,6 +913,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     heldCollectionsRef.current.clear();
     cloudConflictsRef.current = [];
     setCloudConflicts([]);
+    setCloudRecoveryDraft(null);
     serverVersionRef.current = 0;
     setServerVersion(0);
     setSyncStatus('idle');
@@ -1102,6 +1116,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       setSyncStatus('idle');
       setSyncError(null);
       setMigrationReadOnly(false);
+      const draft = await readCloudRecoveryDraft(user.userId).catch(() => null);
+      if (generation !== cloudLoadGeneration.current) return;
+      setCloudRecoveryDraft(draft);
       setReady(true);
     } catch (e: any) {
       if (generation !== cloudLoadGeneration.current) return;
@@ -1132,6 +1149,9 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
             setSyncStatus('idle');
             setSyncError(null);
             setMigrationReadOnly(false);
+            const draft = await readCloudRecoveryDraft(user.userId).catch(() => null);
+            if (generation !== cloudLoadGeneration.current) return;
+            setCloudRecoveryDraft(draft);
             setReady(true);
             return;
           } catch {
@@ -1471,6 +1491,10 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
    */
   const runCloudSync = useCallback(async (userId: string) => {
     if (cloudUserRef.current !== userId) return;
+    // The recovery write is ordered before its matching cloud attempt. A
+    // reload after local state changed cannot race ahead of this durable copy.
+    await cloudDraftChain.current;
+    if (cloudUserRef.current !== userId) return;
     const state = latestStateRef.current;
     if (!state) return;
     // Pre-write identity barrier: do not mutate data under a cookie that may
@@ -1495,6 +1519,8 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       confirmPendingSessionAwards(state.sessions);
       setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'saved');
       setMigrationReadOnly(false);
+      await discardCloudRecoveryDraft(userId).catch(() => undefined);
+      if (cloudUserRef.current === userId) setCloudRecoveryDraft(null);
       return;
     }
     setSyncStatus('saving');
@@ -1523,6 +1549,8 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       }
       setSyncStatus(cloudConflictsRef.current.length > 0 ? 'review' : 'saved');
       setMigrationReadOnly(false);
+      await discardCloudRecoveryDraft(userId).catch(() => undefined);
+      if (cloudUserRef.current === userId) setCloudRecoveryDraft(null);
     } catch (e: any) {
       if (cloudUserRef.current !== userId) return;
       if (e?.code !== 'VERSION_CONFLICT') {
@@ -1636,6 +1664,37 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     setSaveNonce((n) => n + 1);
   }, [applyState]);
 
+  const restoreCloudRecoveryDraft = useCallback(() => {
+    const draft = cloudRecoveryDraft;
+    const userId = authUser?.userId;
+    if (!draft || !userId || draft.userId !== userId) return;
+    // Recovery applies local state and queues a cloud write; while LearnQuest
+    // is in storage-maintenance read-only mode cloud writes are rejected, so
+    // the user should wait until the freeze lifts instead of seeing a false
+    // recovery path. Discarding the local draft is always possible.
+    if (migrationReadOnly) return;
+    const merged = mergeCloudRecoveryDraft(draft, remoteBaselineRef.current);
+    const normalized = normalizeLoadedState(merged.state as Partial<LoadedState>, defaultPreferences());
+    applyState(normalized.state);
+    const conflicts = [...cloudConflictsRef.current, ...merged.conflicts];
+    const held = new Set(conflicts.map((item) => item.collection));
+    for (const collection of held) heldCollectionsRef.current.add(collection);
+    cloudConflictsRef.current = conflicts;
+    setCloudConflicts(conflicts);
+    setCloudRecoveryDraft(null);
+    setSyncStatus(conflicts.length > 0 ? 'review' : 'idle');
+    setSyncError(conflicts.length > 0
+      ? 'Recovery found records changed on another device. Review those changes before saving.'
+      : 'Recovered local changes are pending confirmation from your account.');
+    setSaveNonce((value) => value + 1);
+  }, [applyState, authUser, cloudRecoveryDraft, migrationReadOnly]);
+
+  const discardRecoveryDraft = useCallback(() => {
+    const userId = authUser?.userId;
+    if (userId) void discardCloudRecoveryDraft(userId).catch(() => undefined);
+    setCloudRecoveryDraft(null);
+  }, [authUser]);
+
   // Cloud persistence: only changed collections are sent, sequentially, with
   // the server's optimistic version. Success is shown only after every write
   // has been confirmed. IndexedDB is never written in this mode.
@@ -1654,6 +1713,32 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       if (saveT.current) clearTimeout(saveT.current);
     };
   }, [mode, ready, authUser, saveNonce, runCloudSync, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
+
+  // Recovery copies are account-scoped and contain only collection changes
+  // relative to the last confirmed server baseline. They preserve a reload
+  // window without treating browser storage as a successful cloud save.
+  useEffect(() => {
+    if (mode !== 'cloud' || !ready || !authUser || cloudUserRef.current !== authUser.userId) return;
+    const current = latestStateRef.current;
+    if (!current || Object.keys(lastSyncedItemsRef.current).length === 0) return;
+    const userId = authUser.userId;
+    const payload = cloudPayload(current);
+    cloudDraftChain.current = cloudDraftChain.current
+      .then(async () => {
+        const draft = await writeCloudRecoveryDraft(
+          userId,
+          serverVersionRef.current,
+          lastSyncedItemsRef.current,
+          payload,
+          CLOUD_RECOVERY_COLLECTIONS,
+        );
+        if (cloudUserRef.current === userId && draft) setCloudRecoveryDraft(draft);
+      })
+      .catch((error: unknown) => {
+        if (cloudUserRef.current !== userId) return;
+        setSyncError(error instanceof Error ? error.message : 'The browser could not preserve a local recovery copy.');
+      });
+  }, [mode, ready, authUser, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings]);
 
   // achievement evaluation runs when progress/sessions/checkpoints change
   useEffect(() => {
@@ -1772,6 +1857,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
     playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration,
     segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings,
     mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, migrationReadOnly, cloudConflicts,
+    cloudRecoveryDraft, restoreCloudRecoveryDraft, discardCloudRecoveryDraft: discardRecoveryDraft,
     resolveCloudConflict, serverVersion,
     migrationAvailable, migrationSummary, migrationError,
 
@@ -2560,7 +2646,7 @@ export function StoreProvider({ children, mode: modeProp }: { children: React.Re
       }
     },
     setLastDiff: (s) => setLastDiff(s),
-  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, migrationReadOnly, cloudConflicts, resolveCloudConflict, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState, authSyncSourceId]);
+  }), [ready, loadError, load, mode, authReady, setup, authUser, authError, clearAuthNotice, syncStatus, syncError, migrationReadOnly, cloudConflicts, cloudRecoveryDraft, restoreCloudRecoveryDraft, discardRecoveryDraft, resolveCloudConflict, serverVersion, migrationAvailable, migrationSummary, migrationError, playlists, meta, activeId, progress, ranges, checkpoints, modules, sessions, goals, xp, achievements, prefs, lastDiff, celebration, segments, playSessions, queue, flexGoals, challenge, challengeEnabled, rankHistory, settings, applyState, awardXp, loadCloud, bootstrap, resetAccountState, authSyncSourceId]);
 
   if (mode === 'cloud' && actionRoute) {
     const exit = () => leaveEmailAction('signin');

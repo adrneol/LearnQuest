@@ -96,6 +96,25 @@ describe('APP_ORIGIN configuration and action-link construction', () => {
     expect(() => env.appOrigin).toThrow(/public origin/i);
   });
 
+  it('permits Google callbacks only on the configured public frontend or API origin', () => {
+    expect(env.googleRedirectUri).toBe('https://learn-quest-one.vercel.app/api/auth/google/callback');
+    process.env.GOOGLE_REDIRECT_URI = 'https://learnquest-hhiv.onrender.com/api/auth/google/callback';
+    expect(env.googleRedirectUri).toBe('https://learnquest-hhiv.onrender.com/api/auth/google/callback');
+
+    for (const value of [
+      'http://learn-quest-one.vercel.app/api/auth/google/callback',
+      'https://localhost/api/auth/google/callback',
+      'https://127.0.0.1/api/auth/google/callback',
+      'https://oauth.example.test/api/auth/google/callback',
+      'https://learn-quest-one.vercel.app/api/auth/google/callback/extra',
+      'https://learn-quest-one.vercel.app/api/auth/google/callback?next=bad',
+      'https://user:secret@learn-quest-one.vercel.app/api/auth/google/callback',
+    ]) {
+      process.env.GOOGLE_REDIRECT_URI = value;
+      expect(() => env.googleRedirectUri, value).toThrow(/GOOGLE_REDIRECT_URI/);
+    }
+  });
+
   it('rejects an unrecognized NODE_ENV instead of silently using development defaults', () => {
     process.env.NODE_ENV = 'prod';
     expect(() => env.nodeEnv).toThrow(/NODE_ENV must be exactly/i);

@@ -72,4 +72,32 @@ describe('backend readiness coordinator', () => {
     expect(b).toBe(true);
     expect((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
+
+  it('uses the largest concurrent attempt budget without making the shorter caller wait longer', async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse({ error: 'still starting' }, { status: 503 })) as unknown as typeof fetch;
+    const short = waitForBackendReady({ maxAttempts: 1, maxWaitMs: 60_000 });
+    const long = waitForBackendReady({ maxAttempts: 3, maxWaitMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(short).resolves.toBe(false);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    await expect(long).resolves.toBe(false);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('lets an aborted caller leave without cancelling a concurrent caller', async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? jsonResponse({ error: 'warming' }, { status: 503 }) : jsonResponse({ ready: true });
+    }) as unknown as typeof fetch;
+    const controller = new AbortController();
+    const cancelled = waitForBackendReady({ signal: controller.signal, maxWaitMs: 60_000 });
+    const survivor = waitForBackendReady({ maxWaitMs: 60_000 });
+    controller.abort();
+    await vi.runAllTimersAsync();
+    await expect(cancelled).resolves.toBe(false);
+    await expect(survivor).resolves.toBe(true);
+    expect(calls).toBe(2);
+  });
 });

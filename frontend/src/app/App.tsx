@@ -230,6 +230,37 @@ function CloudConflictBanner() {
   );
 }
 
+function CloudRecoveryBanner() {
+  const s = useStore();
+  const draft = s.cloudRecoveryDraft;
+  if (s.mode !== 'cloud' || !draft) return null;
+  const collections = Object.keys(draft.collections).map((name) => COLLECTION_LABELS[name] ?? name);
+  // Recovery applies local state and queues a cloud write; the migration
+  // read-only freeze rejects cloud writes, so offer it only after the freeze
+  // clears. Discarding the local copy stays available — deleting an
+  // account-scoped draft cannot hurt the account.
+  const readOnly = s.migrationReadOnly;
+  return (
+    <section role="status" aria-live="polite" aria-labelledby="cloud-recovery-title" className="lq-alert lq-alert--info">
+      <h2 id="cloud-recovery-title" className="font-semibold">Local recovery changes are available</h2>
+      <p className="mt-1">
+        This browser retained unfinished changes from {new Date(draft.updatedAt).toLocaleString()}. They are not saved to your account yet.
+        Recovering compares them with the current account version before saving.
+      </p>
+      <p className="mt-1 text-xs text-[var(--text-muted)]">Affected areas: {collections.join(', ')}.</p>
+      {readOnly && (
+        <p className="mt-2 text-xs text-[var(--text-muted)]">
+          LearnQuest is finishing storage maintenance. Recovery unlocks when it completes; you may keep this tab open or discard the local copy.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Btn disabled={readOnly} onClick={s.restoreCloudRecoveryDraft}>Review and recover changes</Btn>
+        <Btn variant="quiet" onClick={s.discardCloudRecoveryDraft}>Discard local recovery copy</Btn>
+      </div>
+    </section>
+  );
+}
+
 function AppInner() {
   const s = useStore();
   const [tab, setTab] = useState<Tab>(() => tabFromHash() ?? 'dash');
@@ -368,6 +399,7 @@ function AppInner() {
             </div>
           )}
           <MigrationReadOnlyBanner />
+          <CloudRecoveryBanner />
           <CloudConflictBanner />
           {!isAccountPage && !snap && tab === 'dash' && <Onboarding onGo={(t) => go(t)} />}
           {!isAccountPage && <LegacyMigrationCard />}

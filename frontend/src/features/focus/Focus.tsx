@@ -601,19 +601,23 @@ export function Focus() {
 
       <section aria-labelledby="focus-today-heading" className="lq-card lq-workflow-band">
         <h3 id="focus-today-heading" className="lq-section-title">Today</h3>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <NumberField label="Daily study goal (min)" value={targetMin} onCommit={setTargetMin} min={5} max={720} error={goalError} />
-          <NumberField label="Minimum daily goal (min)" value={minViable} onCommit={setMinViable} min={1} max={720} />
-          <div>
-            <Dropdown
-              label="Study block length"
-              value={String(s.prefs.sessionLenMin)}
-              options={[15, 25, 30, 45, 60, 90, 120].map((m) => ({ value: String(m), label: `${m} min` }))}
-              onChange={(v) => s.setPrefs({ sessionLenMin: Number(v) })}
-            />
+        {!s.ready ? (
+          <p className="mt-2 text-xs text-[var(--text-muted)]">Loading today's learning data…</p>
+        ) : (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <NumberField label="Daily study goal (min)" value={targetMin} onCommit={setTargetMin} min={5} max={720} error={goalError} />
+            <NumberField label="Minimum daily goal (min)" value={minViable} onCommit={setMinViable} min={1} max={720} />
+            <div>
+              <Dropdown
+                label="Study block length"
+                value={String(s.prefs.sessionLenMin)}
+                options={[15, 25, 30, 45, 60, 90, 120].map((m) => ({ value: String(m), label: `${m} min` }))}
+                onChange={(v) => s.setPrefs({ sessionLenMin: Number(v) })}
+              />
+            </div>
+            <div className="flex items-end"><Btn variant="primary" onClick={saveGoal}>Set goal</Btn></div>
           </div>
-          <div className="flex items-end"><Btn variant="primary" onClick={saveGoal}>Set goal</Btn></div>
-        </div>
+        )}
         {snap && (() => {
           const prog = computePlaylistProgress(snap, s.progress);
           const remaining = prog.remainingSec;

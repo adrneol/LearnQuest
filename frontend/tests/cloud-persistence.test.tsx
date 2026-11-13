@@ -3,6 +3,7 @@ import { render, renderHook, screen, fireEvent, act, waitFor } from '@testing-li
 import type { ReactNode } from 'react';
 import { StoreProvider, useStore } from '../src/app/store.js';
 import type { AuthConfig, AuthUser } from '../src/services/api/authApi.js';
+import { kvClearAll } from '../src/services/persistence/db.js';
 
 const P = 'PLcloudp000000000000';
 const Q = 'PLcloudq000000000000';
@@ -239,6 +240,73 @@ afterEach(() => {
 });
 
 describe('cloud persistence and source-of-truth boundaries', () => {
+  it('recovers a local edit after reload interrupts its debounced cloud save', async () => {
+    await kvClearAll();
+    const server = makeServer();
+    server.failWrites = true;
+    installFetch(server);
+    const first = await readyHook();
+
+    act(() => first.result.current.updateRecord(`${P}::eA`, { notes: 'must survive reload' }));
+    await waitFor(() => expect(first.result.current.cloudRecoveryDraft?.collections.progress).toBeDefined());
+    // Unmount cancels the debounced request, which historically discarded this
+    // edit. The recovery copy must remain account-scoped in IndexedDB.
+    first.unmount();
+
+    server.failWrites = false;
+    const second = await readyHook();
+    expect(second.result.current.progress[`${P}::eA`].notes).toBe('note A');
+    expect(second.result.current.cloudRecoveryDraft?.userId).toBe(USER_A.userId);
+
+    act(() => second.result.current.restoreCloudRecoveryDraft());
+    await waitFor(() => expect(second.result.current.progress[`${P}::eA`].notes).toBe('must survive reload'));
+    await waitFor(() => expect(server.state.progress[`${P}::eA`].notes).toBe('must survive reload'));
+    expect(second.result.current.syncStatus).toBe('saved');
+  });
+
+  it('blocks recovery once storage maintenance begins but still allows discard, then unlocks after', async () => {
+    await kvClearAll();
+    const server = makeServer();
+    server.failWrites = true;
+    installFetch(server);
+    const first = await readyHook();
+
+    act(() => first.result.current.updateRecord(`${P}::eA`, { notes: 'must survive reload' }));
+    await waitFor(() => expect(first.result.current.cloudRecoveryDraft?.collections.progress).toBeDefined());
+    first.unmount();
+
+    // A storage-maintenance freeze is in progress: any write attempt returns
+    // MIGRATION_READ_ONLY and the store enters the read-only maintenance
+    // state.
+    server.readOnly = true;
+    server.failWrites = false;
+    const copy = await readyHook();
+    expect(copy.result.current.cloudRecoveryDraft).not.toBeNull();
+
+    // Trigger a write attempt so the freeze is detected.
+    act(() => copy.result.current.updateRecord(`${P}::eA`, { notes: 'during freeze attempt' }));
+    await waitFor(() => expect(copy.result.current.migrationReadOnly).toBe(true));
+
+    // Restore is blocked: the server refuses writes, so the local merged copy
+    // stays in place and the account is untouched.
+    const draftWith = copy.result.current.cloudRecoveryDraft;
+    act(() => copy.result.current.restoreCloudRecoveryDraft());
+    expect(copy.result.current.progress[`${P}::eA`]?.notes).toBe('during freeze attempt');
+    expect(copy.result.current.cloudRecoveryDraft).toBe(draftWith);
+
+    // Discard stays available: deleting the local draft cannot hurt the account.
+    act(() => copy.result.current.discardCloudRecoveryDraft());
+    expect(copy.result.current.cloudRecoveryDraft).toBeNull();
+    expect(copy.result.current.progress[`${P}::eA`]?.notes).toBe('during freeze attempt');
+
+    // Once maintenance completes, recovery works again (the draft was
+    // discarded intentionally, so re-create the local change).
+    server.readOnly = false;
+    act(() => copy.result.current.updateRecord(`${P}::eA`, { notes: 'after freeze lifted' }));
+    await waitFor(() => expect(server.state.progress[`${P}::eA`].notes).toBe('after freeze lifted'));
+    expect(copy.result.current.syncStatus).toBe('saved');
+  });
+
   it('saves a change to the server and shows it in a second authenticated client context', async () => {
     const server = makeServer();
     installFetch(server);

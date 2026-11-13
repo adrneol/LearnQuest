@@ -101,6 +101,10 @@ export function requireAuth(store: DataStore): RequestHandler {
         throw httpError('This session was signed out after a password change. Sign in again.', 401, 'SESSION_REVOKED');
       }
       const touched = await touchSession(store, session);
+      if (!touched) {
+        clearSessionCookie(res);
+        throw httpError('Your session expired or was signed out. Sign in again.', 401, 'SESSION_REVOKED');
+      }
       req.auth = { account, session: touched, userId: account.userId };
       // Sliding cookie renewal: keep the browser cookie aligned with the
       // server-side sliding idle window (capped by the absolute expiry), so an

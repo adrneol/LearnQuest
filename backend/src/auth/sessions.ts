@@ -111,11 +111,22 @@ export async function findSessionByToken(store: DataStore, token: string): Promi
 }
 
 /** Refresh idle expiry and last-seen; absolute expiry never extends. */
-export async function touchSession(store: DataStore, session: SessionRecord): Promise<SessionRecord> {
+export async function touchSession(store: DataStore, session: SessionRecord): Promise<SessionRecord | null> {
   const now = Date.now();
   const idle = new Date(Math.min(now + env.sessionIdleHours * 3600 * 1000, Date.parse(session.expiresAt))).toISOString();
   const lastSeenAt = new Date(now).toISOString();
-  await store.sessions.updateOne({ sessionId: session.sessionId }, { $set: { lastSeenAt, idleExpiresAt: idle } });
+  const current = await store.sessions.findOneAndUpdate(
+    {
+      sessionId: session.sessionId,
+      tokenHash: session.tokenHash,
+      revokedAt: null,
+      expiresAt: { $gt: lastSeenAt },
+      idleExpiresAt: { $gt: lastSeenAt },
+      passwordVersion: session.passwordVersion,
+    },
+    { $set: { lastSeenAt, idleExpiresAt: idle } },
+  );
+  if (!current) return null;
   return { ...session, lastSeenAt, idleExpiresAt: idle };
 }
 

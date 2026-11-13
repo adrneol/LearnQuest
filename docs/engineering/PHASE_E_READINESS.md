@@ -1,7 +1,7 @@
 # LearnQuest — Phase E Status
 
 Phase E = **Learning Workflow & Product Experience Modernization** (dashboard → player → records → goals continuity).
-Phase E implemented and verified 2026-11-13 on top of `0bcfd91` (see the working tree; PHASE_E_WORKFLOW.md for the evidence report). No source changes under the chart engine, Arena, auth, or storage.
+Phase E was implemented and verified 2026-11-13 and is committed as `67e01e0` on top of `0bcfd91` (see `PHASE_E_WORKFLOW.md` for the evidence report). No source changes under the chart engine, Arena, auth, or storage.
 
 ## What landed, mapped to the opportunity list
 
