@@ -41,3 +41,20 @@ Thumbs.db
 # LearnQuest: generated Graphify knowledge graph (local tooling output)
 graphify-out/
 
+
+# AI Agent & Tooling folders/files
+.agents/
+.opencode/
+AGENTS.md
+skills-lock.json
+
+# Graphify files
+graphify-out/
+.graphifyignore
+
+# Documentation & Phase notes
+docs/engineering/
+PHASE_C_VISUALIZATION.md
+PHASE_D_ARENA.md
+PHASE_E_WORKFLOW.md
+TESTING.md
